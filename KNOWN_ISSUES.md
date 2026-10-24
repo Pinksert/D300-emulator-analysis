@@ -149,19 +149,33 @@ FR 架构不在 QEMU 的支持列表里，没有可复用的目标。函数级�
 
 ---
 
-## 四、数据产物没有随仓库发布
+## 四、大体积数据产物的处理方式
 
-以下文件是本地生成的，体积过大或涉及版权，不在仓库里，需要自己生成：
+大文件全部在仓库里了，但**超过 2 MB 的都已 gzip 压缩**，用之前要解压：
 
-| 文件 | 大小 | 说明 |
-|---|---|---|
-| `B3000111.bin` | 7 MB | D300 B 段固件，需从尼康官方升级包提取 |
-| `d300_b_full.asm` | 163 MB | 全量反汇编，用上游工具从固件生成 |
-| `A3000111.bin` | 512 KB | A 段固件，同样来自官方包 |
-| `run400k.txt` / `run150k.txt` | 19 MB / 9.7 MB | 长跑日志 |
-| `cover0.bin` / `cover10.bin` | 3.6 MB ×2 | 覆盖率位图 |
+```bash
+gunzip -k data/d300_b_full.asm.gz     # 163 MB -> 18.5 MB
+gunzip -k data/d300_full.asm.gz       #  10.4 MB -> 1.4 MB
+gunzip -k results/run400k.txt.gz      #  18.4 MB -> 0.08 MB
+gunzip -k results/run150k.txt.gz
+gunzip -k results/cover0.bin.gz results/cover10.bin.gz
+```
 
-`results/` 目录里保留的是筛选过的小体积输出（每项 < 400 KB），足以复核结论。
+`data/B3000111.bin` 和 `data/A3000111.bin` **没有压缩**，拿过来就能用。
+
+| 文件 | 原始 | 仓库内 | 说明 |
+|---|---|---|---|
+| `d300_b_full.asm.gz` | 156 MB | 18.5 MB | 全量反汇编。原始大小超过 GitHub 单文件 100 MB 上限，**必须压缩** |
+| `B3000111.bin` | 7.0 MB | 7.0 MB（未压） | D300 B 段固件 |
+| `A3000111.bin` | 512 KB | 512 KB（未压） | A 段固件 |
+| `d300_full.asm.gz` | 10.4 MB | 1.4 MB | A+B 合编版反汇编 |
+| `run400k.txt.gz` | 18.4 MB | 0.08 MB | 长跑日志（压缩率 99.5%） |
+| `run150k.txt.gz` | 9.2 MB | 0.04 MB | 长跑日志 |
+| `cover0.bin.gz` / `cover10.bin.gz` | 3.5 MB ×2 | ~30 KB ×2 | 覆盖率位图 |
+
+> 固件二进制是尼康公司的知识产权。放在仓库里是为了让分析过程可复现，引用时请自行判断合规性。
+
+`results/` 下另有 60 余份原始实验输出（`.out` / `.tsv` / `.txt`），都是各轮实验跑出来的，可以直接对照报告里的数字。
 
 ---
 
