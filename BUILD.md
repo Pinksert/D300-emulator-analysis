@@ -1,13 +1,23 @@
 # 环境搭建与运行
 
-## 0. 你需要自己准备的东西
+## 0. 你需要准备的东西
 
-本仓库**不包含固件二进制**。需要自己获取：
+### 仓库里已经有的
 
-- **D300 B 段固件** `B3000111.bin`（7 MB）——从尼康官方 D300 固件升级包（A+B 合并的 `.bin`）里提取。B 段在偏移 `0x40000` 之后的 7 MB。
-- **D300 A 段固件** `A3000111.bin`（512 KB）——与本项目的 B 段分析无关，仅在需要对照时使用。
-- **全量反汇编** `d300_b_full.asm`（163 MB）——用上游 NikonEmulator 自带的反汇编工具从固件生成。`tools/analyze_cover.py` 依赖它。
+```bash
+data/B3000111.bin          # D300 B 段固件，7.0 MB，未压缩，直接可用
+data/A3000111.bin          # A 段固件，512 KB
+data/d300_b.asm            # 37 KB
+
+# 压缩过的，用之前解压
+gunzip -k data/d300_b_full.asm.gz      # 156 MB，tools/analyze_cover.py 要用它
+gunzip -k data/d300_full.asm.gz        # 10.4 MB
+```
+
+### 需要自己获取的
+
 - **上游 NikonEmulator 源码** —— 本仓库的 `drivers/` 只是补丁层，必须放进上游工程才能编译。
+- （可选）从尼康官方升级包自行提取固件，用于核对 `data/` 下的两份 bin 是否一致。
 
 ## 1. 环境
 
