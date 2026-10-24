@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件模拟器完善 · 越过空闲任务</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:940px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  td.r{text-align:right;font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdecea}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-new{background:#fdecea;color:var(--hi)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .t-hi{background:#fdecea;color:var(--hi)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .big{font-size:22px;font-weight:600;color:var(--acc)}
+  .up{color:var(--hi);font-weight:600}
+  .dn{color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件模拟器完善：从"跑到空闲任务就死"，到持续运行</h1>
+<div class="sub">第五篇仿真记录 · 对象 B3000111.bin（D300 主控固件 1.11）· 工具 NikonEmulator（FR80）</div>
+
+<div class="card">
+<b>一句话</b>：之前固件跑完开机初始化就钻进一条自转指令、再无动静。这一轮找到并修掉了四个仿真器自身的毛病，
+现在固件能被自己的定时器中断周期性唤醒、持续产生系统调用 —— 在 6000 万步里新增了 <b>755 次</b>，
+而且节奏稳定。顺带坐实了那堵"墙"的真实身份：它不是崩溃点，是操作系统的<b>空闲任务</b>。
+</div>
+
+<h2>一、前后对比</h2>
+
+<table>
+<tr><th>指标</th><th>完善前</th><th>完善后</th><th>说明</th></tr>
+<tr class="hi"><td>系统调用总数</td><td class="r">55 次后静止</td><td class="r">810 次并持续增长</td><td>55 是启动阶段，755 是唤醒后新增</td></tr>
+<tr><td>跑到空闲任务所用步数</td><td class="r">3,041,494</td><td class="r">3,041,494</td><td>启动阶段本身没变</td></tr>
+<tr><td>空闲任务之后的行为</td><td class="r">无（永远自转）</td><td class="r">每 500 万步约 65 次调用</td><td>多数区间恰好 69 次，节奏稳定</td></tr>
+<tr><td>两次运行结果</td><td class="r">不一致（55 / 161）</td><td class="r">逐项一致</td><td>见第二节②</td></tr>
+<tr><td>"未建模外设"地址数</td><td class="r">1,105</td><td class="r">28</td><td>97.5% 是误报，见第二节①</td></tr>
+<tr><td>跑到一半崩溃</td><td class="r">是（串口模式不支持）</td><td class="r">否</td><td>见第二节④</td></tr>
+</table>
+
+<h2>二、修掉的四个问题</h2>
+
+<h3>① "1,105 个未建模外设"里，97.5% 是把内存当成了外设</h3>
+
+<p>仿真器把地址的高 16 位当作"外设页号"来分派监听，其中一页就是 <code>0x0000</code> 打头的整个 64K。
+可 D300 的<b>片上内存恰好也在这一页里</b> —— 复位后栈指针是 <code>0x8400</code>，任务表 <code>0x54BF4</code>
+处存着的也是 <code>0x8400</code>，说明内存从 <code>0x8000</code> 起步。于是操作系统读写任务控制块
+（<code>0x83B0</code>–<code>0x83FD</code>）的每一次动作，都被当成"访问了一个不认识的外设"记了一笔。</p>
+
+<pre>10,177 次"未建模"告警的分布（修复前）
+  落在 0x8000–0xFFFF（片上内存，内核任务控制块）  10,126 次   ← 误报
+  落在 0x0000–0x0FFF（真正的 FR 外设区）              51 次   ← 真实缺口</pre>
+
+<p>而且告警只是"嚷嚷"，实际返回值仍是内存里的真值，<b>并不影响执行</b> —— 坏的是统计口径。
+给监听器加了一条地址上界后，地址数从 1,105 降到 <b>28</b>。</p>
+
+<div class="note">这一条直接影响上一份报告的措辞：原来写的"1,102 个外设寄存器没建模"是虚高的，
+真实缺口是几十个量级，不是上千。</div>
+
+<h3>② 同样跑一次，结果却不一样</h3>
+
+<p>固件会读一个自由运行的硬件计数器（<code>0x5C003034</code>）来做精确延时，代码是"读两次、算差值、够不够、不够再读"。
+之前我用一个独立线程按<b>真实时间</b>给它加值 —— 结果机器忙不忙，决定了固件走哪条分支，
+同一份固件两次跑出 55 次和 161 次调用。</p>
+
+<p>改成按仿真步推进之后，跑了两次完全相同的参数：</p>
+
+<pre>第 1 次：3,041,494 步进空闲任务 / 55 次调用 / 申请中断 13,479 次 / 未建模 28 个
+第 2 次：3,041,494 步进空闲任务 / 55 次调用 / 申请中断 13,479 次 / 未建模 28 个</pre>
+
+<p>又把计数器的增速扫了 5 档（每步 +1/64 到 +64），结果<b>全部相同</b>。所以那个 161 是时序随机的产物，
+不是固件的固有行为 —— 把它当成"D300 开机做了 161 次系统调用"是不成立的。</p>
+
+<h3>③ 定时器配好了，却从来没走过一步（关键突破）</h3>
+
+<p>固件在启动阶段就把 0 号定时器配置完毕了：</p>
+
+<pre>FR80 Reload timer #0 @50000000Hz: TMCSR=0b0000000000011011, TMRLRA=33000, interrupt enabled, value=33000</pre>
+
+<p>参数齐全、中断也开了。但我在驱动里替它走了一千多万拍，它<b>一次都没溢出</b>。根因在仿真器的结构：
+定时器启动时只是把自己登记到<b>主时钟</b>上，而"是否在运行"这个开关由主线程设置。
+我们不启主时钟，它就永远停在 <code>active=false</code>，计数一次都不递减。</p>
+
+<p>补上主时钟本该做的那一步之后，固件立刻有了反应。反汇编的那段中断服务程序也印证了这条路走通了：</p>
+
+<pre>0004046E  stm1  {r9..r15}        保存现场
+00040470  stm0  {r0..r7}
+00040472  st    dr4 / dr5 / dr1  保存专用寄存器
+00040478  ldi:8 #0x1A, r13       中断号
+0004047C  ldi:32 #0x40A44, r12
+00040482  call  r12              通知操作系统内核
+00040484  ld    dr1 / dr5 / dr4  恢复
+0004048A  ldm0 / ldm1
+0004048E  reti                   中断返回</pre>
+
+<h3>④ 串口只支持同步模式，固件用的是异步</h3>
+
+<p>修好定时器后跑长一点，第 637 万步直接崩了：</p>
+
+<pre>Serial Interface 0: cannot be configured in mode MD=0b000.
+Only CSIO mode (0b010) is supported for now</pre>
+
+<p>D300 把串口配成异步 UART（<code>MD=000</code>），而仿真器只实现了同步 CSIO。
+补了一个最小旁路：允许该模式，写入发送寄存器就当作发完、并把字节留下来（可打印字符原样记，
+不可打印的记成 <code>&lt;XX&gt;</code>），好让固件不被卡住。补完之后 6000 万步全程跑完、不再中断。</p>
+
+<div class="note">顺带一个观察：固件<b>一个字节都没往串口打印</b>。这台机器启动时不像留了调试输出口。</div>
+
+<h2>三、那堵"墙"到底是什么</h2>
+
+<p>之前卡住的地址是 <code>0x407DC</code>，一条 <code>BRA 自身</code>（<code>e0ff</code>）死循环，
+性质一直没敢下结论。这轮的证据可以定论了 —— 它是操作系统的<b>空闲任务</b>：</p>
+
+<ul>
+<li><b>地址写死在数据区</b>：ROM <code>0x54F20</code> 处存着 <code>0x000407DC</code>，
+而整个 B 段里这个常量<b>只出现这一次</b>；同一条记录里还有栈指针 <code>0x6800060C</code>、
+状态字 <code>0x21</code>，是一条完整的任务控制块。</li>
+<li><b>前面是标准的恢复现场序列</b>：<code>0x407CC</code>–<code>0x407D8</code> 是
+弹 RP/MDL/MDH、<code>ldm0</code>/<code>ldm1</code>、<code>andccr</code>、<code>reti</code>，
+不是普通函数的收尾。</li>
+<li><b>行为完全吻合</b>：最后一条系统调用是 <code>wai_flg</code>（等待事件标志），
+任务随即阻塞；再没有可运行任务，调度器自然落到空闲任务里自转。</li>
+</ul>
+
+<p>所以此前"跑到它就停了"并不是固件崩溃或跑飞，而是<b>启动已完成、所有任务都在等事件、
+又没有任何中断源来唤醒它们</b> —— 是我们这台假机器太安静了。</p>
+
+<h2>四、唤醒之后，固件在做什么</h2>
+
+<p>6000 万步里新增 755 次系统调用，构成如下：</p>
+
+<table>
+<tr><th>服务</th><th>次数</th><th>含义</th></tr>
+<tr><td class="m">sig_sem</td><td class="r">196</td><td>释放信号量</td></tr>
+<tr><td class="m">wai_sem</td><td class="r">196</td><td>获取信号量</td></tr>
+<tr><td class="m">twai_flg</td><td class="r">99</td><td>带超时地等待事件标志</td></tr>
+<tr><td class="m">ref_tsk</td><td class="r">96</td><td>查询任务状态</td></tr>
+<tr><td class="m">clr_flg</td><td class="r">67</td><td>清除事件标志位</td></tr>
+<tr><td class="m">set_flg</td><td class="r">35</td><td>置起事件标志位</td></tr>
+<tr><td class="m">pol_flg</td><td class="r">33</td><td>轮询事件标志</td></tr>
+<tr><td class="m">dly_tsk</td><td class="r">32</td><td>延时</td></tr>
+<tr><td class="m">wai_flg</td><td class="r">1</td><td>等待事件标志</td></tr>
+</table>
+
+<p>三点值得说：</p>
+
+<ul>
+<li><code>sig_sem</code> 与 <code>wai_sem</code> <b>恰好各 196 次</b>，是成对的 ——
+像两个任务在一来一回地交接，而不是各自乱撞。</li>
+<li><code>ref_tsk</code>（查询任务状态）在启动阶段<b>一次都没出现</b>，是唤醒之后才有的新行为。</li>
+<li>调用量随时间稳定增长（每 500 万步约 65 次，多数区间恰好 69 次），
+说明是<b>有固定节拍的周期行为</b>，而不是偶发抖动。</li>
+</ul>
+
+<h2>五、下一个缺口：0x70000000 这一段</h2>
+
+<p>反汇编唤醒后跑得最多的那段代码，看到固件在反复做一件事：</p>
+
+<pre>0019EF4C  mov   0x70000000, r0
+0019EF4E  add   #0xA, r0          ← 目标地址 0x7000000A
+0019EF50  bandl #0xD, r0          清若干位
+0019EF52  call  ...
+0019EF58  borl  #0x2, r0          置位
+0019EF5E  btstl #0x4, r0          测试 bit4
+0019EF60  beq   ...               ← 没等到就重试
+0019EF66  add2  #-1, r8           重试计数递减
+0019EF68  beq   ...               最多 8 次
+0019EF6A  bra:d *-32              回到开头</pre>
+
+<p>它在轮询 <code>0x7000000A</code> 这个地址的 bit4，最多试 8 次。而 <code>0x7000xxxx</code>
+这一段<b>完全不在仿真器的外设清单里</b>，读回来恒为 0，所以固件每次都等不到、重试 8 次后放弃。
+这就是目前最值得攻的下一个点。</p>
+
+<h2>六、必须说清的边界</h2>
+
+<div class="warnbox">
+<ul>
+<li><b>计数器速率是猜的</b>。固件的延时依赖一个我们不知道真实频率的硬件计数器。
+本轮 5 档增速下启动结果一致，说明这一段对它不敏感；但不排除别的环节敏感。</li>
+<li><b>55 与 161 的旧账</b>：161 那次是旧版线程打桩的产物，已不可复现。
+以本轮为准，启动阶段是 <b>55 次</b>。若引用旧数字，必须注明是特定时序下的观测。</li>
+<li><b>定时器是手动激活的</b>。真实机器上由主时钟驱动，我们补了这一步，
+但节拍与真实快慢不一定对得上——所以"每 500 万步 69 次"这个<b>节拍数字本身没有物理意义</b>，
+有意义的是"确实存在稳定周期"这件事。</li>
+<li><b>串口只做了旁路</b>，不是真 UART：没有波特率、没有时序、也没有接收端。</li>
+<li><b>离"开机"仍然很远</b>。屏幕、按键、存储卡、镜头卡口、反光板全都没建模，
+界面一次都没跑到。现在的成果是：固件在这台假机器上能持续调度、周期性工作，仅此而已。</li>
+</ul>
+</div>
+
+<h2>七、这一轮改了什么（可复现）</h2>
+
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td class="m">ExpeedProxyIoListener.java</td><td>加地址上界 <code>0x1000</code>：超出即按普通内存放行，不再计入外设告警</td></tr>
+<tr><td class="m">FrSerialInterface.java</td><td>放行异步 UART 模式（<code>MD=0b000</code>），写发送寄存器即视为发完并记录字节</td></tr>
+<tr><td class="m">D300Idle.java（新增驱动）</td><td>确定性计数器、手动激活定时器、阶段 A/B 分段统计、PC 直方图、未建模地址聚合</td></tr>
+</table>
+
+<pre>跑法（在 Java/Emulator 目录下）
+java -Dfile.encoding=UTF-8 -cp "batch_build/classes;lib/*" \
+     com.nikonhacker.emu.D300Idle B3000111.bin 60000000 2000 64 64 0
+       └ 固件      总步数  喂中断间隔 计数器每N步 增量 模式</pre>
+
+</div>
+</body>
+</html>
