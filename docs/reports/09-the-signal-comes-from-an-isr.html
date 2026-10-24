@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>D300 固件 · 那个信号是从中断里来的</title>
+<style>
+:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+--hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+.wrap{max-width:940px;margin:0 auto}
+h1{font-size:26px;margin:0 0 6px;font-weight:600}
+.sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+th{background:#eef1f6;font-weight:600}
+td.m{font-family:var(--mono);font-size:12.5px}
+.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+.t-new{background:#fdecea;color:var(--hi)}
+.t-ok{background:#e7f6ec;color:var(--ok)}
+.t-wn{background:#fdf3e2;color:var(--warn)}
+.note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+.warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+.okbox{background:#f2faf5;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+ul{margin:8px 0 8px 22px;padding:0}
+li{margin:4px 0}
+.big{font-size:22px;font-weight:600;color:var(--acc)}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:4px 12px;font-size:14px}
+.kv div:nth-child(odd){color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 · 那个信号是从中断里来的</h1>
+<div class="sub">先量出仿真里固件到底跑了多少代码，再顺调用图找到断点，最后不用任何补丁、只补中断，把显示管线往前推了三级 · 2026-10-24</div>
+
+<div class="card">
+<div class="okbox">
+<b>一句话结论</b>：上一轮说"没有任何代码会置 flag 3 的 bit4"——<b>这句话是错的</b>。
+静态代码里有 4 处 <code>set_flg(3, 0x10)</code>，它们全部住在<b>中断服务程序</b>分发的一张
+25 项函数指针表里（基址 <code>0x001BC480</code>）。驱动这张表的是两个中断：
+<b>IRQ 0x1B（串行口 0）</b>和 <b>IRQ 0x20（外部中断 9）</b>。
+不打任何 flag 补丁、只把这两个中断打进去，显示管线自己往前走了三级，
+第一道握手 <b>1195 次全部通过</b>，显示文本缓冲里第一次出现了固件自己写进去的字节。
+</div>
+</div>
+
+<h2>一、先量一下：仿真里固件到底跑了多少</h2>
+
+<p>以前几轮说"固件跑不动"，一直是个印象。这次给它量了个准数：跑 2000 万步，
+把每一条被执行过的指令记下来，和整段反汇编对照。</p>
+
+<div class="card">
+<div class="kv">
+<div>B 段指令总数</div><div class="mono">3,558,418 条（<code>0x040000</code>–<code>0x73FFFE</code>）</div>
+<div>执行过的指令</div><div class="mono"><b>5,138 条</b></div>
+<div>覆盖率</div><div><span class="big">0.144%</span></div>
+<div>函数入口候选</div><div class="mono">20,741 个</div>
+<div>执行过的函数</div><div class="mono"><b>199 个</b>（0.96%）</div>
+<div>被碰到的 4KB 页</div><div class="mono">36 页（共 1792 页）</div>
+<div>静态调用边</div><div class="mono">39,656 条，解析出目标 13,826 条</div>
+</div>
+</div>
+
+<div class="warnbox">
+<b>中途踩的坑</b>：第一版覆盖率统计把代码上界写成了 <code>0xC0000</code>，
+结果 <code>0x12xxxx</code> 那片全被排除在外，报出来"只跑了两个页"。
+B 段实际有 7 MB（<code>0x040000</code>+<code>0x700000</code>），
+上界必须按固件文件长度算。
+</div>
+
+<p>执行量最大的几个函数，基本就是开机装配 + 心跳 + 空闲：</p>
+
+<pre>0x120936   406 条      0x040000  310 条      0x1204F0   237 条
+0x14E622   205 条      0x19E8D6  140 条      0x137B12   130 条
+0x040A44   107 条      0x139138  105 条      0x19EA68   103 条
+0x12E006   102 条      0x138A2C  101 条      0x1A7998    97 条</pre>
+
+<h2>二、调用图前沿：跑着跑着就断了的地方</h2>
+
+<p>把这 199 个跑过的函数和静态调用图叠在一起，就能列出"某个函数明明跑了，
+它调用的某个子函数却一次都没进"的位置——这就是执行流断掉的地方。</p>
+
+<pre>调用者 0x137B12 (执行 130 条) -&gt; 从未进入: 0x1392DA, 0x14CD98
+调用者 0x040A44 (执行 107 条) -&gt; 从未进入: 0x040C42
+调用者 0x13822A (执行  81 条) -&gt; 从未进入: 0x1384D6, 0x138BB4, 0x138C72, <b>0x242B96</b>
+调用者 0x1A7856 (执行  59 条) -&gt; 从未进入: 0x1A78E4
+调用者 0x137F74 (执行  40 条) -&gt; 从未进入: 0x138548, 0x138B76
+调用者 0x1200AC (执行  36 条) -&gt; 从未进入: 0x14B76A, 0x15C880, <b>0x175186</b>
+调用者 0x12DFAE (执行  15 条) -&gt; 从未进入: 0x12E1EC, 0x12E326, <b>0x12E674</b></pre>
+
+<p>三条值得记的：</p>
+<ul>
+<li><code>0x1200AC</code>（开机总装配）调用了 <code>0x175186</code> 但没进去——<b>按键处理任务（任务 6）压根没被拉起来</b>。</li>
+<li><code>0x13822A</code> 会调用 <code>0x242B96</code>，那个地址正落在<b>任务 21（<code>0x242DA0</code>）</b>的范围内——也就是我们一直想接上的那个下游。</li>
+<li><code>0x12DFAE</code>（显示管线）后面的三段全是 0，和上一轮看到的一致。</li>
+</ul>
+
+<h2>三、bit4 到底是谁置的：两张中断分发表</h2>
+
+<p>静态扫一遍所有 <code>set_flg</code> 的调用点，<code>flag 3</code> 上一共 44 处，
+里面有 4 处写的正是 <code>0x10</code>：</p>
+
+<pre>0x0012F794   0x0012F964   0x0012FB10   0x0012FDB0
+  └ 0x12F77A   └ 0x12F952   └ 0x12FAEA   └ 0x12FD9E   （所在函数入口）</pre>
+
+<p>顺着这 4 个函数往回找调用者，结果是<b>一个静态调用者都没有</b>——
+不是没人调用，是它们通过<b>函数指针表</b>被间接调用。把它们的地址拿到固件里反查，
+全部命中同一片区域：</p>
+
+<pre>0x1BC480: 0012FE12 0012FE14 0012FE20 0012FE48     ← IRQ 0x20 用（4 项）
+0x1BC490: 0012F778 0012F77A 0012F798 0012F7DC     ┐
+0x1BC4A0: 0012F82C 0012F888 0012F8EC 0012F952     │
+0x1BC4B0: 0012F968 0012F9C0 0012FA1C 0012FA3E     │ IRQ 0x1B 用（21 项）
+0x1BC4C0: 0012FA90 0012FAEA 0012FB22 0012FB76     │
+0x1BC4D0: 0012FBC6 0012FC52 0012FCA6 0012FCF6     │
+0x1BC4E0: 0012FD9E                                ┘
+0x1BC4E4: 00020103  25 33 64 20 20 25 33 64 …     ← "%3d  %3d" 格式串，表到此为止</pre>
+
+<div class="note">
+<b>位置关系很整齐</b>：上一轮解出的显示对象描述符表是 <code>0x1BC020</code> 起 70 条 × 16 字节，
+正好到 <code>0x1BC480</code> 结束；这张 25 项的处理函数表<b>紧接着就排在它后面</b>。
+表尾紧跟 printf 的格式串 <code>"%3d "</code>、<code>"%2d "</code>、<code>"%10d"</code>。
+</div>
+
+<p>再往前追一步，找到索引这张表的代码——两段以 <code>RETI</code> 结尾的函数，
+确认是中断服务程序：</p>
+
+<pre>; ===== IRQ 0x20 (EXT9) 的 ISR =====
+0012FE54  STM0/STM1 保存现场
+0012FE5E  LDI:32 #0x9F58DA85,R12
+0012FE64  LDUB   @R12,R0          ; 取状态字节
+0012FE66  LSL    #2,R0            ; ×4
+0012FE68  LDI:32 #0x001BC480,R13
+0012FE6E  LD     @(R13,R0),R0     ; 查表
+0012FE70  CALL   @R0              ; 分发
+0012FE76  DMOVB  R13,@0x38        ; 写 0xFB 清中断
+0012FE82  RETI
+
+; ===== IRQ 0x1B (串行口 0) 的 ISR =====
+0012FDB4  …
+0012FDC4  BORH   #0x1,@R0         ; 操作 0x7000000A（EXPEED 串行脚）
+0012FDEE  DMOVB  @0x61,R13
+0012FDF8  LDUB   @0x9F58DA86,R0
+0012FDFA  LSL    #2,R0
+0012FDFC  LDI:32 #0x001BC490,R13
+0012FE02  LD     @(R13,R0),R0
+0012FE04  CALL   @R0              ; 分发
+0012FE10  RETI</pre>
+
+<p>把两个 ISR 的地址拿去反查中断向量表，得到确切的中断号：</p>
+
+<table>
+<tr><th>请求号</th><th>向量槽</th><th>ISR</th><th>分发表</th><th>状态字节</th><th>项数</th></tr>
+<tr><td class="m">0x1B（Serial IF 0 共享）</td><td class="m">0x000EFF90</td><td class="m">0x0012FDB4</td><td class="m">0x001BC490</td><td class="m">0x9F58DA86</td><td>21</td></tr>
+<tr><td class="m">0x20（EXT 中断 9）</td><td class="m">0x000EFF7C</td><td class="m">0x0012FE54</td><td class="m">0x001BC480</td><td class="m">0x9F58DA85</td><td>4</td></tr>
+</table>
+
+<div class="okbox">
+<b>这就是答案</b>：显示管线死等的 bit4，由<b>串行口 0 的中断服务程序</b>按状态字节
+<code>0x9F58DA86</code> 分发到某个处理函数、再由那个处理函数 <code>set_flg(3, 0x10)</code> 置起来。
+它是一个<b>硬件事件</b>，不是"固件里少了一段代码"。
+上一轮我从运行时日志里看到"没人置过 bit4"，就推断成"没有代码置"——那是把"没执行"当成了"不存在"。
+</div>
+
+<h2>四、只补中断、一个补丁都不打</h2>
+
+<p>既然卡点是中断没来，那就不碰 flag，只往中断控制器里打请求，
+并且在 CPU 接受后立刻撤销（模拟边沿触发，否则会像上一轮的按键实验那样无限重入）。</p>
+
+<table>
+<tr><th>模式</th><th>做法</th><th>0x12E162 等flag3</th><th>0x12E1EC 选对象</th><th>0x12E326 取数据</th><th>0x12E674 绘制</th></tr>
+<tr><td>基线</td><td>不打中断</td><td class="m">1</td><td class="m">0</td><td class="m">0</td><td class="m">0</td></tr>
+<tr><td>mode 1</td><td>周期打 0x1B</td><td class="m">1</td><td class="m">1</td><td class="m">1</td><td class="m">0</td></tr>
+<tr><td>mode 2</td><td>周期打 0x20</td><td class="m">103</td><td class="m">0</td><td class="m">0</td><td class="m">0</td></tr>
+<tr><td><b>mode 3</b></td><td><b>两个都打，周期 5000</b></td><td class="m"><b>1195</b></td><td class="m"><b>1195</b></td><td class="m"><b>1195</b></td><td class="m">0</td></tr>
+</table>
+
+<p>给两处判定点各加了一个取值直方图，读的是 <code>flag3 &amp; 0x74</code>：</p>
+
+<pre>0x12E1E0 等flag3后   读到 0x10   x1195   &lt;&lt;&lt; 通过（1195 / 1195）
+0x12E404 取数据后    读到 0x04   x1195   （卡住）</pre>
+
+<p>第一道握手 <b>100% 通过</b>，一次没失败。而且显示文本缓冲里第一次出现了固件自己写进去的字节：</p>
+
+<pre>0x9F58D97C: 31 31 31 00 00 00 …       |111.........|</pre>
+
+<p>这一路状态机也确实在走，25 项里跑到了 8 个处理函数：</p>
+
+<pre>idx=1  0x12FE14  x1195     idx=2  0x12FE20  x1195     idx=3  0x12FE48  x1
+idx=4  0x12F778  x1        idx=5  0x12F77A  x1195     idx=24 0x12FD9E  x1195</pre>
+
+<h2>五、剩下那道坎：OR 等待 + 中断时序</h2>
+
+<p>第二道握手过不去。原因是 <code>twai_flg(3, 0x74, wfmode=2)</code> 是<b>OR 等待</b>——
+bit2 / bit4 / bit5 / bit6 里<b>任意一个</b>先置位，等待就结束。返回后代码判的是
+<code>(flag3 &amp; 0x74) == 0x10</code>，也就是"必须恰好只有 bit4"。</p>
+
+<p>真机上，一次串行事务里的几个中断会连着来，任务没机会插进来，
+等它恢复时状态机已经走完，看到的正好是 0x10。仿真里中断是一步步"喂"的，
+任务被调度回来时状态机才走到一半，于是读到中间态：</p>
+
+<pre>mode 3  周期 5000  -&gt; 读到 0x04  x1195      （bit2 先到：IRQ20 的处理函数 0x12FE20 置的 0x06）
+mode 9  周期 2000  -&gt; 读到 0x24  x5         （bit2 + bit5）
+mode 10 周期 10000 -&gt; 读到 0x20  x1         （bit5：处理函数 0x12F82C 在 0x12F882 置的）</pre>
+
+<p>试了几种更接近硬件的喂法：</p>
+
+<ul>
+<li><b>状态驱动</b>（状态字节非 0 才发中断）：IRQ20 发疯——<code>0x9F58DA85</code> 一旦被置成 2
+就再也没人清它，9 万次中断把显示任务饿死了。</li>
+<li><b>IRQ1B 单独状态驱动</b>：只发得出 9 次，管线连第一道都没到。</li>
+<li><b>电平触发</b>（状态非 0 就一直挂着中断，让 CPU 反复进 ISR 直到状态机跑完）：
+状态机确实连着跑，但第 9 号处理函数 <code>0x12F9C0</code> 在 <code>0x12FA06</code> 处
+<b>自旋死循环</b>，第 304 万步就停在那了。它等的是串口的状态位，
+我们的 UART 旁路给不出它要的时序。</li>
+</ul>
+
+<div class="warnbox">
+<b>所以剩下的差距不是"缺代码"，是"缺波形"</b>：要把串行口按真实波特率一位一位地把字节
+收发出去，让 <code>0x9F58DA86</code> 这条状态机在正确的时间点被正确的中断推着走完。
+这条路要做的是给模拟器补一个带时钟的串行模型，不是再去找什么隐藏分支。
+</div>
+
+<h2>六、顺手记下的直接页 I/O</h2>
+
+<p>这几个地址是整条链路反复读写的，记下来给后面接串行模型用：</p>
+
+<pre>       +0  +1  +2  +3  +4  +5  +6  +7  +8  +9  +A  +B  +C  +D  +E  +F
+0x30:  00  00  00  00  00  00  00  00  FB  04  F3  BA  00  00  00  00
+0x40:  00  48  AF  BB  FE  00  00  00  80  E8  00  00  00  00  00  1A
+0x50:  00  00  00  00  00  00  00  00  00  00  00  00  00  00  00  00
+0x60:  02  31  03  18  <b>??</b>  10  00  01  00  00  00  00  04  00  00  00</pre>
+
+<p><code>0x61</code> 是发送出去的字节（<code>DMOVB R13,@0x61</code>），
+<code>0x62</code>/<code>0x63</code> 在重置时被写成 <code>0x00</code> 和 <code>0xB8</code>，
+<code>0x38</code> 被写成 <code>0xFB</code>（清中断）。
+<code>0x64</code> 读不出来（模拟器没映射），ISR 的错误分支会去动 <code>0x62</code> 的低位。</p>
+
+<h2>七、修正上一轮的一处结论</h2>
+
+<div class="card">
+<p><span class="tag t-wn">勘误</span>上一轮写的是"整个 B 段没有任何一处 <code>set_flg</code> 会置 bit4"。
+按运行时日志看确实如此，但<b>静态代码里有 4 处</b>：
+<code>0x12F794</code>、<code>0x12F964</code>、<code>0x12FB10</code>、<code>0x12FDB0</code>。
+它们没在日志里出现，是因为它们所在的中断服务程序<b>一次都没被执行</b>，
+不是因为它们不存在。</p>
+<p>顺带一条：这 4 处的存在，反过来印证了上一轮的另一个判断是对的——
+这个信号确实是<b>从硬件来的</b>，只是"硬件"具体是<b>串行口中断</b>，现在可以说死了。</p>
+</div>
+
+<h2>八、下一步</h2>
+
+<ol>
+<li><b>给串行口补时钟</b>：让 <code>0x60</code>–<code>0x67</code> 这组寄存器按波特率一位一位地收发，
+状态机就能在正确的时刻被推着走完，第二道握手大概率就通了。</li>
+<li><b>接任务 21</b>：<code>0x13822A</code> 会调用 <code>0x242B96</code>，落在任务 21（<code>0x242DA0</code>）范围内，
+那是"绘制"通知的下游。</li>
+<li><b>拉起任务 6</b>：开机装配 <code>0x1200AC</code> 调用了 <code>0x175186</code> 却没进去，
+按键那条链现在也是断的。</li>
+</ol>
+
+<div class="note">
+本轮所有数据来自 <code>D300Cover.java</code>（覆盖率）、<code>analyze_cover.py</code>（调用图前沿）
+和 <code>D300Isr.java</code>（中断注入，11 种模式）三个新工具，
+输出文件 <code>cover0/10.txt</code>、<code>isr*.out</code> 都留在模拟器工作目录里可复核。
+</div>
+
+</div>
+</body>
+</html>
