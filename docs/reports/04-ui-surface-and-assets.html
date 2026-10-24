@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件 · UI 画面实测与素材提取</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d2129; --line:#2a2f3a;
+    --fg:#e8eaf0; --dim:#9aa3b2; --dim2:#6f7787;
+    --acc:#f0b429; --acc2:#4ea1ff; --ok:#3ecf8e; --bad:#ff6b6b;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:15px/1.75 "Microsoft YaHei","PingFang SC",-apple-system,"Segoe UI",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:52px 26px 90px}
+  h1{font-size:29px;line-height:1.35;margin:0 0 10px;letter-spacing:.3px}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:34px}
+  h2{font-size:20px;margin:46px 0 16px;padding-left:12px;border-left:4px solid var(--acc)}
+  h3{font-size:16px;margin:28px 0 10px;color:var(--acc2)}
+  p{margin:12px 0}
+  code,.mono{font-family:var(--mono);font-size:13.5px;background:#0a0c10;
+       padding:2px 6px;border-radius:4px;color:#ffd479}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:20px 22px;margin:18px 0}
+  .card.hi{border-color:#3a4356;background:linear-gradient(180deg,#1b2029,#171a21)}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;
+       background:#232a36;color:var(--dim);margin-right:8px}
+  .tag.ok{background:#16301f;color:var(--ok)}
+  .tag.bad{background:#33191c;color:var(--bad)}
+  .tag.y{background:#332a10;color:var(--acc)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left}
+  th{color:var(--dim);font-weight:600;font-size:12.5px;background:#13161c}
+  td.m{font-family:var(--mono);font-size:13px}
+  .num{text-align:right;font-family:var(--mono)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  ul,ol{margin:10px 0 10px 4px;padding-left:22px}
+  li{margin:6px 0}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0}
+  .kpi div{flex:1 1 150px;background:var(--card2);border:1px solid var(--line);
+           border-radius:10px;padding:14px 16px}
+  .kpi b{display:block;font-size:24px;font-family:var(--mono);color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--dim)}
+  .screen{width:100%;max-width:480px;aspect-ratio:4/3;background:#000;
+          border:2px solid #333;border-radius:6px;margin:16px auto;position:relative}
+  .screen::after{content:"固件跑完 6000 万步后，屏幕上实际什么都没有";
+          position:absolute;left:0;right:0;bottom:-30px;text-align:center;
+          color:var(--dim2);font-size:12.5px}
+  img.shot{width:100%;border:1px solid var(--line);border-radius:10px;margin:12px 0}
+  .cap{color:var(--dim2);font-size:12.5px;text-align:center;margin:-4px 0 22px}
+  .warn{background:#1c1a12;border:1px solid #4a3f1a;border-left:4px solid var(--acc);
+        border-radius:8px;padding:14px 18px;margin:18px 0;font-size:14px}
+  .q{color:var(--dim);font-style:normal}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);
+         color:var(--dim2);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>做出 UI 画面：实测到哪一步了</h1>
+<div class="sub">D300 固件 B 段（B3000111.bin）· NikonEmulator 实跑 · 2026-10-16</div>
+
+<div class="warn">
+<b>先说结论。</b>这一轮的目标是让模拟器把 D300 的界面画出来。<b>结果是没有画出来——而且这次能拿出硬数据说明"为什么画不出来"</b>。
+固件完整跑完 6000 万步，内存里只改动了 <b>27 个 4KB 块、合计约 108 KB</b>，没有任何一块是"每帧整屏刷新"级别的写入。
+但同一轮里挖到了另一半东西：<b>D300 界面上会出现的每一句话，都以明文躺在固件里</b>，包括四级菜单的完整结构。下面两部分分开讲。
+</div>
+
+<h2>一、实测：固件运行时到底写了什么</h2>
+
+<p>上一轮的结论是"固件能被定时器唤醒、稳定跑在任务循环里"。这一轮要回答一个更具体的问题：
+<b>它有没有在画屏幕？</b>判据很直白——画屏幕必然意味着往某块连续内存里整屏整屏地写。</p>
+
+<p>做法是每 200 万步对所有已映射内存做一次 4KB 粒度的校验和快照，比对出"哪块被改写了"。</p>
+
+<div class="kpi">
+  <div><b>27</b><span>运行中被改写的 4KB 块</span></div>
+  <div><b>108 KB</b><span>这些块加起来的大小</span></div>
+  <div><b>0</b><span>帧缓冲级别的连续写入</span></div>
+  <div><b>810</b><span>全程系统调用次数</span></div>
+</div>
+
+<table>
+<tr><th>地址（4KB 块）</th><th>被改写次数</th><th>是什么</th></tr>
+<tr><td class="m">0x5C003000</td><td class="num">29</td><td>我们手工打桩的自由运行计数器所在的块</td></tr>
+<tr><td class="m">0x68000000</td><td class="num">29</td><td>EXPEED 侧某个数据表（指针表 + 定长记录）</td></tr>
+<tr><td class="m">0x9F58D000</td><td class="num">29</td><td>SDRAM 里的活动结构体</td></tr>
+<tr><td class="m">0x9F5A3000</td><td class="num">29</td><td>SDRAM 里的活动结构体</td></tr>
+<tr><td class="m">0x9F810000</td><td class="num">18</td><td>SDRAM 高段（稀疏）</td></tr>
+<tr><td class="m">0x00008000</td><td class="num">7</td><td>片上 RAM（内核任务控制块）</td></tr>
+<tr><td class="m">其余 21 块</td><td class="num">1–7</td><td>内核数据结构、外设寄存器零星改动</td></tr>
+</table>
+
+<p class="q">注：6000 万步覆盖了"启动 304 万步 → 进空闲任务 → 手动激活定时器 → 之后约 5700 万步的任务循环"。数字取两次独立运行的一致结果。</p>
+
+<p>屏幕是 640×480。哪怕只是单色 1bpp，一屏也要 38 KB；8bpp 一屏 300 KB。
+改写得最凶的那几块都是 4 KB 上下的小结构体，<b>没有一块像屏幕</b>。</p>
+
+<div class="screen"></div>
+<div style="height:34px"></div>
+
+<h3>固件在等什么？——不是等硬件，是没事干</h3>
+
+<p>模拟器日志里那 28 个"未建模外设地址"，逐个看过去是这样的：</p>
+
+<table>
+<tr><th>地址</th><th>读</th><th>写</th><th>性质</th></tr>
+<tr><td class="m">0x00000038 / 0x39 / 0x3A</td><td class="num">0 / 6 / 10</td><td class="num">4 / 8 / 10</td><td>FR 低地址直接寻址区，一次性初始化</td></tr>
+<tr><td class="m">0x00000600 – 0x00000694</td><td class="num">0</td><td class="num">各 1</td><td>IO 端口，写一次就不再碰</td></tr>
+<tr><td class="m">0x000003E0 / 0x3E3 / 0x3E7 / 0x481 / 0x482</td><td class="num">0</td><td class="num">各 1</td><td>同上</td></tr>
+</table>
+
+<p><b>关键在于"读"几乎全是 0。</b>如果固件在轮询某个硬件等它就绪，那个地址会被反复读。事实是它写完就再也不看了。
+所以固件不是在等硬件——<b>它启动完成后进入了正常的待机任务循环，在等外部事件（按键、镜头、存储卡）</b>。
+这也解释得通：真机开机后本来就是这样，安静地待着等用户按按钮。</p>
+
+<h3>试过的那个卡点：EXPEED 就绪位</h3>
+
+<p>上一轮注意到固件在 <code>0x19EF40</code> 有一段重试 8 次的循环，当时理解为"轮询 <code>0x7000000A</code> 的 bit4"。这一轮把它逐条拆开，
+发现读法要修正——<b>FR 的位操作指令里，立即数是"掩码"不是"位号"</b>：</p>
+
+<div class="card">
+<div class="mono" style="line-height:1.9">
+0019EF40 &nbsp; ldi:32 #0x70000000, r10 &nbsp;&nbsp;<span class="q">; EXPEED 寄存器基址</span><br>
+0019EF48 &nbsp; ldi:8 &nbsp; #0x1, r9 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; r9 = 成功标志</span><br>
+0019EF4A &nbsp; ldi:8 &nbsp; #0x8, r8 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; 重试 8 次</span><br>
+0019EF4E &nbsp; add &nbsp;&nbsp; #0xA, r0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; r0 = 0x7000000A</span><br>
+0019EF50 &nbsp; bandl #0xD, @r0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; 清掩码 0xD 指定的位 → 清 bit0 / bit2 / bit3</span><br>
+0019EF58 &nbsp; borl &nbsp;#0x2, @r0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; 置 bit1</span><br>
+0019EF5E &nbsp; btstl #0x4, @r0 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; 测掩码 0x4 → 其实是测 <b>bit2</b>，不是 bit4</span><br>
+0019EF60 &nbsp; beq &nbsp;&nbsp; *2 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="q">; 没就绪就再来一轮</span>
+</div>
+</div>
+
+<p>按"掩码"读，<code>btstl #0x4</code> 测的是 bit2。仿真器里 <code>0x7000xxxx</code> 整段没有建模、读回来恒为 0，
+所以 8 次重试全失败。于是做了一个对照实验：<b>每条指令之后把这一字节的 bit2 强行置 1</b>，模拟"硬件过一会儿就绪"。</p>
+
+<table>
+<tr><th>运行模式</th><th>系统调用总数</th><th>最终 PC</th><th>改写块数</th></tr>
+<tr><td>基线（不打桩）</td><td class="num">810</td><td class="m">0x407DC</td><td class="num">27</td></tr>
+<tr><td>打桩 bit2（56,958,506 次）</td><td class="num">810</td><td class="m">0x407DC</td><td class="num">27</td></tr>
+</table>
+
+<p><b>两项完全一致。</b>补这一个位没有让固件多走一步。原因也清楚：这段代码在启动阶段就跑过了，
+它只是"开机时确认 EXPEED 在线"的一次性检查；即便把它判通过，固件后面要做的事仍然全在 EXPEED 里，而那边一片空白。</p>
+
+<h3>真正的墙：D300 的显示不在 B 段手里</h3>
+
+<p>把这一轮的实测和之前的结论拼起来，D300 的画面通路是这样的：</p>
+
+<div class="card hi">
+<b>B 段（富士通 FR 主控）</b> 负责跑 μITRON、管任务、准备界面内容 →
+通过 <span class="mono">0x7000xxxx</span> 一带的寄存器窗口跟 <b>EXPEED 图像处理器</b>通信 →
+<b>由 EXPEED 驱动 LCD 并把界面渲染出来</b>。
+<br><br>
+固件里确实有 640×480 这个屏幕规格、有每个界面元素的文字，但<b>没有帧缓冲、也没有点阵字库</b>——
+这两样都不在 B 段的职责里。所以"让 B 段固件自己往内存里画一屏"这件事，从架构上就不会发生。
+</div>
+
+<p>这就是为什么补外设补不出画面：要让屏幕上出现东西，得先把 EXPEED 那半边芯片也模拟出来。
+NikonEmulator 里有 <code>Expeed*IoListener</code> 一堆占位注册，但 EXPEED 内部是空的。</p>
+
+<h2>二、正向成果：界面上的每一句话都在固件里</h2>
+
+<p>这一轮真正的收获在这里。既然画面画不出来，那就换个方向——<b>D300 界面上会出现什么文字，固件里全都写着</b>。</p>
+
+<h3>菜单文本池（0x3A7F80）</h3>
+
+<p>在地址 <code>0x3A7F80</code> 找到一张 16 项的 32 位指针表，指向 <code>0x3AB876</code> 起的一组界面标签
+（版权信息页与闪光灯模式：<span class="mono">Done / Artist / Copyright / Attach copyright information / TTL / Manual / Repeating flash / Commander mode</span>）。
+紧挨着指针表后面，<code>0x3A7FC0</code> 起是一长串<b>没有分隔符、按菜单顺序拼接</b>的界面文字。
+把这串文字按大小写边界切开，得到 <b>89 段</b>，正好是 D300 的四级菜单：</p>
+
+<div class="grid2">
+  <div class="card">
+    <span class="tag y">PLAYBACK MENU</span>
+    <div class="mono" style="font-size:13px;line-height:1.85;margin-top:8px">
+    Delete · Playback folder · Rotate tall · Slide show · Print set (DPOF) · Selected · All · Current · On · Off · Start · Deselect all? · Done · No · Yes
+    </div>
+  </div>
+  <div class="card">
+    <span class="tag y">SHOOTING MENU</span>
+    <div class="mono" style="font-size:13px;line-height:1.85;margin-top:8px">
+    Long exp. NR · Image quality · Image size · White balance · ISO sensitivity · NEF (RAW) · JPEG fine / normal / basic · Large / Medium / Small · Auto · Incandescent · Fluorescent · Direct sunlight · Flash · Cloudy · Shade · Preset manual
+    </div>
+  </div>
+  <div class="card">
+    <span class="tag y">CUSTOM SETTING MENU</span>
+    <div class="mono" style="font-size:13px;line-height:1.85;margin-top:8px">
+    Reset custom settings · Photo info/playback · Multi selector · No memory card? · Flash shutter speed · ISO sensitivity auto control · EV steps for exposure cntrl. · Customize command dials · Shutter-release button AE-L · Monitor off delay · Auto meter-off delay · Self-timer delay · Reverse rotation · AE/AF lock · AE lock only · AF lock only
+    </div>
+  </div>
+  <div class="card">
+    <span class="tag y">SETUP MENU</span>
+    <div class="mono" style="font-size:13px;line-height:1.85;margin-top:8px">
+    Format memory card · World time · LCD brightness · Video mode · Language · Image comment · USB · File number sequence · Lock mirror up for cleaning · Dust off ref photo · Firmware version · Auto image rotation · Date and time · NTSC / PAL · Deutsch / English / Español…
+    </div>
+  </div>
+</div>
+
+<p>逐项都能在 D300 说明书里对上号。<b>这不是"猜 D300 有什么菜单"，是固件自己列出来的。</b></p>
+
+<h3>帮助正文池（0x3AB91D）——连每一条说明都写着</h3>
+
+<p>菜单项名后面还跟着一整套<b>帮助说明原文</b>。从 <code>0x3AB91D</code> 起 18,147 字节，
+用控制字节分段：<code>0x01</code> 是菜单项名，<code>0x02</code>–<code>0x09</code> 是各菜单的帮助正文起始，
+正文内部用 <code>0x0A</code> 换行（共 431 个换行符）。按这个方法切出来 <b>106 条帮助正文</b>。</p>
+
+<div class="card">
+<div class="mono" style="font-size:13px;line-height:1.8;white-space:pre-wrap">[02] View a slide show of the images in the
+     current playback folder.
+
+[05] Match white balance to the light source.
+     White balance can be fine-tuned by
+     adjusting the balance of B (blue) and
+     A (amber) or M (magenta) and G (green).
+
+[08] ISO sensitivity: Choose ISO sensitivity.
+     Choosing higher values allows faster
+     shutter speeds to be used to achieve
+     optimal exposure with a given subject
+     at a given aperture, making higher
+     values suited to taking pictures of
+     moving subjects or shooting under low
+     light.
+
+[03] Auto: The camera automatically adjusts
+     for color temperatures in the range
+     3500-8000 K.</div>
+</div>
+
+<p>里面还有两处细节值得记一笔：</p>
+<ul>
+<li><b><code>0x18</code> / <code>0x19</code> 是"按键图标"占位符。</b>原文写的是
+<code>Press [0x18] to display "Print select"</code>——运行时会把这一个字节换成对应按钮的图形。
+这和界面里"按某个键"的提示完全对应。</li>
+<li><b>说明文字是排版过的。</b>换行位置都卡在固定宽度上（约 40 字符），说明固件存的是"排好版的多行文本"，
+不是一整句让渲染器自己折行。</li>
+</ul>
+
+<h3>短标签区（0x1C0000）</h3>
+
+<p>另一处 <code>0x1C0000</code> 区里，短标签按 <b>4 字节对齐、NUL 补齐</b>的方式排列，
+一共抽出 <b>2072 条</b>。里面混着几样有意思的东西：</p>
+
+<table>
+<tr><th>地址</th><th>内容</th><th>说明</th></tr>
+<tr><td class="m">0x1C0548</td><td class="m">AF-C / AF-S / MANUAL</td><td>对焦模式</td></tr>
+<tr><td class="m">0x1C05A0–0x1C0654</td><td class="m">MERCURY LAMP / DAYLIGHT FL / COOL WHT FL / SODIUM LAMP / SHADE / CLOUDY / FLASH / SUNNY</td><td>白平衡光源清单</td></tr>
+<tr><td class="m">0x1C0BCC</td><td class="m">MATRIX / SPOT / CENTER</td><td>测光模式（前面就是指针表）</td></tr>
+<tr><td class="m">0x1C2C50</td><td class="m">Ver.1.11 &nbsp;D300 2013/04/11 for mass production</td><td><b>版本串就在界面文字区里</b></td></tr>
+<tr><td class="m">0x1C2FC0 起</td><td class="m">A:\DCIM &nbsp; ND300 &nbsp; A:\NIKON001.DSC</td><td>存储卡路径与文件名模板</td></tr>
+<tr><td class="m">0x1C3134 起</td><td class="m">JPG / NEF / TIF / TMP / NDF</td><td>扩展名常量表</td></tr>
+</table>
+
+<p>顺带把版本号这条坐实了：<span class="mono">Ver.1.11 &nbsp;D300 2013/04/11 for mass production</span> 出现在
+<code>0x1C2C50</code>，和之前从 B 段别处搜到的一致，也再次印证"ASCII 日期是版本判断的金标准"。</p>
+
+<img class="shot" src="D300固件-界面文字清单.png" alt="D300 固件界面文字清单">
+<div class="cap">图 1　固件里逐字节存在的界面文字（全部取自 B3000111.bin，未做改写）</div>
+
+<h3>把它摆成屏幕的样子</h3>
+
+<p>知道了文字，再按 D300 说明书的菜单外观排一遍，就能得到一张"界面长什么样"的示意图。
+下面这张图的<b>每个字都来自固件</b>，布局是按说明书还原的：</p>
+
+<img class="shot" src="D300固件-菜单结构-还原画面.png" alt="按固件文字还原的 D300 菜单画面">
+<div class="cap">图 2　用固件里的真实菜单文字排出的 SETUP MENU 画面（文字取自固件，布局参照说明书；<b>不是固件输出</b>）</div>
+
+<div class="warn">
+<b>这两张图的边界要划清楚。</b>它们是"素材重建"——文字确实逐字节来自固件，
+但像素是这一轮为了看效果画上去的，不是固件跑出来的。真机上这屏是 EXPEED 渲染的，
+而 EXPEED 还没被模拟。写文章时别把这两张说成"模拟器截图"。
+</div>
+
+<h2>三、下一步的三条路</h2>
+
+<div class="card">
+<b>① 顺着 EXPEED 接口往下挖（最贴近"跑出画面"）</b><br>
+固件通过 <code>0x7000xxxx</code> 跟 EXPEED 说话。把这段窗口上的读写全部记录下来，
+就有机会反推出"B 段发给 EXPEED 的显示命令长什么样"。命令格式一旦解开，
+即便 EXPEED 内部不模拟，也能自己把命令解码成图像。<br>
+<span class="q">代价：需要先让固件真的开始发显示命令，而它现在还在待机。</span>
+</div>
+
+<div class="card">
+<b>② 把待机循环变成"有输入"（最可能让它动起来）</b><br>
+固件现在的状态是等按键。<b>给它注入按键事件</b>——让机身 IO 端口返回"某个按钮被按下"——
+是最有可能推动它往下走的一步。难点是 D300 的按键端口没有文档，得在运行时统计"哪个 IO 地址被反复读"来定位扫描点。<br>
+<span class="q">代价：需要先做一次"IO 读频次"统计，然后逐个端口试。</span>
+</div>
+
+<div class="card">
+<b>③ 把界面素材整理成资料（最快出成果）</b><br>
+2072 条短标签 + 89 段菜单文本 + 帮助文本池，已经足够整理出一份
+<b>「D300 固件里写着的界面全集」</b>：四级菜单结构、每个选项的全部取值、
+以及每一条帮助说明的原文。这对写专栏和做固件对照都有直接用处。<br>
+<span class="q">代价：基本只是整理工作。</span>
+</div>
+
+<h2>四、这一轮改动的文件</h2>
+<table>
+<tr><th>文件</th><th>作用</th></tr>
+<tr><td class="m">D300Write.java</td><td>4KB 粒度内存改写图——本次"没画画面"的判据来源</td></tr>
+<tr><td class="m">D300Go.java</td><td>EXPEED 就绪位打桩对照实验（含基线/打桩双模式）</td></tr>
+<tr><td class="m">D300UI.java</td><td>跑完后扫描整个地址空间、按块存盘（已扩到前 8 块）</td></tr>
+<tr><td class="m">extract_ui_texts.py</td><td>提取短标签区 + 菜单文本池，输出清单</td></tr>
+<tr><td class="m">make_ui_pics.py</td><td>生成上面两张图</td></tr>
+</table>
+
+<footer>
+数据来源：D300 固件 B 段 <span class="mono">B3000111.bin</span>（7,340,032 字节，末 2 字节 CRC16 = 0x4F36 已校验）；
+模拟器为社区版 NikonEmulator（simeonpilgrim/nikon-firmware-tools，Java/Emulator），本轮在 <span class="mono">D300Write / D300Go / D300UI</span> 三个自建驱动下运行。
+<br>所有数字均来自同一轮实跑日志，未做推算。
+</footer>
+
+</div>
+</body>
+</html>
