@@ -1,0 +1,166 @@
+; 第 3151747 步进入空闲任务，激活定时器
+; 共 60000000 步，用时 11502ms，最终 PC=0x000407DC，进入空闲=3151747
+; 系统调用共 2019 次，其中注入前 285 次
+; 被改写的 4KB 块：注入前 0 个，注入后 12 个
+;
+; === 按页统计（Top 25）===
+; 被访问过的页共 75 个（按读+写排序）
+; 0x5C00xxxx   读      24254   写     938553
+; 0x0000xxxx   读     104634   写     103554
+; 0x6800xxxx   读      40759   写      36161
+; 0x9F58xxxx   读       2346   写      71523
+; 0x001Cxxxx   读      33490   写          0
+; 0x0074xxxx   读      32768   写          0
+; 0x0075xxxx   读      32768   写          0
+; 0x0076xxxx   读      32768   写          0
+; 0x0077xxxx   读      32768   写          0
+; 0x9F5Axxxx   读       3358   写      28696
+; 0x9F81xxxx   读      13149   写      14387
+; 0x9F80xxxx   读       9431   写      13206
+; 0x9F5Bxxxx   读       3002   写      16388
+; 0x9F59xxxx   读        116   写      16635
+; 0x0026xxxx   读      16384   写          0
+; 0x0027xxxx   读      16384   写          0
+; 0x6801xxxx   读          0   写      16384
+; 0x9F77xxxx   读          0   写      13313
+; 0x7000xxxx   读       7077   写       5235
+; 0x9F55xxxx   读       2584   写       7750
+; 0x9F7Cxxxx   读        364   写       7213
+; 0x001Dxxxx   读       6865   写          0
+; 0x0005xxxx   读       6667   写          0
+; 0x000Exxxx   读       4603   写          0
+; 0x0028xxxx   读       2190   写          0
+;
+; === 片上 IO 区全程 Top 40 ===
+; 片上 IO 区（<0x1000）有记录的地址共 94 个（全程）
+; 0x046F   读       4384   写       4384   最后写入=0x10
+; 0x0044   读       1817   写       1817   最后写入=0x00
+; 0x004E   读          0   写       1723   最后写入=0x1A
+; 0x0039   读         64   写         66   最后写入=0x04
+; 0x003A   读         39   写         39   最后写入=0xF3BA
+; 0x0062   读          0   写         63   最后写入=0x13
+; 0x0038   读          0   写         33   最后写入=0xFB
+; 0x0063   读          0   写         31   最后写入=0xB8
+; 0x0067   读          0   写         31   最后写入=0x01
+; 0x0042   读         10   写         10   最后写入=0xAFAB
+; 0x0061   读          0   写         16   最后写入=0x10
+; 0x0064   读          0   写         15   最后写入=0x10
+; 0x0041   读          3   写          5   最后写入=0x4D
+; 0x0040   读          3   写          4   最后写入=0x00
+; 0x00AE   读          1   写          1   最后写入=0x00
+; 0x0440   读          1   写          1   最后写入=0x1C
+; 0x0441   读          1   写          1   最后写入=0x1F
+; 0x0442   读          1   写          1   最后写入=0x1C
+; 0x0443   读          1   写          1   最后写入=0x17
+; 0x0444   读          1   写          1   最后写入=0x1F
+; 0x0445   读          1   写          1   最后写入=0x16
+; 0x0446   读          1   写          1   最后写入=0x16
+; 0x0447   读          1   写          1   最后写入=0x16
+; 0x0449   读          1   写          1   最后写入=0x1F
+; 0x044A   读          1   写          1   最后写入=0x1F
+; 0x044B   读          1   写          1   最后写入=0x14
+; 0x044C   读          1   写          1   最后写入=0x1F
+; 0x044D   读          1   写          1   最后写入=0x1F
+; 0x044E   读          1   写          1   最后写入=0x13
+; 0x044F   读          1   写          1   最后写入=0x12
+; 0x0450   读          1   写          1   最后写入=0x14
+; 0x0451   读          1   写          1   最后写入=0x16
+; 0x0452   读          1   写          1   最后写入=0x11
+; 0x0453   读          1   写          1   最后写入=0x16
+; 0x0454   读          1   写          1   最后写入=0x1F
+; 0x0455   读          1   写          1   最后写入=0x17
+; 0x0456   读          1   写          1   最后写入=0x17
+; 0x0457   读          1   写          1   最后写入=0x17
+; 0x0458   读          1   写          1   最后写入=0x1C
+; 0x0459   读          1   写          1   最后写入=0x17
+;
+; === 片上 IO 区「进入空闲之后」Top 40 ===
+; 片上 IO 区（<0x1000）有记录的地址共 15 个（只统计进入空闲任务之后）
+; 0x046F   读       4062   写       4062   最后写入=0x10
+; 0x0044   读       1651   写       1651   最后写入=0x00
+; 0x004E   读          0   写       1722   最后写入=0x1A
+; 0x0039   读         62   写         62   最后写入=0x04
+; 0x003A   读         31   写         31   最后写入=0xF3BA
+; 0x0062   读          0   写         61   最后写入=0x13
+; 0x0038   读          0   写         31   最后写入=0xFB
+; 0x0063   读          0   写         30   最后写入=0xB8
+; 0x0067   读          0   写         30   最后写入=0x01
+; 0x0061   读          0   写         16   最后写入=0x10
+; 0x0064   读          0   写         15   最后写入=0x10
+; 0x0040   读          3   写          3   最后写入=0x00
+; 0x0041   读          3   写          3   最后写入=0x4D
+; 0x0042   读          2   写          2   最后写入=0xAFAB
+; 0x00AE   读          1   写          1   最后写入=0x00
+;
+; === 访问片上 IO 的 PC 热点 Top 25 ===
+; 0x0004069C   2019
+; 0x0004069E   2019
+; 0x000406D4   2018
+; 0x000406D6   2018
+; 0x0004047A   1722
+; 0x00040EAC   583
+; 0x00040EAE   583
+; 0x00041886   478
+; 0x00041888   478
+; 0x000418B8   477
+; 0x000418BA   477
+; 0x00040ED0   279
+; 0x00040ED2   279
+; 0x00040BB8   269
+; 0x00040BBA   269
+; 0x00040A9E   77
+; 0x00040AA0   77
+; 0x0012E168   32
+; 0x0012E198   32
+; 0x0012E180   32
+; 0x0012E4CC   30
+; 0x0012E506   30
+; 0x0012E18A   16
+; 0x0012E1AC   16
+; 0x0012DFC0   16
+; 访问过片上 IO 的 PC 共 197 个
+;
+; === 注入后被改写最多的 4KB 块 Top 30 ===
+; 共 12 个块被改写过
+; 0x5C003000   27
+; 0x68000000   27
+; 0x9F58D000   27
+; 0x9F5A3000   27
+; 0x9F810000   21
+; 0x9F80E000   15
+; 0x00008000   12
+; 0x5C002000   11
+; 0x00000000   7
+; 0x9F803000   7
+; 0x9F805000   1
+; 0x9F813000   1
+;
+; === 中断控制器状态 ===
+Current interrupt level: 31
+;
+; === 外设告警（前 2000 字符）===
+Register 0x00000600: Store32 value 0x00040175 is not supported yet at 0x00040022
+Register 0x00000640: Store32 value 0x00000040 is not supported yet at 0x0004002A
+Register 0x00000680: Store32 value 0x0646A502 is not supported yet at 0x00040036
+Register 0x00000604: Store32 value 0x7000008D is not supported yet at 0x00040042
+Register 0x00000644: Store32 value 0x00000040 is not supported yet at 0x0004004A
+Register 0x00000684: Store32 value 0x333A5502 is not supported yet at 0x00040056
+Register 0x00000608: Store32 value 0x710000FC is not supported yet at 0x00040062
+Register 0x00000648: Store32 value 0x00000040 is not supported yet at 0x0004006A
+Register 0x00000688: Store32 value 0x333A5502 is not supported yet at 0x00040076
+Register 0x0000060C: Store32 value 0x400001CD is not supported yet at 0x00040082
+Register 0x0000064C: Store32 value 0x00000040 is not supported yet at 0x0004008A
+Register 0x0000068C: Store32 value 0x01105502 is not supported yet at 0x00040096
+Register 0x00000610: Store32 value 0x7F00008D is not supported yet at 0x000400A2
+Register 0x00000650: Store32 value 0x00000080 is not supported yet at 0x000400AA
+Register 0x00000690: Store32 value 0x01105500 is not supported yet at 0x000400B6
+Register 0x00000614: Store32 value 0x7F01009D is not supported yet at 0x000400C2
+Register 0x00000654: Store32 value 0x00000080 is not supported yet at 0x000400CA
+Register 0x00000694: Store32 value 0x02105500 is not supported yet at 0x000400D6
+Register 0x000006F8: Store32 value 0x0000001C is not supported yet at 0x000400DE
+Register 0x00000481: Store8 value 0x00 is not supported yet at 0x000400E6
+Register 0x00000482: Store8 value 0x03 is not supported yet at 0x000400EE
+Register 0x000003E0: Store32 value 0xC7000000 is not supported yet at 0x0004035C
+Register 0x000003E7: Store8 value 0x03 is not supported yet at 0x00040364
+Register 0x000003E3: Store8 value 0x02 is not supported yet at 0x0004036C
+Register 0x00000039: Store8 value 0x00 is not supported yet 
