@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件 · μITRON 系统调用表</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:940px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-new{background:#fdecea;color:var(--hi)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .t-hi{background:#fdecea;color:var(--hi)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .big{font-size:22px;font-weight:600;color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 · μITRON 系统调用表</h1>
+<div class="sub">把两台 CPU 各自的系统调用入口、编号、名字和调用次数全解出来 · 2026-10-15</div>
+
+<div class="card">
+<b>一句话结论</b>：D300 的 A、B 两个处理器<span class="tag t-new">各自跑一份 μITRON</span>，
+用同一套系统调用编号，但内核被裁成了两种尺寸——
+主控（B 段）实现 <b>58</b> 个服务、实际用到 <b>21</b> 个；
+协处理器（A 段）只有 <b>20</b> 个实现、用到 <b>17</b> 个，
+而且<span class="tag t-wn">没有信号量、没有延时服务</span>。
+两端加起来，调用最多的都是事件标志：<b>set_flg</b> 与 <b>clr_flg</b>。
+</div>
+
+<h2>一、怎么找到的</h2>
+
+<p>线索是一句官方说明没有、但固件里到处都是的指令：<span class="mono">INT #0x40</span>。
+它是 μITRON 的系统调用陷阱（software trap）。顺着它往上追三级，就能把整张服务表解出来。</p>
+
+<h3>第 1 级：中断向量表</h3>
+<p>实跑时我们已经测出 <span class="mono">TBR = 0x000EFC00</span>（复位代码里
+<span class="mono">LDI:32 #0x000EFC00,R0 / MOV R0,TBR</span>）。表是 4 字节一项，共 256 项：</p>
+<ul>
+<li><b>208 项</b>指向同一个兜底 <span class="mono">0x000404F8</span>（跳到一句 <span class="mono">RET</span>）</li>
+<li><b>48 项</b>指向各自的真实中断处理函数</li>
+<li><span class="mono">#255 = 0x00040000</span> —— 复位地址</li>
+</ul>
+<p>表是<b>倒着排的</b>：中断号 n 的表项在 <span class="mono">TBR + (255-n)×4</span>。
+所以 <span class="mono">INT #0x40</span>（n = 64）对应 <span class="mono">#191</span>，
+表里写着 <span class="mono">0x00040668</span>。</p>
+
+<h3>第 2 级：系统调用分发器</h3>
+<p>反汇编 <span class="mono">0x00040668</span>，是一段标准的 RTOS 分发器：</p>
+<pre>00040668  ST      R14,@-R15
+0004066A  ST      RP,@-R15
+...         压栈、保存现场（STM0/STM1 存 R0-R14、MDH/MDL、RP）
+000406A4  LSL     #1,R12            ; R12 = 服务号 × 2
+000406A6  LDI:32  #0x00040660,R13   ; ★ 分派表基址
+000406AC  LDUH    @(R13,R12),R12    ; 取 16 位偏移
+000406AE  EXTSH   R12               ; 按有符号扩展
+000406B0  ADD     R13,R12           ; 目标 = 基址 + 偏移
+000406B2  CALL    @R12              ; ★ 跳进服务实现
+000406B6  ...     返回后处理
+000406BE  EXTSB   R12               ; ★ 返回值放在 R12（错误码）
+000406E2  RETI</pre>
+<p>要点：<b>服务号放在 R12</b>，是一个<b>负数</b>（8 位有符号）；
+表基址 <span class="mono">0x00040660</span> 其实是这张表的<b>末尾</b>，
+所以索引是往回走的；返回值也从 R12 出来。</p>
+
+<h3>第 3 级：176 个服务号</h3>
+<p>按 <span class="mono">target = 0x40660 + int16(0x40660 + 2n)</span> 把 n 从 −176 到 −1 全算一遍：</p>
+<div class="card">
+<ul>
+<li><b>176 个服务号</b>算出来的目标<span class="tag t-ok">全部落在固件地址范围内，零个越界</span>——模型成立</li>
+<li>去重后是 <b>58 个不同的实现地址</b>（大量服务号指向同一个"未支持"桩）</li>
+<li>对照 NikonEmulator 自带的 D300S 配置文件里的 <b>102 条符号</b>，
+<span class="tag t-ok">176 个服务号 100% 都对上了名字，一个没落空</span></li>
+</ul>
+</div>
+
+<h3>两个独立佐证</h3>
+<div class="grid2">
+<div class="card">
+<b>① 仿真器源码里的常量</b><br>
+<span class="mono">ITron3.java</span> 写着
+<span class="mono">SYSCALL_NUMBER_SET_FLG = 0xD0</span>、
+<span class="mono">CLR_FLG = 0xD1</span>、
+<span class="mono">REF_TSK = 0xEC</span>。
+而我们实测调用次数最多的三个号，
+正是 <span class="mono">0xD0</span>、<span class="mono">0xD1</span>，
+<span class="mono">0xEC</span> 也确实解出 <span class="mono">sys_ref_tsk</span>。
+</div>
+<div class="card">
+<b>② A 段向量表的默认值</b><br>
+A 段向量表默认填充 <span class="mono">0x000FE250 ×210</span>，
+与我们之前靠"未用中断填什么"判代际时记下的
+<b>D300 填 0x000FE250 共 210 条</b>完全吻合——
+两条独立路径对上了同一个数。
+</div>
+</div>
+
+<h2>二、主控（B 段）实际用了哪些服务</h2>
+<p>全段线性反汇编共 <b>2297</b> 处 <span class="mono">INT #0x40</span>，
+其中 <b>1870</b> 处能读出服务号（其余是数据区里碰巧出现的同形字节）。
+这 1870 次调用分布在 <b>21 个服务</b>上——内核提供了 176 个编号，代码只用了这么些：</p>
+
+<table>
+<tr><th>服务号</th><th>调用次数</th><th>占比</th><th>实现地址</th><th>服务名</th></tr>
+<tr><td class="m">0xD0</td><td class="m">676</td><td class="m">36.1%</td><td class="m">0x041A48</td><td>sys_set_flg</td></tr>
+<tr><td class="m">0xD1</td><td class="m">423</td><td class="m">22.6%</td><td class="m">0x041AE2</td><td>sys_clr_flg</td></tr>
+<tr><td class="m">0xD2</td><td class="m">140</td><td class="m">7.5%</td><td class="m">0x041B0A</td><td>sys_wai_flg</td></tr>
+<tr><td class="m">0xC9</td><td class="m">137</td><td class="m">7.3%</td><td class="m">0x0418C0</td><td>sys_sig_sem</td></tr>
+<tr><td class="m">0xDB</td><td class="m">136</td><td class="m">7.3%</td><td class="m">0x04137E</td><td>sys_tslp_tsk</td></tr>
+<tr><td class="m">0xAB</td><td class="m">120</td><td class="m">6.4%</td><td class="m">0x040F1A</td><td>sys_dly_tsk</td></tr>
+<tr><td class="m">0xCB</td><td class="m">114</td><td class="m">6.1%</td><td class="m">0x041902</td><td>sys_wai_sem</td></tr>
+<tr><td class="m">0x96</td><td class="m">29</td><td class="m">1.6%</td><td class="m">0x041B92</td><td>sys_pol_flg</td></tr>
+<tr><td class="m">0xE5</td><td class="m">22</td><td class="m">1.2%</td><td class="m">0x04167C</td><td>sys_chg_pri</td></tr>
+<tr><td class="m">0xE8</td><td class="m">20</td><td class="m">1.1%</td><td class="m">0x0417CC</td><td>sys_get_tid</td></tr>
+<tr><td class="m">0xE9</td><td class="m">14</td><td class="m">0.7%</td><td class="m">0x0414C8</td><td>sys_sta_tsk</td></tr>
+<tr><td class="m">0x95</td><td class="m">8</td><td class="m">0.4%</td><td class="m">0x041944</td><td>sys_preq_sem</td></tr>
+<tr><td class="m">0xEB</td><td class="m">7</td><td class="m">0.4%</td><td class="m">0x041546</td><td>sys_ext_tsk</td></tr>
+<tr><td class="m">0xE7</td><td class="m">6</td><td class="m">0.3%</td><td class="m">0x0415A0</td><td>sys_ter_tsk</td></tr>
+<tr><td class="m">0xDA</td><td class="m">5</td><td class="m">0.3%</td><td class="m">0x041348</td><td>sys_slp_tsk</td></tr>
+<tr><td class="m">0xEC</td><td class="m">4</td><td class="m">0.2%</td><td class="m">0x0417EC</td><td>sys_ref_tsk</td></tr>
+<tr><td class="m">0xF8</td><td class="m">3</td><td class="m">0.2%</td><td class="m">0x042554</td><td>sys_loc_cpu</td></tr>
+<tr><td class="m">0xF9</td><td class="m">3</td><td class="m">0.2%</td><td class="m">0x042568</td><td>sys_unl_cpu</td></tr>
+<tr><td class="m">0xF5</td><td class="m">1</td><td class="m">0.1%</td><td class="m">0x040660</td><td>sys_unsupported_function</td></tr>
+<tr><td class="m">0xE4</td><td class="m">1</td><td class="m">0.1%</td><td class="m">0x0416E4</td><td>sys_rot_rdq</td></tr>
+<tr><td class="m">0xCC</td><td class="m">1</td><td class="m">0.1%</td><td class="m">0x0419FE</td><td>sys_ref_sem</td></tr>
+</table>
+
+<div class="note">
+<b>读法</b>：<span class="mono">set_flg</span>（置事件标志）和
+<span class="mono">clr_flg</span>（清事件标志）加起来 1099 次，
+占全部系统调用的 59%。事件标志是任务之间"打招呼"的机制——
+一个任务置位，另一个任务等着这个位。D300 的固件主要靠它来协调动作，
+信号量（<span class="mono">sig_sem</span> / <span class="mono">wai_sem</span>）加起来 259 次，是第二套机制。
+</div>
+
+<h2>三、协处理器（A 段）的那一份</h2>
+<p>A 段也有自己的向量表（<span class="mono">0x000FFC00</span>）和自己的分发器
+（<span class="mono">0x000FE3C0</span>），结构与 B 段<b>逐条同构</b>：</p>
+
+<pre>000FE3C0  ST      R14,@-R15
+000FE3C2  ST      RP,@-R15
+000FE3EE  LDI:32  #0x000FE3B8,R13   ; ★ A 段的分派表基址
+000FE3F4  LDUH    @(R13,R12),R12
+000FE3F6  EXTSH   R12
+000FE3F8  ADD     R13,R12
+000FE3FA  CALL    @R12</pre>
+
+<p>同样 176 个编号，同样零越界，但去重后只有 <b>20 个实现地址</b>——
+比 B 段的 58 个少了一大半。实际调用 <b>841</b> 次（可解析的），分布在 <b>17 个服务</b>：</p>
+
+<table>
+<tr><th>服务号</th><th>调用次数</th><th>占比</th><th>实现地址</th><th>服务名</th></tr>
+<tr><td class="m">0xD0</td><td class="m">191</td><td class="m">22.7%</td><td class="m">0x0FED2A</td><td>sys_set_flg</td></tr>
+<tr><td class="m">0xD1</td><td class="m">145</td><td class="m">17.2%</td><td class="m">0x0FEDBA</td><td>sys_clr_flg</td></tr>
+<tr><td class="m">0xD2</td><td class="m">142</td><td class="m">16.9%</td><td class="m">0x0FEDE2</td><td>sys_wai_flg</td></tr>
+<tr><td class="m">0xE9</td><td class="m">90</td><td class="m">10.7%</td><td class="m">0x0FEA38</td><td>sys_sta_tsk</td></tr>
+<tr><td class="m">0xDA</td><td class="m">68</td><td class="m">8.1%</td><td class="m">0x0FE942</td><td>sys_slp_tsk</td></tr>
+<tr><td class="m">0xD8</td><td class="m">49</td><td class="m">5.8%</td><td class="m">0x0FE9D4</td><td>sys_can_wup</td></tr>
+<tr><td class="m">0xD9</td><td class="m">45</td><td class="m">5.4%</td><td class="m">0x0FE97A</td><td>sys_wup_tsk</td></tr>
+<tr><td class="m">0xE7</td><td class="m">22</td><td class="m">2.6%</td><td class="m">0x0FEB0A</td><td>sys_ter_tsk</td></tr>
+<tr><td class="m">0xBD</td><td class="m">20</td><td class="m">2.4%</td><td class="m">0x0FF03C</td><td>sys_chg_ilm</td></tr>
+<tr><td class="m">0x96</td><td class="m">17</td><td class="m">2.0%</td><td class="m">0x0FEE5E</td><td>sys_pol_flg</td></tr>
+<tr><td class="m">0xEB</td><td class="m">14</td><td class="m">1.7%</td><td class="m">0x0FEAB4</td><td>sys_ext_tsk</td></tr>
+<tr><td class="m">0xE5</td><td class="m">14</td><td class="m">1.7%</td><td class="m">0x0FEB94</td><td>sys_chg_pri</td></tr>
+<tr><td class="m">0xBC</td><td class="m">9</td><td class="m">1.1%</td><td class="m">0x0FF05C</td><td>sys_ref_ilm</td></tr>
+<tr><td class="m">0xC1</td><td class="m">7</td><td class="m">0.8%</td><td class="m">0x0FEEFA</td><td>sys_snd_msg</td></tr>
+<tr><td class="m">0xEC</td><td class="m">6</td><td class="m">0.7%</td><td class="m">0x0FEC28</td><td>sys_ref_tsk</td></tr>
+<tr><td class="m">0xE8</td><td class="m">1</td><td class="m">0.1%</td><td class="m">0x0FEC08</td><td>sys_get_tid</td></tr>
+<tr><td class="m">0xF5</td><td class="m">1</td><td class="m">0.1%</td><td class="m">0x0FE3B8</td><td>sys_unsupported_function</td></tr>
+</table>
+
+<h3>★ 最值得注意的一点：A 段的内核被裁掉了整类功能</h3>
+<div class="card">
+<p>把两段的清单并排看，差别不是"用得多用得少"，而是<b>根本没有</b>：</p>
+<ul>
+<li><span class="tag t-hi">A 段没有信号量</span>
+<span class="mono">sig_sem / wai_sem / preq_sem</span> 在 A 段的分派表里
+<b>全部指向同一个"未支持"桩</b> <span class="mono">0x0FE3B8</span>，代码里也一次都没调用</li>
+<li><span class="tag t-hi">A 段没有延时服务</span>
+<span class="mono">dly_tsk</span>、<span class="mono">tslp_tsk</span> 同样未实现；
+A 段要睡觉只用 <span class="mono">slp_tsk</span>（无超时），B 段则用带超时的 <span class="mono">tslp_tsk</span> 136 次</li>
+<li><span class="tag t-new">A 段才有中断级管理</span>
+<span class="mono">chg_ilm</span> / <span class="mono">ref_ilm</span> 只在 A 段被调用（20 + 9 次），
+B 段一次没用</li>
+<li><span class="tag t-new">A 段用了消息队列</span>
+<span class="mono">snd_msg</span> 7 次；B 段清单里没有</li>
+</ul>
+<p class="kv">换句话说：协处理器那颗核的任务同步只靠事件标志，
+不需要互斥、也不需要超时等待——这与它负责 IO 驱动的定位是一致的。</p>
+</div>
+
+<h2>四、顺带确认：D300 与 D300S 的内核是同一份</h2>
+<p>这次能给 176 个服务全部命名，靠的是 NikonEmulator 仓库里那份 D300S 的配置文件
+（<span class="mono">b810101b.dfr.txt</span>，102 条符号）。
+对照结果是逐一吻合，例如：</p>
+<table>
+<tr><th>服务号</th><th>我们独立算出的 D300 实现地址</th><th>D300S 配置里的符号</th></tr>
+<tr><td class="m">0xAB</td><td class="m">0x040F1A</td><td>sys_dly_tsk</td></tr>
+<tr><td class="m">0xDB</td><td class="m">0x04137E</td><td>sys_tslp_tsk</td></tr>
+<tr><td class="m">0xE9</td><td class="m">0x0414C8</td><td>sys_sta_tsk</td></tr>
+<tr><td class="m">0xEC</td><td class="m">0x0417EC</td><td>sys_ref_tsk</td></tr>
+<tr><td class="m">0xF5</td><td class="m">0x040660</td><td>sys_unsupported_function</td></tr>
+</table>
+<div class="note">
+两边<b>地址完全相同</b>，说明这两台机器共用同一份 μITRON 内核、放在同一个位置。
+但<b>应用层不同</b>：同一个配置文件里还标了 39 个任务入口（<span class="mono">task_0x01</span>–<span class="mono">task_0x27</span>）
+和任务表 <span class="mono">tblTaskData @0x63EF0</span>。
+内核同址、业务各异——正合"同一平台、不同机型"的预期。
+</div>
+
+<div class="note">
+<b>2026-10-15 修订（两处，都是这次才查清的）</b>
+<ul>
+<li><b>①「39 个一个都没命中」说错了，实际是 38 个没命中、1 个命中。</b>
+逐条实测：D300S 的 <span class="mono">task_0x02</span>（<span class="mono">/* Autorun */</span>，入口
+<span class="mono">0x1200AC</span>）在 D300 里<b>一字不差地存在</b>，位于 <span class="mono">0x054C2C</span>；
+其余 38 个在 D300 里找不到同值。也就是说这两台的任务<b>编号顺序一一对应，代码位置各自不同，
+只有 Autorun 这一颗是原样搬过来的</b>。上一版的"一个都没命中"属漏检，已作废。</li>
+<li><b>② D300 自己的任务表不在 0x63EF0。</b>
+直接读内核代码里的常量：<span class="mono">sta_tsk</span> / <span class="mono">ext_tsk</span> /
+<span class="mono">ter_tsk</span> / <span class="mono">rot_rdq</span> / <span class="mono">get_tid</span> /
+<span class="mono">ref_tsk</span> 六个服务的第一条实指令都是
+<span class="mono">ldi:32 #0x00054BFC, R14</span>；
+而 <span class="mono">set_flg</span> / <span class="mono">clr_flg</span> / <span class="mono">wai_flg</span> /
+<span class="mono">pol_flg</span> 四个都是 <span class="mono">ldi:32 #0x000551B0, R14</span>。
+→ <b>D300 的任务表基址 = 0x00054BFC，事件标志表基址 = 0x000551B0</b>；
+D300S 的 <span class="mono">tblTaskData</span> 写的是 0x63EF0，而 D300 里那一片全是 <span class="mono">FF</span>。
+<b>内核代码同址，数据表不同址。</b></li>
+</ul>
+</div>
+
+<h2>五、边界：哪些别写死</h2>
+<div class="warnbox">
+<ul>
+<li><b>调用次数是"静态"的</b>：数的是反汇编里出现了多少次调用指令，
+不代表运行时真的每次都走到。真实执行频率要靠跑起来才知道。</li>
+<li><b>数据区会有误判</b>：全段线性反汇编会把数据里的同形字节也当成指令。
+B 段 2297 处里有 427 处读不出服务号，A 段 1002 处里有 161 处，这些已排除；
+但剩下的里面仍可能混有少量假命中。</li>
+<li><b>A 段的服务名是"借用"的</b>：A 段自己的分派表我们解出来了（176 项零越界），
+但它没有配套符号表，名字是沿用 B 段已确证的编号体系。
+依据是两端编号结构完全一致（连"未支持"桩的位置都同构），属于强推断，不是直接标注。</li>
+<li><b>服务号是负数这件事</b>由分发器代码推出（<span class="mono">EXTSH</span> 之后
+<span class="mono">ADD</span>），并由"176 项零越界"反证；没有第二份文档可比对。</li>
+<li><b>没验证的</b>：每个服务内部做了什么、各任务的优先级与栈大小、
+D300 与 D300S 内核是否<b>逐字节</b>相同（只验证了入口地址相同）。</li>
+</ul>
+</div>
+
+<h2>六、复现方法</h2>
+<div class="card">
+<ul>
+<li>全段反汇编：Dfr（NikonEmulator 自带）
+<span class="mono">-x conf/d300_b_full.dfr.txt -o out.asm B3000111.bin</span>，
+B 段 7MB 只要 5 秒</li>
+<li>脚本：<span class="mono">.workbuddy/tmp/scan_svc.py</span>（找 INT #0x40 与 R12 装载）、
+<span class="mono">svc_table.py</span>（解分派表 + 套符号 + 统计）</li>
+<li>产物：<span class="mono">svc_table.json</span>（176 个服务号→地址→名字）、
+<span class="mono">svc_calls.json</span>（两端调用统计）</li>
+</ul>
+</div>
+
+</div>
+</body>
+</html>
