@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件 · 用 NikonEmulator 真跑起来</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-new{background:#fdecea;color:var(--hi)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .big{font-size:22px;font-weight:600;color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 · 用 NikonEmulator 真跑起来</h1>
+<div class="sub">从「QEMU 跑不了」到「富士通 FR80 上真的执行了 2.5 亿条指令」｜2026-10-15</div>
+
+<div class="card">
+<h3 style="margin-top:0">省流版</h3>
+<ul>
+<li><b>编译通过</b>：350 个 Java 源文件，Temurin JDK 8 一次编过，<code>NikonEmulator.jar</code> 2.55 MB。</li>
+<li><b>反汇编互校</b>：它的 <span class="mono">Dfr</span> 和我们自己写的 Python 解码器在 D300 A 段 <b>233,071 条指令上零实质分歧</b>。</li>
+<li><b>固件真的执行了</b>：B3000111.bin 从 0x40000 启动，走过清 RAM、搬数据、设中断向量表，完整框架下 12 秒跑了 <b>2.53 亿个周期</b>。</li>
+<li><b>卡在哪</b>：停在 <span class="mono">0x407DC</span> 的 <span class="mono">BRA 自身</span>，途中还有个忙等硬件计数器 <span class="mono">0x5C003034</span> 的死循环；共 <b>1,102 个</b>外设寄存器没有建模。</li>
+<li><b>⚠️ 纠正上一份评估</b>：我原先写「FR 这条线没有现成配置可抄」——<b>错了</b>。<span class="mono">conf/</span> 里有 <b>D300S（1.01b）</b>、D3S、D700 等 FR 机型的现成配置，而且 D300S 的配置能直接套在 D300 上。</li>
+</ul>
+</div>
+
+<h2>一、先把工具装起来</h2>
+<div class="card">
+<table>
+<tr><th>项目</th><th>结果</th></tr>
+<tr><td>JDK</td><td class="m">Temurin OpenJDK 8u504（106 MB，免安装解压即用）。官方文档要 Java 1.7，实测 JDK 8 直接编过</td></tr>
+<tr><td>源码</td><td class="m">349 个 .java + 1 个模板，共 350</td></tr>
+<tr><td>编译</td><td class="m">javac 全量一次通过，0 错误；产物 NikonEmulator.jar = 2,552,899 字节</td></tr>
+<tr><td>依赖</td><td class="m">commons-io / commons-lang3 / jacksum / xstream / jgraphx / rsyntaxtextarea / miglayout / glazedlists（仓库自带）</td></tr>
+<tr><td>构建方式</td><td class="m">没用 ant，直接 javac + jar（仓库自带 build.bat 依赖 ant，省了）</td></tr>
+</table>
+<p class="kv">脚本：<span class="mono">.workbuddy/tmp/build_emu.sh</span></p>
+</div>
+
+<h2>二、意外收获：D300S 的现成配置</h2>
+<div class="card">
+<p><span class="mono">Java/Emulator/conf/</span> 下躺着 24 份机型配置。我原以为只有 TX 机型有，实际一读发现 FR 机型一大堆：</p>
+<table>
+<tr><th>配置文件</th><th>机型</th><th>芯片</th></tr>
+<tr><td class="m">b810101b.dfr.txt</td><td><b>D300s "B" 固件 1.01b</b></td><td>FR</td></tr>
+<tr><td class="m">bd3s101c.dfr.txt</td><td>D3s "B" 固件 1.01c</td><td>FR</td></tr>
+<tr><td class="m">b700_103.dfr.txt</td><td>D700 "B" 固件 1.03</td><td>FR</td></tr>
+<tr><td class="m">b630102a.dfr.txt</td><td>D800 "B" 固件 1.02a</td><td>FR</td></tr>
+<tr><td class="m">b720103c.dfr.txt</td><td>D4 "B" 固件 1.03c</td><td>FR</td></tr>
+<tr><td class="m">b910101a.dfr.txt</td><td>D600 "B" 固件 1.01a</td><td>FR</td></tr>
+</table>
+<p>D300S 那份给出的关键参数：</p>
+<pre>-i 0x00040000-0x0073FFFF=0x00000000     # B 固件装载到 0x40000
+-t 0x000EFC00                            # 中断向量表基址
+-s 0x40EDE=sys_set_tim(...)              # 一整套 μITRON 系统调用符号
+-s 0x40F1A=sys_dly_tsk(R4 [IN dly_tim], ...)
+-s 0x414C8=sys_sta_tsk(R4 [IN tsk_id], R5 [IN tsk_param], ...)
+   ... （共 60 余条系统调用）</pre>
+<div class="note">
+<b>两份硬巧合</b>：①D300 的 <span class="mono">B3000111.bin</span> = 7,340,032 字节 = <b>0x700000</b>，与 D300S 配置的 <span class="mono">0x40000–0x73FFFF</span> 长度<b>一模一样</b>，文件映射可以原样照搬；
+②源码里 <span class="mono">FrCPUState.RESET_ADDRESS = 0x00040000</span>，正是这个装载地址。
+另外那套 <span class="mono">sys_*</span> 符号表再次印证了我们此前「Softune REALOS/FR + μITRON」的判断。
+</div>
+</div>
+
+<h2>三、反汇编互校：零实质分歧</h2>
+<div class="card">
+<p>用它的 <span class="mono">Dfr</span>（移植自 Kevin Schoedel 的原版，独立第三方实现）反汇编 <span class="mono">A3000111.bin</span>（基址 0x80000，与我们自己的解码器<b>同一份输入</b>），逐条比对：</p>
+<table>
+<tr><th>口径</th><th>数值</th></tr>
+<tr><td>Dfr 反汇编指令数</td><td class="m">233,191</td></tr>
+<tr><td>自建解码器指令数</td><td class="m">233,071</td></tr>
+<tr><td>指令起始地址完全一致</td><td class="m">233,071（自建的每一条都能在 Dfr 里找到）</td></tr>
+<tr><td><b>助记符不一致</b></td><td class="m"><b>27</b> → 一致率 99.988%</td></tr>
+<tr><td>其中 Dfr 标 UNK、我们能解</td><td class="m">27（MOV / STRES / LDRES / COPSV 等系统寄存器指令）</td></tr>
+<tr><td><b>真正「两边解出来却不一样」</b></td><td class="m"><b>0</b></td></tr>
+<tr><td>两边都解不出</td><td class="m">119 个字（集中在 A 段尾部 0x0E3CA0 起，是数据区）</td></tr>
+</table>
+<p>拿 <span class="mono">0xC0D9E</span> 这个函数逐行看（上一份报告的主角），两边给出的完全一样：</p>
+<pre>000C0D9E  9B34 FAE9      LDI:20  #0x3FAE9,R4      ; 唯一输出 = 0x3FAE9
+000C0DA2  9B4C 56EA      LDI:20  #0x456EA,R12     ; 闸门 A：[456EA]==0 ?
+000C0DB0  8825           BTSTL   #0x2,@R5         ; 闸门 F：45753 的 bit1
+000C0DBE  8925           BTSTH   #0x2,@R5         ; 闸门：45753 的 bit5
+000C0DDA  E302           BNE     0x000C0DE0
+000C0DDC  81D4           BANDH   #0xD,@R4         ; 清 bit5（0xD&lt;&lt;4 = 0xD0）
+...
+000C0DD6  06C0           LDUB    @R12,R0
+000C0DD8  A860           CMP     #0x6,R0          ; ★ 闸门 B：[456ED]==6
+000C0DEE  9124           BORH    #0x2,@R4         ; 置 bit5（0x20）</pre>
+<div class="note"><span class="tag t-ok">已验证</span>上一份报告里
+「<span class="mono">btstl #u4</span> 掩码 = u4、<span class="mono">btsth #u4</span> 掩码 = u4&lt;&lt;4」「<span class="mono">0x0781</span> 是 <span class="mono">ld @R15+,RP</span> 不是普通 ld」
+这两条我们踩过的坑，Dfr 的输出<b>全部印证</b>。</div>
+</div>
+
+<h2>四、真跑：最小平台（纯 CPU + 内存）</h2>
+<div class="card">
+<p>先不走 GUI，写了个无头驱动 <span class="mono">D300Run</span>（照抄仓库自带 <span class="mono">FrEmulatorTest</span> 的初始化方式）。B 固件从 0x40000 启动，头几条指令是这样的：</p>
+<pre>0x00040000  LDI:32  #0x50000000,R0      ; FR 的 I/O 区基址
+0x00040008  STH     R1,@R0
+0x0004000A  STILM   #0x10               ; 中断级别掩码 = 0x10
+0x0004000C  LDI:32  #0x00008400,R15     ; 栈指针 SP = 0x8400
+0x00040012  LDI:32  #0x000EFC00,R0
+0x00040018  MOV     R0,TBR              ; ★ 中断向量表基址 = 0x000EFC00</pre>
+<div class="note"><span class="tag t-new">关键交叉验证</span>固件自己写进 TBR 的 <b>0x000EFC00</b>，与 D300S 配置里的 <span class="mono">-t 0x000EFC00</span> <b>一字不差</b>。
+这同时说明两件事：我们把 B 固件装在 0x40000 是对的；D300 与 D300S 在这个层面是同一套布局。</div>
+<p>接着是两个标准启动循环：</p>
+<ul>
+<li>清 RAM：<span class="mono">0x40380</span> 起，R1 初值 <b>0x23368</b>，每次 <span class="mono">R1 -= 4</span>，约 10.8 万条指令</li>
+<li>搬数据：<span class="mono">0x403D8</span> 起，长度 <b>0x11C48</b> 字节，展开成每轮搬 2 个字</li>
+</ul>
+<p>40 万条指令之后，PC 停在：</p>
+<pre>0x000407CC  LD      @R15+,RP      ; ← 又一次撞上 0x0781 这个坑
+0x000407D2  LDM0    (R0..R7)
+0x000407D4  LDM1    (R8..R14)
+0x000407D6  ANDCCR  #0xDF
+0x000407D8  RETI
+0x000407DC  BRA     0x000407DC    ; ★ 自转</pre>
+</div>
+
+<h2>五、真跑：完整框架（带时钟、定时器、中断控制器、外设）</h2>
+<div class="card">
+<p>第二个驱动 <span class="mono">D300Full</span> 走 <span class="mono">EmulationFramework.initialize(CHIP_FR, ...)</span>，把主时钟、可编程定时器、中断控制器、IO 端口、LCD / JPEG / SD / 镜像箱全接上，然后 <span class="mono">masterClock.start()</span>。</p>
+<table>
+<tr><th>指标</th><th>数值</th></tr>
+<tr><td>12 秒执行周期数</td><td class="m"><b>253,514,205</b></td></tr>
+<tr><td>稳定后 PC 落在</td><td class="m">0x00125A0C – 0x00125A18（7 条指令的小循环）</td></tr>
+<tr><td>结束时</td><td class="m">ILM=31、r14=0x9F800ADC（已是真实栈地址）、r6=0x5C003000</td></tr>
+<tr><td>未建模外设寄存器</td><td class="m"><b>1,102 个</b>不同地址（5 秒内 1,248 条告警）</td></tr>
+</table>
+<p>那个小循环是什么——一个<b>忙等超时</b>：</p>
+<pre>00125A02  LDI:32  #0x5C003000,R6     ; 硬件计数器基址
+00125A08  LDI:8   #0x34,R13
+00125A0A  LD      @(R13,R6),R5       ; 读一次 → 0x5C003034
+00125A0E  LD      @(R13,R6),R0       ; 再读一次
+00125A12  SUB     R0,R12             ; 增量 = 第二次 - 第一次
+00125A16  CMP     R4,R0
+00125A18  BC      0x00125A0C         ; 增量 &lt; 超时值就一直转</pre>
+<p>因为 <span class="mono">0x5C003034</span> 从来没被建模、读出来恒为 0，增量永远是 0，于是永远转下去。</p>
+<div class="note">有意思的是同一片代码里有 <span class="mono">INT #0x40</span>（<span class="mono">0x125A2E</span>）——这正是 conf 文件里
+「Table of offsets used by INT 0x40」说的 <b>μITRON 系统调用陷阱</b>。实跑的代码里真的在用它。</div>
+</div>
+
+<h2>六、给计数器打个桩，看能不能往前走</h2>
+<div class="card">
+<p>加了一行最小打桩：后台线程每 1 ms 往 <span class="mono">0x5C003034</span> 写一次递增的值。</p>
+<p><b>结果：循环确实退出了</b>——1 秒内 PC 从 <span class="mono">0x125A14</span> 离开，随后一路走到 <span class="mono">0x407DC</span>，又是那个 <span class="mono">BRA 自身</span>。此时 r0–r14 全部归零，ILM=31（可屏蔽中断全关）。</p>
+<div class="warnbox">
+两条完全不同的路径（最小平台走 RETI 之后、完整框架走完超时等待之后）都汇到 <b>0x407DC 的自转</b>，
+而且停在那里时中断是全关的——这更像<b>停机/异常兜底</b>，而不是「等中断的空闲循环」。
+不过这一条我不敢写死，需要再确认。
+</div>
+</div>
+
+<h2>七、这次能写进文章的，和还不能写的</h2>
+<div class="grid2">
+<div class="card">
+<h3 style="margin-top:0"><span class="tag t-ok">能写</span></h3>
+<ul>
+<li>NikonEmulator 能在现代 JDK 上编译并运行 D300 固件</li>
+<li>社区口径称这颗核为 <b>FR80</b>（<span class="mono">CHIP_LABEL = {"FR80","TX19"}</span>）——可引用佐证</li>
+<li>D300 B 固件装载地址 0x40000、向量表 0xEFC00，与 D300S 完全一致</li>
+<li>启动流程实测：设栈 → 设 TBR → 清 RAM → 搬数据 → 进 RTOS</li>
+<li><span class="mono">INT #0x40</span> = μITRON 系统调用陷阱，实跑代码里就在用</li>
+<li>解码器经独立第三方实现逐条验证，233,071 条零分歧</li>
+</ul>
+</div>
+<div class="card">
+<h3 style="margin-top:0"><span class="tag t-wn">不能写</span></h3>
+<ul>
+<li>别写「D300 已经能在模拟器里开机」——差得远</li>
+<li>别把 0x407DC 说成「崩溃」——性质待定</li>
+<li>别用这次的结果去推测菜单/界面行为（一次都没跑到）</li>
+<li>1,102 个未建模寄存器只是 5 秒内的采样，不代表总数</li>
+</ul>
+</div>
+</div>
+
+<h2>八、下一步</h2>
+<div class="card">
+<ol>
+<li><b>（性价比最高）</b>先用它的 <span class="mono">Dfr</span> 把 D300 B 段整段反出来，再配上 D300S 那套 <span class="mono">sys_*</span> 符号——能直接读出固件在调哪些 RTOS 服务。</li>
+<li><b>把 A 段也接进去</b>：A3000111.bin 装到 0x80000，用另一个 FR 实例跑，再把两台的串口/IO 互连（框架里 <span class="mono">interconnectChipSerialPorts</span> 就是干这个的）。</li>
+<li><b>补外设</b>：<span class="mono">0x5C003034</span> 这个自由运行计数器是第一个该补的，补完可能就跨过 0x407DC 了。</li>
+<li><b>长期</b>：把 D300 写成正式的 platform 类，参照 D5100/D3100 那套结构。</li>
+</ol>
+<p class="kv">相关文件：
+<span class="mono">.workbuddy/tmp/build_emu.sh</span>（编译）、
+<span class="mono">.workbuddy/tmp/cmp_dfr.py</span>（互校）、
+<span class="mono">nft/Java/Emulator/src/main/com/nikonhacker/emu/D300Run.java</span>、<span class="mono">D300Full.java</span>（两个驱动）、
+<span class="mono">.workbuddy/tmp/d300_a.dfr.txt</span>（D300 A 段配置）</p>
+</div>
+
+<div class="card">
+<p class="kv">同一系列的另外两份：
+<a href="D300固件-1.11-函数级仿真实验报告.html">第一篇：自建函数级仿真台</a>、
+<a href="D300固件-1.11-第二层-0xC0D9E解剖.html">第二层：0xC0D9E 解剖</a></p>
+</div>
+
+</div>
+</body>
+</html>
