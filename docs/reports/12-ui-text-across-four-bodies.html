@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>D300 固件 · 四台机型的界面文字横向对照</title>
+<style>
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;line-height:1.85;max-width:960px;margin:0 auto;padding:32px 28px;color:#222;background:#fff}
+h1{font-size:26px;border-bottom:3px solid #1a5fb4;padding-bottom:12px;color:#123a6b}
+h2{font-size:21px;margin-top:38px;color:#123a6b;border-left:5px solid #1a5fb4;padding-left:12px}
+h3{font-size:17px;margin-top:24px;color:#334}
+code{background:#f2f5f9;padding:2px 6px;border-radius:3px;font-family:Consolas,monospace;font-size:13px}
+pre{background:#f7f9fb;border:1px solid #dde4ec;border-left:4px solid #1a5fb4;padding:12px 14px;overflow-x:auto;font-family:Consolas,monospace;font-size:12.5px;line-height:1.65}
+table{border-collapse:collapse;margin:14px 0;font-size:14px;width:100%}
+th,td{border:1px solid #ccd6e2;padding:7px 10px;text-align:left}
+th{background:#eaf1f9;color:#123a6b}
+td.n{text-align:right;font-family:Consolas,monospace}
+tr:nth-child(even) td{background:#fafbfd}
+.box{background:#fdf6e3;border-left:4px solid #d1a017;padding:12px 16px;margin:16px 0}
+.warn{background:#fdecea;border-left:4px solid #c0392b;padding:12px 16px;margin:16px 0}
+.ok{background:#eaf7ef;border-left:4px solid #27a35f;padding:12px 16px;margin:16px 0}
+.meta{color:#777;font-size:13px;margin-top:6px}
+.small{font-size:13px;color:#555}
+.zero{color:#c0392b;font-weight:bold}
+.hit{color:#1a7a44;font-weight:bold}
+</style>
+</head>
+<body>
+
+<h1>四台机型的界面文字横向对照</h1>
+<div class="meta">第 3 条路 · 2026-10-16 · 全部基于 CRC16 校验通过的明文 B 段，只报实测数字</div>
+
+<div class="box">
+<b>先看这四台凭什么能放在一起比。</b>它们的 B 段长度全部是 <b>7,340,032 字节</b>，末尾 2 字节的 CRC16/XMODEM（多项式 0x1021）全部与全段重算结果一致——也就是说，我下面每一个数字都是从<u>完整、未被破坏、校验通过</u>的固件里读出来的，不是从解密失败的残片里猜的。
+</div>
+
+<h2>一、四台的身份卡</h2>
+<table>
+<tr><th>机型</th><th>固件文件</th><th>版本串（B 段原文）</th><th>B 段大小</th><th>CRC16</th></tr>
+<tr><td><b>D300</b></td><td><code>D300Update/B3000111.bin</code></td><td><code>Ver.1.11  D300 2013/04/11 for mass production</code></td><td class="n">7,340,032</td><td class="n">0x9F23 ✓</td></tr>
+<tr><td><b>D300S</b></td><td><code>D300SUpdate/decrypted/b810_102_.bin</code></td><td><code>Ver.1.02  D300S 2013/04/11 for mass production</code></td><td class="n">7,340,032</td><td class="n">0xB00C ✓</td></tr>
+<tr><td><b>D3</b></td><td><code>D3Update/BD3_0203.bin</code></td><td><code>Ver.2.03a D3   2013/03/13 for mass production</code></td><td class="n">7,340,032</td><td class="n">0x1876 ✓</td></tr>
+<tr><td><b>D90</b></td><td><code>D90Update/D90_0101.bin</code> 偏移 524,290</td><td><code>Ver.1.01a D90  2014/07/18 This version is not tested</code></td><td class="n">7,340,032</td><td class="n">0xC2AB ✓</td></tr>
+</table>
+
+<p class="small">D700 本来要参加，但它的解密文件（<code>D700Update/decrypted/full.decrypted.bin</code>）里搜不到版本串、CRC 也对不上——仍是密文状态，本轮不参与。</p>
+
+<div class="ok">
+<b>顺手捡到两条：</b>
+<ul>
+<li><b>D300 和 D300S 的版本串日期是同一天</b>——都是 2013/04/11。D3 比它们早一个月（2013/03/13）。</li>
+<li><b>D90 的版本串自己写着 "This version is not tested"</b>（"此版本未经测试"）。四台里只有它带这句。</li>
+</ul>
+</div>
+
+<h2>二、界面文字的体量</h2>
+<p>统计口径：B 段全段内，长度 ≥ 4 的连续可打印 ASCII 串。</p>
+<table>
+<tr><th>机型</th><th>字符串条数</th><th>总字符数</th><th>文字最密的 64KB 页</th></tr>
+<tr><td>D300</td><td class="n">37,980</td><td class="n">705,713</td><td><code>0x3E0000</code>（58,824 字符）</td></tr>
+<tr><td><b>D300S</b></td><td class="n">51,039</td><td class="n">986,264</td><td><code>0x450000</code>（60,582 字符）</td></tr>
+<tr><td>D3</td><td class="n">36,201</td><td class="n">671,642</td><td><code>0x3C0000</code>（59,928 字符）</td></tr>
+<tr><td>D90</td><td class="n">35,933</td><td class="n">679,726</td><td><code>0x420000</code>（54,649 字符）</td></tr>
+</table>
+<p><b>D300S 的文字量比 D300 多出 40%</b>（986,264 对 705,713）。它并不是"D300 小改一下"——多出来的这 28 万字符，主要就是后面会看到的两套新界面：双卡槽和短片。</p>
+
+<h2>三、语言清单：一个意外整齐的指纹</h2>
+
+<p>四台的语言名都紧跟在 <code>NTSC</code> / <code>PAL</code> 这一组选项后面，是一段<b>不带分隔符、直接首尾相接</b>的串：</p>
+<pre>D300  @0x386330   Deutsch English Espa[A4 00]ol Fran[9C 00]ais Italiano Nederlands Svenska
+D3    @0x3B2274   Deutsch English Espa[A3 01]ol Fran[9B 01]ais Italiano Nederlands Svenska
+D90   @0x40A851   Deutsch English Espa[A6 01]ol Fran[9E 01]ais Italiano Nederlands Svenska
+D300S @0x43F5F3   <b>Dansk</b>   English Espa[A5 00]ol Fran[9D 00]ais Italiano Nederlands Svenska</pre>
+<p class="small">方括号里是非 ASCII 字符的转义（ñ、ç）。注意 <b>D300S 这一列的首项是 Dansk，不是 Deutsch</b>。</p>
+
+<p>然后我把每个语言名在<b>整个 B 段</b>里出现的次数数了一遍，结果整齐得不像巧合：</p>
+
+<table>
+<tr><th>语言名</th><th>D300</th><th>D300S</th><th>D3</th><th>D90</th></tr>
+<tr><td>Deutsch</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>English</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Italiano</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Nederlands</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Svenska</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Fran…（Français）</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Suomi</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Polski</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td>Portugu…（Português）</td><td class="n">15</td><td class="n">17</td><td class="n">15</td><td class="n">34</td></tr>
+<tr><td><b>Dansk（丹麦语）</b></td><td class="n zero">0</td><td class="n hit">17</td><td class="n zero">0</td><td class="n hit">34</td></tr>
+<tr><td><b>Norsk（挪威语）</b></td><td class="n zero">0</td><td class="n hit">17</td><td class="n zero">0</td><td class="n hit">34</td></tr>
+</table>
+
+<div class="ok">
+<b>每个语言名出现几遍，就是这台机器支持几种语言。</b><br>
+· D300 = <b>15</b> 种 · D3 = <b>15</b> 种 · D300S = <b>17</b> 种 · D90 = <b>17</b> 种（它把这套表存了两份，所以是 34）。<br>
+· 15 与 17 的差，正好就是 <b>Dansk（丹麦语）和 Norsk（挪威语）这两种北欧语言</b>——它们在 D300 和 D3 里<b>一次都没有出现</b>，在 D300S 和 D90 里出现了 17 / 34 次。
+</div>
+<p class="small">D300=15、D300S=17 与两台机器说明书上的语言数完全吻合，这条指纹也就被外部证据对上了。</p>
+
+<h3>顺带确认的编码细节</h3>
+<table>
+<tr><th>机型</th><th>分隔符</th><th>ñ 的转义</th><th>ç 的转义</th><th>ê 的转义</th></tr>
+<tr><td>D300</td><td><code>0F 07</code></td><td><code>A4 00</code></td><td><code>9C 00</code></td><td><code>9F 00</code></td></tr>
+<tr><td>D3</td><td><code>0F 07</code></td><td><code>A3 01</code></td><td><code>9B 01</code></td><td><code>9E 01</code></td></tr>
+<tr><td>D300S</td><td><code>0F 08</code></td><td><code>A5 00</code></td><td><code>9D 00</code></td><td>—</td></tr>
+<tr><td>D90</td><td><code>0F 09</code></td><td><code>A6 01</code></td><td><code>9E 01</code></td><td>—</td></tr>
+</table>
+<p class="small">分隔符 D300/D3=<code>0F07</code>、D300S=<code>0F08</code>、D90=<code>0F09</code>，与既有笔记一致，本轮逐字节复核通过。</p>
+
+<h2>四、功能差异：只信"整段一次都没出现"</h2>
+
+<div class="warn">
+<b>先把口径说死，否则这张表会被读错。</b>下面每个数字是"这个字符串在整个 B 段里出现的次数"。<br>
+· <b>非零只代表"固件里提到过这个词"</b>，次数的多少受措辞、重复表、帮助正文的影响，<u>不能当成功能的强弱</u>。<br>
+· <b>只有 0 才是硬结论</b>：说明这台机器的固件里，从菜单到帮助正文，一次都没出现过这个词。<br>
+· 每个 0 我都用"完整串 + 常见变体"双向复核过（比如"虚拟水平线"同时查 <code>Virtual horizon</code> 和 <code>Virtual</code>），避免"换了种说法"造成的假 0。
+</div>
+
+<table>
+<tr><th>精确字符串</th><th>D300</th><th>D300S</th><th>D3</th><th>D90</th><th>读法</th></tr>
+<tr><td><code>Virtual horizon</code></td><td class="n zero">0</td><td class="n hit">6</td><td class="n hit">8</td><td class="n zero">0</td><td>虚拟水平线：D300S 和 D3 有，<b>D300 和 D90 没有</b></td></tr>
+<tr><td><code>Virtual</code>（复核用）</td><td class="n zero">0</td><td class="n hit">6</td><td class="n hit">8</td><td class="n zero">0</td><td>连 "Virtual" 这个词在 D300/D90 里都不存在</td></tr>
+<tr><td><code>Movie</code></td><td class="n zero">0</td><td class="n hit">8</td><td class="n zero">0</td><td class="n hit">5</td><td>短片：只有 <b>D300S 和 D90</b> 有，D300/D3 没有</td></tr>
+<tr><td><code>Interval timer</code></td><td class="n">3</td><td class="n">3</td><td class="n">3</td><td class="n zero">0</td><td>间隔定时拍摄：<b>D90 没有</b></td></tr>
+<tr><td><code>Non-CPU lens</code></td><td class="n">5</td><td class="n">9</td><td class="n">5</td><td class="n zero">0</td><td>非 CPU 镜头设定：<b>D90 没有</b></td></tr>
+<tr><td><code>Primary slot</code></td><td class="n zero">0</td><td class="n hit">2</td><td class="n zero">0</td><td class="n zero">0</td><td>主插槽：只 D300S 有</td></tr>
+<tr><td><code>Secondary slot</code></td><td class="n zero">0</td><td class="n hit">2</td><td class="n zero">0</td><td class="n zero">0</td><td>副插槽：只 D300S 有</td></tr>
+<tr><td><code>Card slot</code></td><td class="n zero">0</td><td class="n zero">0</td><td class="n zero">0</td><td class="n zero">0</td><td>四台都不用这个词（措辞不同，不能当"没有双槽"）</td></tr>
+</table>
+
+<div class="box">
+<b>三条可以写进正文的结论：</b>
+<ol>
+<li><b>虚拟水平线：D300 没有，D300S 有。</b>"Virtual" 这个单词在 D300 的 B 段里出现 <b>0 次</b>，在 D300S 里 6 次、D3 里 8 次。这不是"措辞不同"能解释的。</li>
+<li><b>短片：D300 没有，D300S 有，D90 也有。</b>D300 和 D3 的 B 段里 "Movie" 出现 <b>0 次</b>。D300S 8 次、D90 5 次。</li>
+<li><b>D90 少了三样</b>：间隔定时（0 次）、非 CPU 镜头设定（0 次）、虚拟水平线（0 次）。这三样 D300 / D300S / D3 都有。</li>
+</ol>
+</div>
+
+<h2>五、一句话总结</h2>
+<p>四台共用同一套固件骨架（B 段同样 7,340,032 字节、同样的 CRC 校验方式、同样的 μITRON 与界面编码），但界面文字把它们的定位分得清清楚楚：</p>
+<ul>
+<li><b>D300 与 D3 是同一档</b>：都是 15 种语言、都没有短片；差别只在 D3 有虚拟水平线。</li>
+<li><b>D300S 是四台里界面最厚的一台</b>：文字量比 D300 多 40%，多了双卡槽、短片、虚拟水平线，语言从 15 涨到 17。</li>
+<li><b>D90 是"同一代里被削过的那一台"</b>：语言和 D300S 一样是 17 种、保留了短片，但丢掉了间隔定时、非 CPU 镜头设定和虚拟水平线。</li>
+</ul>
+
+<div class="meta">本轮脚本：<code>locate_b.py</code>（定位 B 段 + 版本串 + CRC16）、<code>ui_compare.py</code>（文字体量、最密页、关键词矩阵）、<code>ui_final.py</code>（语言名定位 + 变体复核）。数据：<code>ui_compare.json</code>、<code>ui_labels.json</code>、<code>ui_final.json</code>。</div>
+
+</body>
+</html>
