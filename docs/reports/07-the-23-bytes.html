@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>D300 固件 · 那 23 个字节不是命令流（B↔EXPEED 总线协议解码）</title>
+<style>
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;line-height:1.85;max-width:940px;margin:0 auto;padding:32px 28px;color:#222;background:#fff}
+h1{font-size:26px;border-bottom:3px solid #1a5fb4;padding-bottom:12px;color:#123a6b}
+h2{font-size:21px;margin-top:38px;color:#123a6b;border-left:5px solid #1a5fb4;padding-left:12px}
+h3{font-size:17px;margin-top:24px;color:#334}
+code{background:#f2f5f9;padding:2px 6px;border-radius:3px;font-family:Consolas,monospace;font-size:13px}
+pre{background:#f7f9fb;border:1px solid #dde4ec;border-left:4px solid #1a5fb4;padding:12px 14px;overflow-x:auto;font-family:Consolas,monospace;font-size:12.5px;line-height:1.65}
+table{border-collapse:collapse;margin:14px 0;font-size:14px;width:100%}
+th,td{border:1px solid #ccd6e2;padding:7px 10px;text-align:left}
+th{background:#eaf1f9;color:#123a6b}
+tr:nth-child(even) td{background:#fafbfd}
+.box{background:#fdf6e3;border-left:4px solid #d1a017;padding:12px 16px;margin:16px 0}
+.warn{background:#fdecea;border-left:4px solid #c0392b;padding:12px 16px;margin:16px 0}
+.ok{background:#eaf7ef;border-left:4px solid #27a35f;padding:12px 16px;margin:16px 0}
+.meta{color:#777;font-size:13px;margin-top:6px}
+.small{font-size:13px;color:#555}
+</style>
+</head>
+<body>
+
+<h1>那 23 个字节不是命令流：B↔EXPEED 总线协议解码 + 一次伪造应答实验</h1>
+<div class="meta">模拟器第 9 轮 · 2026-10-17 · 固件 B3000111.bin（Ver.1.11，2013/04/11）· 全部数字来自实跑</div>
+
+<div class="box">
+<b>一句话结论：</b>上一轮留下的 <code>0x9F5A3207</code> 那 23 个字节，我解开了——<b>它不是命令流，是 EXPEED 实时时钟的读取记录区</b>。23 个字节里没有一个字节是"绘图命令"，全部可以逐字段对上号。<br>
+顺着它把整条位串行总线的协议也解出来了：命令字节 = 寄存器号 | 读标志 0x80，两张 256 字节的 BCD↔二进制转换表，时钟以「年 / 月 / 日 / 跳过 / 时 / 分 / 秒」7 个 BCD 字节传输。<br>
+然后我按这个协议伪造了 EXPEED 的应答：<b>时间确实被写进了显示文本区</b>（<code>63 62 62 28 63 63</code> 变成 <code>1A 09 10 22 38 00</code>），<b>但界面依然没有画出来</b>——60M 步里总线上的发送字节数只有 52 个，全部是开机初始化和心跳，一次绘制数据都没发出去。
+</div>
+
+<h2>一、先纠正一个会坑人的基础错误：反汇编里的地址是 CPU 地址</h2>
+
+<p>解这个东西的第一步就卡住了：代码里明明白白写着查表基址 <code>0x1CFDA8</code>，可我把固件当作文件、按偏移 <code>0x1CFDA8</code> 读出来的 256 个字节，是一段机器码，根本不是表。</p>
+
+<pre>0019ECD4  LDUB @(R13,R9),R0     ; R9 = 0x1CFDA8，R13 = 收到的字节 → 查表
+</pre>
+
+<p>原因是<b>反汇编器输出的那一列是 CPU 地址，不是文件偏移</b>。B 段在 CPU 地址空间里从 <code>0x00040000</code> 开始，所以：</p>
+
+<pre>文件偏移 = 反汇编地址 - 0x40000        （例如 0x1CFDA8 → 文件 0x18FDA8）</pre>
+
+<p>我用"表必须满足 T[0xFF]=0x63 且 T[0x3F]=0x28"这个条件反查，全固件只有一处命中：<code>0x18FDA8</code>，与 −0x40000 完全吻合。交叉验证也对得上——上一轮记录到的"被读取的查表地址"是 <code>0x1CFDE7</code> 和 <code>0x1CFEA7</code>，正好是 <code>0x1CFDA8 + 0x3F</code> 和 <code>0x1CFDA8 + 0xFF</code>。</p>
+
+<div class="warn">这条适用于本项目里所有 B 段地址：<b>引用代码/数据时用反汇编地址，读文件时减 0x40000</b>。之前凡是把反汇编地址直接当文件偏移的，都要重新核。</div>
+
+<h2>二、两张 256 字节的表：BCD ↔ 二进制</h2>
+
+<table>
+<tr><th>CPU 地址</th><th>文件偏移</th><th>方向</th><th>内容</th></tr>
+<tr><td><code>0x1CFCA8</code></td><td><code>0x18FCA8</code></td><td>二进制 → BCD</td><td>发送前编码：0x00→0x00 … 0x09→0x09、0x0A→0x10 … 0x63→0x63，超过 99 一律饱和到 0x63</td></tr>
+<tr><td><code>0x1CFDA8</code></td><td><code>0x18FDA8</code></td><td>BCD → 二进制</td><td>收到后解码：0x10→10、0x19→19、0x20→20；非法 BCD（低 4 位 &gt;9）饱和到该段的下一个整十；超过 0x99 一律 99</td></tr>
+</table>
+
+<pre>RECV 表 0x1CFDA8（BCD→二进制）开头两段：
+00: 00 01 02 03 04 05 06 07 08 09 0A 0A 0A 0A 0A 0A
+10: 0A 0B 0C 0D 0E 0F 10 11 12 13 14 14 14 14 14 14
+     ↑ BCD 0x10 = 十进制 10，输出 0x0A = 10 ✓
+                        ↑ BCD 0x19 = 19，输出 0x13 = 19 ✓
+                                    ↑ BCD 0x1A 非法，饱和到 0x14 = 20 ✓</pre>
+
+<p>有了这两张表，那 6 个"看不懂"的字节 <code>63 62 62 28 63 63</code> 立刻就有解了：模拟器里没有 EXPEED，数据线浮空，位串行每次都读回 <code>0xFF</code>；<code>0xFF</code> 经 BCD→二进制表变成 99，于是 6 个字节全是默认值。</p>
+
+<pre>buf[0] = T[0xFF]      = 99  = 0x63
+buf[1] = T[0xFF] - 1  = 98  = 0x62
+buf[2] = T[0xFF] - 1  = 98  = 0x62
+buf[3] = T[0xFF &amp; 0x3F] = T[0x3F] = 40 = 0x28
+buf[4] = T[0xFF]      = 99  = 0x63
+buf[5] = T[0xFF]      = 99  = 0x63
+                → 63 62 62 28 63 63  ✓ 与实测逐字节相同</pre>
+
+<h2>三、那 23 个字节的完整字段表</h2>
+
+<p>它不是一个缓冲区，而是 6 个各自独立的小变量挤在一起。基线（60M 步）实测：</p>
+
+<table>
+<tr><th>CPU 地址</th><th>长度</th><th>基线实测值</th><th>含义（由反汇编确定）</th></tr>
+<tr><td><code>0x9F5A3207</code></td><td>1 B</td><td><code>02</code></td><td>用途未定（未找到写入点之外的消费者）</td></tr>
+<tr><td><code>0x9F5A3208</code></td><td>u32</td><td><code>00 00 06 8C</code>（1676）</td><td>上一次心跳时的系统 tick；开机时被写成 −50（<code>0xFFFFFFCE</code>）表示"很久没采过"</td></tr>
+<tr><td><code>0x9F5A320C</code></td><td>8 B</td><td><code>63 62 62 28 63 63 03 E7</code></td><td><b>第 1 路</b>：6 字节时钟 + u16 上限值 999（0x03E7）</td></tr>
+<tr><td><code>0x9F5A3214</code></td><td>8 B</td><td><code>63 62 62 28 63 63 03 E7</code></td><td><b>第 2 路</b>：同样结构（另一条刷新通道）</td></tr>
+<tr><td><code>0x9F5A321C</code></td><td>1 B</td><td><code>88</code></td><td>EXPEED 状态字节（<code>0x86</code> 命令读回值的副本）</td></tr>
+<tr><td><code>0x9F5A321D</code></td><td>1 B</td><td><code>02</code></td><td>上一次的状态判定结果，变了才触发刷新</td></tr>
+</table>
+
+<p>那个反复出现的 <code>03 E7</code> = 999 也不是分隔符。它来自这段代码：把"距离上次文本变化过去了多少 tick"算出来，<b>超过 999 就截断成 999</b>，然后以 16 位存进缓冲尾部。</p>
+
+<pre>0019EAB2  LDI:20 #0x003E7,R0
+0019EAB6  CMP    R0,R4
+0019EAB8  BLS    0x0019EABE
+0019EABA  LDI:20 #0x003E7,R4        ; 上限 999
+0019EABE  STH    R4,@(R14,-0x002)</pre>
+
+<h2>四、总线协议：命令字节 = 寄存器号 | 0x80</h2>
+
+<p>把所有出现过的命令字节归拢，规律很干净——<b>低 7 位是寄存器号，最高位是读写方向</b>：</p>
+
+<table>
+<tr><th>命令</th><th>方向</th><th>行为</th><th>实测</th></tr>
+<tr><td><code>0x86</code></td><td>读</td><td>读状态寄存器 0x06</td><td>回 1 字节；<b>bit7 是初始化分支开关</b>（<code>0x19E918</code> 处 <code>AND #0x80</code> → BEQ）</td></tr>
+<tr><td><code>0xA6</code></td><td>读</td><td>读时钟寄存器 0x26</td><td>回 <b>7 个字节</b>；每约 1,782,000 步一次，60M 步共 32 次</td></tr>
+<tr><td><code>0xF6</code></td><td>读</td><td>读寄存器 0x76</td><td>回 2 个字节</td></tr>
+<tr><td><code>0x06 / 0x26 / 0x36 / 0x46 / 0x76</code></td><td>写</td><td>写同名寄存器</td><td>后面跟数据字节，不回读</td></tr>
+</table>
+
+<p>开机初始化那一段（第 2,870,872 步）现在能完整读懂：</p>
+
+<pre>0x86 → 读 1 字节（分支开关）
+06 01        写 0x06 = 1
+06 0A        写 0x06 = 10
+46 00        写 0x46 = 0
+26 07 01 01 00 00 00 00   写 0x26（时钟）6 个数据字节
+36 00 / 00  写 0x36
+F6 → 读 2 字节
+76 00        写 0x76 = 0</pre>
+
+<p>之后就只剩心跳：<code>0xA6</code> + 读 7 字节，共 32 次后停止。60M 步的总账是 <b>发送 52 字节 / 接收 226 字节</b>（226 = 32×7 + 初始化 2 次）。</p>
+
+<h3>7 个字节的字段映射（用标记字节钉死）</h3>
+
+<p>代码里 7 次读只填了 6 个字节，我猜不准哪个字节被丢了，于是发了一组互不相同的标记字节 <code>11 12 13 14 15 16 17</code>，看它们落到哪：</p>
+
+<pre>发送:  11 12 13 14 15 16 17
+缓冲:  0B 0B 0C 0F 10 11          = 11, 11, 12, 15, 16, 17
+
+buf[0] = T[b1]        = 11      （原样）
+buf[1] = T[b2] - 1    = 12-1=11 （减 1）
+buf[2] = T[b3] - 1    = 13-1=12 （减 1）
+buf[3] = T[b5 &amp; 0x3F] = 15      ← 第 4 个字节（0x14）被跳过
+buf[4] = T[b6]        = 16
+buf[5] = T[b7]        = 17</pre>
+
+<p>所以线上顺序是 <b>年 / 月 / 日 /（一个被丢弃的字节）/ 时 / 分 / 秒</b>，全部 BCD；<b>月和日进入内存时各减 1</b>（变成 0-based，方便直接当月名表、日期表的下标）。丢弃的那一位，位置和常见 RTC 的"星期"一致。</p>
+
+<p>喂一组真实时间（26 年 10 月 17 日）验证：</p>
+
+<pre>发送: 26 10 17 12 34 56 00
+缓冲: 1A 09 10 22 38 00       = 26, 9(=10−1), 16(=17−1), 34, 56, 0</pre>
+
+<h2>五、伪造应答实验：时间进去了，界面没出来</h2>
+
+<p>注入点是接收函数的出口 <code>0x19EF6E</code>，直接改写 R4/R11（收到的字节）。应答规则按上表来。60M 步对照：</p>
+
+<table>
+<tr><th>模式</th><th>0x86 应答</th><th>0xA6 应答</th><th>发送</th><th>接收</th><th>状态字节</th><th>时间文本（0x9F58D45D）</th><th>对象提交</th></tr>
+<tr><td>0 基线</td><td>（浮空 0xFF）</td><td>（浮空 0xFF）</td><td>52</td><td>226</td><td><code>88</code></td><td><code>63 62 62 28 63 63</code></td><td>9</td></tr>
+<tr><td>1</td><td><code>0x00</code></td><td>真时钟 BCD</td><td>40</td><td>226</td><td><code>00</code></td><td><code>1A 09 10 22 38 00</code></td><td>8</td></tr>
+<tr><td>2</td><td><code>0x80</code></td><td>真时钟 BCD</td><td>52</td><td>226</td><td><code>88</code></td><td>（同上）</td><td>9</td></tr>
+<tr><td>3</td><td><code>0x88</code></td><td>真时钟 BCD</td><td>52</td><td>226</td><td><code>88</code></td><td>（同上）</td><td>9</td></tr>
+</table>
+
+<div class="ok"><b>成功的一半：</b>时间真的被写进去了。显示文本区 <code>0x9F58D45D</code> 从默认值 <code>63 62 62 28 63 63</code>（= 99,98,98,40,99,99，全是"读到 0xFF"的产物）变成了 <code>1A 09 10 22 38 00</code>。也就是说，B 段向 EXPEED 要时间、解码、填进显示缓冲这条链路<b>是通的</b>，而且我伪造的应答被固件原样接受了。</div>
+
+<div class="warn"><b>失败的一半：</b>界面照样没出来。三种应答模式下，总线上的发送字节数是 <b>52 / 40 / 52</b> —— 全部由开机初始化（20 字节）+ 32 次心跳命令（32 字节）构成，<b>没有任何一次"把界面数据发给 EXPEED"的动作</b>。显示对象数组 <code>0x9F5A0F60</code> 与命令队列 <code>0x9F5A10F0</code> 在所有模式下都保持全 0。<br>
+换句话说：<b>不是"EXPEED 不回答所以画不出来"，是 B 段压根没打算往外发画面数据。</b></div>
+
+<h2>六、意外收获：显示对象是真的提交过的</h2>
+
+<p>这轮最大的收获不在时钟，而在顺手抓到的两个地址。我之前把 <code>0x124F46 / 0x124F5A</code> 当成了"绘制原语"，<b>这是错的</b>——把它们反汇编出来看，是再标准不过的双向链表操作：</p>
+
+<pre>00124F5A  LDI:8 #0x04,R13
+00124F5C  ST   R4,@(R13,R5)     ; node-&gt;next = head-&gt;next
+00124F5E  LD   @R4,R0
+00124F60  ST   R0,@R5           ; head-&gt;first 前挂
+00124F62  ST   R5,@R4           ; node-&gt;prev = head
+00124F64  LD   @R5,R0
+00124F66  RET:D                 → 链表插入
+00124F46  ST   R4,@R4           → 空链表自环初始化</pre>
+
+<p>真正在干活的是调用它的 <code>0x12E6F8</code>：</p>
+
+<pre>0012E6FE  LDI:8  #0x0C,R0
+0012E700  MUL    R0,R4              ; × 12
+0012E704  LDI:32 #0x9F58D508,R8
+0012E70A  ADD    R0,R8              ; R8 = 0x9F58D508 + id × 12
+0012E718  BTSTH  #0x8,@(R8+9)       ; 已挂脏链表？
+0012E71C  LDI:32 #0x9F58D500,R4     ; 链表头
+0012E722  CALL:D 0x00124F5A         ; 插入
+0012E72E  BORH   #0x8,@(R8+9)       ; 标记"已提交"
+0012E730  LDI:8  #0x03,R4
+0012E732  LDI:8  #0x08,R5
+0012E734  LDI:8  #0xD0,R12          ; 服务号 −48
+0012E738  INT    #0x40              ; set_flg(3, 0x08)   ← 通知重绘</pre>
+
+<p>于是 <code>0x9F58D508</code> 是一张<b>显示对象表</b>，每条 12 字节：指针 A（4B）+ 指针 B（4B）+ 序号（1B）+ 标志（1B，bit7 = 已提交）+ 2 字节保留。基线上已经有 16 条以上被填好，例如：</p>
+
+<pre>0x9F58D508+12×1 : 9F58D500 | 9F58D55C | 01 80 00 00
+0x9F58D508+12×4 : 9F58D6F4 | 9F58D844 | 04 80 00 00
+0x9F58D508+12×5 : 00000000 | 9F58D844 | 05 80 00 00
+0x9F58D508+12×6 : 9F58D514 | 9F58D6F4 | 06 80 00 00
+0x9F58D508+12×11: 9F58D844 | 9F58D5C8 | 0B 80 00 00</pre>
+
+<p>而 <code>0x12E6F8</code> 在<b>基线里就被调用了 9 次</b>，提交的对象 id 是 1、5、7、9、11、16、41、69（其中 11 号提交过 2 次）。</p>
+
+<div class="warn"><b>这里要更正上一轮的一个说法。</b>我上轮写的是"显示链路空转"，依据是显示对象数组 <code>0x9F5A0F60</code> 全 0。现在看，那个地址根本不是对象存放处——<b>真正的重绘机制是"把对象挂进 <code>0x9F58D500</code> 开头的双向脏链表，然后 <code>set_flg(3, 0x08)</code>" </b>，而且它在基线里实实在在跑了 9 次。链路不是空转，是跑完了前半段、卡在了后半段。</div>
+
+<h2>七、卡在哪：flag 3 只有人写，没有人等</h2>
+
+<p>我把 20M 步里全部 302 次 μITRON 系统调用（服务号 + 参数 + 调用点）都抓了下来，只看 flag 号 = 3 的那些：</p>
+
+<pre>svc=-48 (set_flg) caller=0012E738  flg=3  ptn=0x00000008   ×8
+svc=-48 (set_flg) caller=0015C87A  flg=3  ptn=0x00000200   ×1
+svc=-48 (set_flg) caller=0012E630  flg=3  ptn=0x00000080   ×1
+svc=-48 (set_flg) caller=0012E0EC  flg=3  ptn=0x00000001   ×1
+svc=-47 (clr_flg) caller=00137C80  flg=3  ptn=0xFFFFFDFF   ×10   （清 bit9）
+svc=-47 (clr_flg) caller=00130114  flg=3  ptn=0xFFFEFFFF   ×1
+svc=-47 (clr_flg) caller=0012E07E  flg=3  ptn=0xFFFFFFFD   ×1
+…（其余 4 条 clr_flg 也是 flg=3）
+
+<b>整张表里没有一条 wai_flg / twai_flg / pol_flg 的参数是 flag 3。</b></pre>
+
+<p>而且消费端确实存在，但不消费 bit3：<code>0x137C80</code> 处的函数在干完活之后执行 <code>clr_flg(3, ~0x200)</code>，清的是 <b>bit9</b>，不是 <code>0x12E6F8</code> 置的 bit3。那段代码的形状也很清楚——典型的"刷新某个显示元素"：</p>
+
+<pre>00137C0C  LDUB @0x9F58DEE0,R1 ; 与上次值比
+00137C22  STB  R0,@0x9F58D44A ; 存新值
+00137C2A  CALL 0x0012E6F8     ; 提交显示对象
+00137C3A  BTSTH #0x8,@0x9F595BFA
+00137C6A  CALL 0x0012E6F8     ; 又提交一次
+00137C74  LDI:8 #0x03,R4 ; LDI:32 #0xFFFFFDFF,R5 ; INT #0x40   ← clr_flg(3, bit9)</pre>
+
+<p>于是画面卡住的位置可以精确描述成一句话：<b>重绘通知 <code>set_flg(3, 0x08)</code> 被发出了 8 次，但这 20M 步里没有任何一个任务在 flag 3 上等待</b>；唯一在清 flag 3 的那位清的是 bit9。通知发出去，没有收件人。</p>
+
+<h2>八、三条待办现在的状态</h2>
+
+<table>
+<tr><th>待办</th><th>状态</th><th>结论</th></tr>
+<tr><td>① 解码那 23 个字节</td><td><b>完成</b></td><td>不是命令流，是时钟读取记录区；6 个字段全部对上号，总线协议与字段映射一并解出</td></tr>
+<tr><td>② 伪造外设应答推 UI 状态机</td><td><b>做了，结果是证伪</b></td><td>应答被接受、时间文本确实更新，但 UI 没被推动；<b>卡点不在外设，在 flag 3 没有等待者</b></td></tr>
+<tr><td>③ 给绘制子模块做单元测试</td><td><b>目标要改</b></td><td>不用去手工调 <code>0x19A27A</code>：真正的入口 <code>0x12E6F8</code> 已经在基线里跑了 9 次。该测的是"谁该来消费 flag 3"</td></tr>
+</table>
+
+<h3>下一步最值得做的两件事</h3>
+<p><b>（a）把 <code>0x137C80</code> 所在的那个函数整段读通。</b>它是目前唯一在"消费"flag 3 的代码（清 bit9），又同时调用 <code>0x12E6F8</code> 提交对象——很可能就是显示任务的主体。读通它就能知道"要重绘一个对象"之后固件接下来应该做什么、做到哪一步停了。</p>
+<p><b>（b）查 flag 3 的等待方为什么没出现。</b>三种可能要分开验证：等待方任务压根没被 <code>sta_tsk</code>；它启动后卡在更早的一个等待上；或者等待用的是另一个 flag 对象（内核里 flag 的 ID 与地址可能是两套）。这一步只需要把开机阶段的任务创建序列和每个任务的等待点列出来即可，不需要新增外设模型。</p>
+
+<div class="box">
+<b>顺带修掉的一个坑：</b>本轮曾把服务号 −20 误当成 <code>sta_tsk</code>（因为它的第二个参数是 19 / 22 / 24，很像任务号）。看完上下文才发现它的第一个参数是栈上的缓冲指针，是个"查询某项状态"的服务，不是启动任务。<b>判断服务号不能只看参数像不像，必须回到调用点上下文。</b>
+</div>
+
+<div class="meta">本轮新增工具：<code>D300Clock.java</code>（总线应答模型 + 时钟注入 + 关键 RAM dump）、<code>D300Flag.java</code>（μITRON 调用全量抓取）。输出：<code>clock0/1/2/3/4.out</code>、<code>flag3.out</code>、<code>flagall.out</code>。</div>
+
+</body>
+</html>
