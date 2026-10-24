@@ -1,0 +1,82 @@
+; 第 3041494 步进入空闲任务，激活定时器
+; 共 60000000 步，用时 12105ms，最终 PC=0x000407DC，进入空闲=3041494
+; 系统调用 810 次
+;
+; === 0x7000 窗口总量 ===
+; 读 7058 次 / 写 5160 次 / 涉及地址 9 个
+; 轨迹写入 exp0.tsv（12218 条）
+;
+; === 写最多的地址 Top 40 ===
+; 0x7000000A   写   4947   最后写入=0x0000002E
+; 0x70000002   写     75   最后写入=0x000000FB
+; 0x70000008   写     67   最后写入=0x00000057
+; 0x7000000F   写     66   最后写入=0x0000003F
+; 0x70000000   写      1   最后写入=0x00007C0F
+; 0x70000004   写      1   最后写入=0x00003FFF
+; 0x70000006   写      1   最后写入=0x0000FFBF
+; 0x7000000C   写      1   最后写入=0x000031FA
+; 0x7000000E   写      1   最后写入=0x0000FF3F
+; 有记录的地址共 9 个（按写排序）
+;
+; === 读最多的地址 Top 40 ===
+; 0x7000000A   读   6754   最后写入=0x0000002E
+; 0x70000008   读     98   最后写入=0x00000057
+; 0x70000002   读     74   最后写入=0x000000FB
+; 0x7000000C   读     66   最后写入=0x000031FA
+; 0x7000000F   读     66   最后写入=0x0000003F
+; 有记录的地址共 5 个（按读排序）
+;
+; === 访问 0x7000 的 PC 热点 Top 25 ===
+; 0x0019EF58   3616
+; 0x0019EF50   3616
+; 0x0019EF5E   1808
+; 0x0019EF0C   832
+; 0x0019EF2A   832
+; 0x0019EF1E   504
+; 0x0019EF18   328
+; 0x00139190   64
+; 0x0019ED14   64
+; 0x0013918A   64
+; 0x0019ECBC   64
+; 0x0019ECCE   64
+; 0x001391CA   64
+; 0x0019ECC4   64
+; 0x001391CE   64
+; 0x001391A4   32
+; 0x001391A8   32
+; 0x00137BE8   32
+; 0x0019EE9E   2
+; 0x0019EE92   2
+; 0x0019E914   2
+; 0x0019E90A   2
+; 0x0019EE8A   2
+; 0x0019E900   2
+; 0x00126408   2
+; 访问过 0x7000 窗口的 PC 共 60 个
+;
+; === 外设告警（前 2000 字符）===
+Register 0x00000600: Store32 value 0x00040175 is not supported yet at 0x00040022
+Register 0x00000640: Store32 value 0x00000040 is not supported yet at 0x0004002A
+Register 0x00000680: Store32 value 0x0646A502 is not supported yet at 0x00040036
+Register 0x00000604: Store32 value 0x7000008D is not supported yet at 0x00040042
+Register 0x00000644: Store32 value 0x00000040 is not supported yet at 0x0004004A
+Register 0x00000684: Store32 value 0x333A5502 is not supported yet at 0x00040056
+Register 0x00000608: Store32 value 0x710000FC is not supported yet at 0x00040062
+Register 0x00000648: Store32 value 0x00000040 is not supported yet at 0x0004006A
+Register 0x00000688: Store32 value 0x333A5502 is not supported yet at 0x00040076
+Register 0x0000060C: Store32 value 0x400001CD is not supported yet at 0x00040082
+Register 0x0000064C: Store32 value 0x00000040 is not supported yet at 0x0004008A
+Register 0x0000068C: Store32 value 0x01105502 is not supported yet at 0x00040096
+Register 0x00000610: Store32 value 0x7F00008D is not supported yet at 0x000400A2
+Register 0x00000650: Store32 value 0x00000080 is not supported yet at 0x000400AA
+Register 0x00000690: Store32 value 0x01105500 is not supported yet at 0x000400B6
+Register 0x00000614: Store32 value 0x7F01009D is not supported yet at 0x000400C2
+Register 0x00000654: Store32 value 0x00000080 is not supported yet at 0x000400CA
+Register 0x00000694: Store32 value 0x02105500 is not supported yet at 0x000400D6
+Register 0x000006F8: Store32 value 0x0000001C is not supported yet at 0x000400DE
+Register 0x00000481: Store8 value 0x00 is not supported yet at 0x000400E6
+Register 0x00000482: Store8 value 0x03 is not supported yet at 0x000400EE
+Register 0x000003E0: Store32 value 0xC7000000 is not supported yet at 0x0004035C
+Register 0x000003E7: Store8 value 0x03 is not supported yet at 0x00040364
+Register 0x000003E3: Store8 value 0x02 is not supported yet at 0x0004036C
+Register 0x00000039: Store8 value 0x00 is not supported yet 
