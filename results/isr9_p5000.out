@@ -1,0 +1,63 @@
+mode=9  period=5000  steps=15000000
+; stopped at step 3054229: com.nikonhacker.emu.EmulationException: java.lang.RuntimeException: Serial Interface 0: cannot be configured in mode MD=0b011.
+Only CSIO mode (0b010) and minimal UART (0b000) are supported for now
+steps=3054229  finalPC=0012FA06
+发出 IRQ 0x1B 15 次，进入 ISR 14 次
+发出 IRQ 0x20 2 次，进入 ISR 2 次
+
+--- 管线 / ISR 命中 ---
+  0x12DFAE 管线循环  x1
+  0x12E162 等flag3  x2
+  0x12E1EC 选对象  x2
+  0x12E326 取数据  x2
+  0x12E412 拷数据  x0
+  0x12E674 ★绘制  x0
+  0x12E6F8 插入链表  x6
+  0x12FDB4 ISR(IRQ1B)  x13
+  0x12FE54 ISR(IRQ20)  x2
+  0x198062 任务19  x0
+  0x242DA0 任务21  x0
+
+--- 分发处理函数命中（表 0x1BC480 + idx*4）---
+  idx=3  0x0012FE48  x2
+  idx=4  0x0012F778  x4
+  idx=5  0x0012F77A  x2
+  idx=6  0x0012F798  x1
+  idx=8  0x0012F82C  x1
+  idx=12  0x0012F968  x1
+  idx=13  0x0012F9C0  x3
+  idx=24  0x0012FD9E  x1
+（未列出的 = 0 次）
+
+--- 「flag3 & 0x74」判定点读到的值（0x00=0x12E1E0 处 / 0x100=0x12E404 处）---
+  0x12E1E0 等flag3后  读到 0x10  x2   <<< 通过
+  0x12E404 取数据后  读到 0x20  x1
+
+--- 关键内存 ---
+  DA85 状态(IRQ20用) (0x9F58DA85) = 0x020A0000
+  DA86 状态(IRQ1B用) (0x9F58DA86) = 0x0A000000
+  当前对象id (0x9F58DA82) = 0x01000102
+  描述符指针 (0x9F58D858) = 0x001BC030
+  链表头 (0x9F58D500) = 0x9F58D58C
+  0x9F58D87B 模式开关 (0x9F58D87B) = 0x00000000
+  flag3 位模式 = 0x00000281
+
+--- 文本缓冲 0x9F58D97C 起 48 字节 ---
+  31 31 31 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+  |111.............................................|
+
+--- 事件时间线（前 200 条）---
+# step 0 flag3=0x00000000 DA85=00 DA86=00
+# step 2898000 flag3=0x00000200 DA85=00 DA86=00
+# step 2902000 flag3=0x00000288 DA85=00 DA86=00
+# step 2909000 flag3=0x00000288 DA85=03 DA86=00
+# step 3041494 启动定时器
+# step 3046000 flag3=0x00000283 DA85=01 DA86=00
+# step 3047000 flag3=0x00000291 DA85=02 DA86=00
+# step 3048000 flag3=0x00000281 DA85=02 DA86=00
+# step 3049000 flag3=0x000002A1 DA85=03 DA86=00
+# step 3051000 flag3=0x000002A3 DA85=01 DA86=00
+# step 3052000 flag3=0x000002B3 DA85=01 DA86=00
+# step 3053000 flag3=0x00000291 DA85=02 DA86=00
+# step 3054000 flag3=0x00000281 DA85=02 DA86=09
+（共 13 条）
