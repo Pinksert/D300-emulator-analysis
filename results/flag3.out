@@ -1,0 +1,28 @@
+steps=20000000  finalPC=000407DC  syscall=302
+
+--- 服务号分布（含全部，正数=越界/未识别）---
+  svc=-53    x76
+  svc=-55    x76
+  svc=0      x33
+  svc=-20    x30
+  svc=-47    x25
+  svc=-48    x21
+  svc=-85    x11
+  svc=-46    x10
+  svc=-106   x10
+  svc=-23    x8
+  svc=-83    x1
+  svc=-27    x1
+
+--- 所有 R4==3（flag 号 3）的系统调用 ---
+  svc=-47 caller=00137C80 r5=FFFFFDFF  x10
+  svc=-48 caller=0012E738 r5=00000008  x8
+  svc=-48 caller=0015C87A r5=00000200  x1
+  svc=-48 caller=0012E630 r5=00000080  x1
+  svc=-47 caller=0012E07E r5=FFFFFFFD  x1
+  svc=-47 caller=00130114 r5=FFFEFFFF  x1
+  svc=-47 caller=0012E0D6 r5=FFFFFFFE  x1
+  svc=-48 caller=0012E0EC r5=00000001  x1
+  svc=-47 caller=0012E134 r5=FFFFFFF7  x1
+  svc=-47 caller=0012E196 r5=FFFFFF89  x1
+共 10 种
