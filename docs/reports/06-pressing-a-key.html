@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>D300 固件 · 把按键按下去（模拟器按键注入实验）</title>
+<style>
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;line-height:1.85;max-width:940px;margin:0 auto;padding:32px 28px;color:#222;background:#fff}
+h1{font-size:26px;border-bottom:3px solid #1a5fb4;padding-bottom:12px;color:#123a6b}
+h2{font-size:21px;margin-top:38px;color:#123a6b;border-left:5px solid #1a5fb4;padding-left:12px}
+h3{font-size:17px;margin-top:24px;color:#334}
+code{background:#f2f5f9;padding:2px 6px;border-radius:3px;font-family:Consolas,monospace;font-size:13px}
+pre{background:#f7f9fb;border:1px solid #dde4ec;border-left:4px solid #1a5fb4;padding:12px 14px;overflow-x:auto;font-family:Consolas,monospace;font-size:12.5px;line-height:1.65}
+table{border-collapse:collapse;margin:14px 0;font-size:14px;width:100%}
+th,td{border:1px solid #ccd6e2;padding:7px 10px;text-align:left}
+th{background:#eaf1f9;color:#123a6b}
+tr:nth-child(even) td{background:#fafbfd}
+.box{background:#fdf6e3;border-left:4px solid #d1a017;padding:12px 16px;margin:16px 0}
+.warn{background:#fdecea;border-left:4px solid #c0392b;padding:12px 16px;margin:16px 0}
+.ok{background:#eaf7ef;border-left:4px solid #27a35f;padding:12px 16px;margin:16px 0}
+.meta{color:#777;font-size:13px;margin-top:6px}
+.small{font-size:13px;color:#555}
+</style>
+</head>
+<body>
+
+<h1>把按键按下去：D300 固件按键链路的解剖与注入实验</h1>
+<div class="meta">模拟器第 8 轮 · 2026-10-16 · 固件 B3000111.bin（Ver.1.11，2013/04/11）· 全部数字来自实跑</div>
+
+<div class="box">
+<b>一句话结论：</b>按键这条线我打通了——从引脚电平、外部中断、内核事件标志，到消抖、状态机、显示更新函数，整条链路都拿到了反汇编级的一手证据，并且能<u>精确控制按几次</u>（按 30 次，中断就被接受 30 次）。<br>
+但是：<b>按下去之后，固件仍然没有画出任何东西</b>——显示更新函数确实跑了，可它写出来的「显示对象数组」9 个槽位全是 0、命令队列全是 0。这不是模拟器缺功能，是固件自己判定"此刻没有要画的界面"。
+</div>
+
+<h2>一、先修掉两个坑（一个是我埋的，一个是上游的）</h2>
+
+<h3>坑 1：中断请求永远撤不掉</h3>
+<p>我给外部中断通道 3 发请求后，2000 万步里的系统调用从基线 743 次暴涨到 6 万多次（按键驱动上是 63,301 次，点火驱动上是 64,160 次），最终 PC 卡在 <code>0x42A34</code>。一开始我以为是"固件被唤醒了"，做了剂量-反应曲线才发现不对：<b>点火 1 次 = 759（≈ 基线 743 + 16），点火 2 次及以上全部 = 64,160，完全饱和</b>。</p>
+<p>根因在模拟器的中断控制器里：</p>
+<pre>public void removeEdgeTriggeredRequest(InterruptRequest interruptRequest) {
+    // empty, because all FR interrupts are all level-triggered
+}</pre>
+<p>而 CPU 派发中断的地方只调了这一个撤销函数：</p>
+<pre>platform.interruptController.removeEdgeTriggeredRequest(interruptRequest);   // 空实现
+((FrInterruptController)platform.interruptController).processInterrupt(...);</pre>
+<p>也就是说<b>请求一旦进队列就再也不会出队列</b>。中断服务程序返回后，请求还在，CPU 立刻再次进入——无限重入。真实的按键是<b>边沿触发</b>：CPU 响应一次就该撤掉。修法是等 CPU 真正接受（PC 进入向量入口 <code>0x42A2C</code>）之后立刻调 <code>removeRequest(0x13)</code>。</p>
+
+<h3>坑 2：写内存根本没用，引脚值被外设模型拦截了</h3>
+<p>修好坑 1 之后，我扫了端口 8 个位（<code>0x01</code> 到 <code>0x80</code>）逐个模拟按键，结果<b>八组数据一字不差</b>：都是 761 次系统调用、14 个改写块、界面文字读 56 次。这不可能是对的——按不同键不该完全一样。</p>
+<p>查下去发现，引脚端口的读走的是这条路：</p>
+<pre>// ExpeedPinIoListener.java
+case PORT_VALUE_ADDRESS:
+    return port.getValue();      // 直接返回端口模型算出来的值
+// IoPort.java
+public byte getValue() {
+    for (int bitNumber = 0; bitNumber &lt; 8; bitNumber++) {
+        if (pins[bitNumber].isInput()) {
+            Integer inputValue = pins[bitNumber].getInputValue();   // ← 从 Pin 取，不读内存
+            ...</pre>
+<p>所以我往 <code>0x50000107</code> 写字节（哪怕绕过监听器直接写页面数据）固件<b>一个字都看不到</b>。正确的注入点是 <code>platform.getIoPorts()[7].getPin(3).setInputValue(1)</code>。</p>
+<div class="warn">这两条合起来能解释一个很容易误判的现象：如果你只看到"按键之后系统调用暴涨 80 倍"，会以为固件活了；其实是 ISR 在无限重入。<b>判断按键是否真的生效，只能看"中断被接受的次数是否严格等于按键次数"</b>。</div>
+
+<h2>二、按键链路：从引脚到显示更新</h2>
+
+<h3>2.1 中断现场（进入空闲任务后 dump）</h3>
+<table>
+<tr><th>寄存器</th><th>值</th><th>含义</th></tr>
+<tr><td>EIRR0（<code>0x40</code>）</td><td><code>0x00</code></td><td>无待处理请求</td></tr>
+<tr><td>ENIR0（<code>0x41</code>）</td><td><code>0x4D</code> = 0100 1101</td><td>只开了外部中断通道 0、2、3、6</td></tr>
+<tr><td>ELVR0（<code>0x42</code>）</td><td><code>0xAFAB</code></td><td>各通道的触发边沿配置</td></tr>
+<tr><td>端口 P7 方向</td><td>P0–P7 全为输入</td><td>8 条引脚线都是输入</td></tr>
+</table>
+<p>四个使能的通道里，<code>#0x10</code>/<code>#0x12</code>/<code>#0x13</code> 的入口在内核小桩（<code>0x42xxx</code>），只有 <code>#0x16</code> 的入口在应用层。逐个点火试下来，<b>只有通道 3（请求号 <code>0x13</code>）的桩里带着完整的按键语义</b>。</p>
+
+<h3>2.2 中断服务程序 <code>0x17584C</code></h3>
+<pre>0017584C  ST      RP,@-R15
+0017584E  LDI:32  #0x9F5A31E8,R0
+00175854  BORL    #0x8,@R0          ; RAM 标志置 bit3 = 「有按键」
+00175856  LDI:32  #0x0004049E,R12
+0017585C  CALL    @R12              ; 内核调用
+0017585E  LDI:20  #0x00041,R0
+00175862  BANDL   #0x7,@R0          ; ENIR0 &= ~0x07 → 关掉通道 0/1/2
+00175864  LDI:8   #0x0C,R4
+00175866  LDI:32  #0x80000000,R5
+0017586C  LDI:8   #0xD0,R12         ; 0xD0 = -48
+0017586E  EXTSB   R12
+00175870  INT     #0x40             ; ★ set_flg(12, 0x80000000)
+00175872  LD      @R15+,RP
+00175874  RET</pre>
+<p>一共做三件事：置一个 RAM 标志、关掉另外三个外部中断通道（防抖期间的互斥）、然后调 <code>set_flg(12, 0x80000000)</code>。<b>事件标志 12 的 bit31 就是"有按键"</b>。</p>
+
+<h3>2.3 消抖函数 <code>0x175876</code>（标准到可以直接抄进教科书）</h3>
+<pre>00175876  LDI:32 #0x50000000,R7
+0017587C  LDI:8  #0x00,R5                 ; 稳定计数清零
+0017587E  LDI:20 #0x00107,R13             ; 端口偏移 0x107 → 地址 0x50000107
+00175882  LDUB   @(R13,R7),R6
+00175884  LSL2   #12,R6
+00175886  LSR2   #15,R6                   ; 净右移 3 → R6 = bit3
+00175888  LDI:8  #0x0A,R4
+0017588A  LDI:8  #0xDB,R12                ; 0xDB = -37
+0017588C  EXTSB  R12
+0017588E  INT    #0x40                    ; ★ tslp_tsk(10) 睡 10 个 tick
+00175892  LDUB   @(R13,R7),R4             ; 再读一次
+00175898  LSL2   #12,R4 / LSR2 #15,R4     ; 还是 bit3
+0017589C  CMP    R6,R4                    ; 和上次比
+0017589E  BEQ    0x001758A6               ; 相同 → 计数 +1
+001758A0  LDI:8  #0x00,R5                 ; 不同 → 计数清零重来
+001758A6  ADD    #0x1,R5
+001758A8  CMP    #0xA,R5                  ; 连续 10 次一致才算稳
+001758AA  BLT    0x00175888
+001758AC  LDI:20 #0x00040,R0
+001758B0  BANDL  #0x7,@R0                 ; EIRR0 清 bit3 → 撤销本次请求
+001758B8  CMP    #0x0,R4
+001758BA  BNE:D  0x001758C0               ; 注意这是「延迟分支」
+001758BC  LDI:8  #0x03,R5                 ; 延迟槽，必执行
+001758BE  LDI:8  #0x02,R5                 ; 不跳转时才执行
+001758C0  LDUH   @R0,R1                   ; ELVR0
+001758C6  AND    #0xFFFFFF3F,R1           ; 清掉通道 3 的两位
+001758D6  STH    R1,@R0                   ; 按 R5 重设触发边沿
+001758DC  LDI:20 #0x00041,R0
+001758E0  BORL   #0x8,@R0                 ; ENIR0 |= bit3 → 重新打开通道 3
+001758EA  RET</pre>
+<div class="ok"><b>这里有一个 FR 的坑，不拆开看会读反。</b><code>BNE:D</code> 是延迟分支，<code>0x1758BC</code> 那条指令<u>无论跳不跳都会执行</u>。所以真实语义是：<b>电平为 1（键还按着）→ R5 = 3 = 下降沿，等松开；电平为 0（已松开）→ R5 = 2 = 上升沿，等下次按下</b>。逻辑完全自洽。</div>
+
+<h3>2.4 按键状态机 = 任务 6，入口 <code>0x175192</code></h3>
+<pre>001751B4  LDI:8  #0xD1,R12 ; INT #0x40   ; clr_flg(12, ~0x80000000) 先清标志
+001751C4  CALL   0x00120064              ; 按键 GPIO 初始化
+001751C6  BORL   #0x8,@R11               ; 0x9F5A31E8 置「有按键」
+001751D6  BTSTH  #0x4,@R0  ; 0x9F58D40C  ; 忙等某个状态位
+001751E4  LDI:8  #0x14,R4 ; LDI #0xDB,R12; tslp_tsk(20)
+001751F4  BTSTL  #0x2,@R0 ; 0x9F58D02D   ; 再等
+001751FE  BTSTL  #0x2,@R0 ; 0x50000104   ; 读另一条引脚
+0017520A  CALL   0x00120000              ; 读按键矩阵
+00175212  LDI:8  #0x40,R4
+00175214  BANDL  #0x7,@R11               ; 清「有按键」
+00175216  CALL   0x00198004              ; ★★ 调显示更新
+0017521E  LDI:8  #0x0C,R4 ; 0x80000000,R5
+00175226  LDI:8  #0xD0,R12 ; INT #0x40   ; ★ set_flg(12, 0x80000000)
+00175234  CALL   0x00175876              ; ★ 消抖</pre>
+<p>这就是完整的按键主循环：<b>读矩阵 → 调显示更新 → 置事件标志 → 消抖</b>。而 <code>0x198004</code> 就是我要找的显示出口。</p>
+
+<h3>2.5 显示更新 <code>0x198004</code> 与显示任务</h3>
+<pre>00198004  CALL 0x0019A27A               ; 绘制子模块 1
+0019800E  CALL 0x0019A2E8               ; 绘制子模块 2
+00198016  CALL 0x0019ACF2               ; 绘制子模块 3
+0019801E  CALL 0x0019AE58               ; 绘制子模块 4
+00198026  LDI:8 #0x02,R4
+00198028  CALL 0x0019B2CE               ; 绘制子模块 5（参数 2）
+00198038  STB   0x00,@0x9F5A106B        ; 清「待处理」
+00198042  STB   0x01,@0x9F5A3110        ; ★ 置「画面已更新」
+00198050  INT   #0x40   ; set_flg(14, 0x40000000)
+0019805C  INT   #0x40   ; sta_tsk(20)   启动任务 20</pre>
+<p>顺着它把 28 条任务表也读出来了（表基址 <code>0x54C10</code>、步长 <code>0x1C</code>，来自内核代码常量，不是猜的）：</p>
+<table>
+<tr><th>任务号</th><th>入口</th><th>我判定的角色</th></tr>
+<tr><td>6</td><td><code>0x175192</code></td><td><b>按键扫描</b>（就是 2.4 那一段）</td></tr>
+<tr><td>18</td><td><code>0x1963EC</code></td><td>显示相关（<code>0x19xxxx</code> 区）</td></tr>
+<tr><td>19</td><td><code>0x198062</code></td><td><b>显示任务</b>（紧接着 <code>0x198004</code>）</td></tr>
+<tr><td>20</td><td><code>0x15C89A</code></td><td>被 <code>sta_tsk(20)</code> 启动的那个</td></tr>
+<tr><td>23</td><td><code>0x1985BE</code></td><td>显示相关</td></tr>
+<tr><td>24</td><td><code>0x1960C8</code></td><td>显示相关</td></tr>
+<tr><td>28</td><td><code>0x0407DC</code></td><td><b>空闲任务</b>（和第五轮定论一致）</td></tr>
+</table>
+<p class="small">（其余 21 条入口一并读出，见实验输出；这里只列与显示/按键直接相关的。）</p>
+
+<h2>三、实测：按下去之后发生了什么</h2>
+
+<p>参数：40,000,000 步确定性仿真，第 3,151,747 步进入空闲任务后激活定时器，从第 5,000,000 步开始按键，每次按下保持 200,000 步再松开。</p>
+
+<table>
+<tr><th>按下次数</th><th>中断被接受</th><th>系统调用（按下后）</th><th>最终 PC</th><th>改写 4KB 块</th></tr>
+<tr><td>1</td><td><b>1</b></td><td>1117</td><td><code>0x407DC</code></td><td>14</td></tr>
+<tr><td>3</td><td><b>3</b></td><td>1119</td><td><code>0x407DC</code></td><td>14</td></tr>
+<tr><td>10</td><td><b>10</b></td><td>1141</td><td><code>0x407DC</code></td><td>14</td></tr>
+<tr><td>30</td><td><b>30</b></td><td>1191</td><td><code>0x407DC</code></td><td>14</td></tr>
+</table>
+
+<p><b>中断被接受的次数严格等于按键次数</b>——这是"按键真的被硬件层接收了"的硬指标。而且每次处理完都干净地回到空闲任务 <code>0x407DC</code>，没有卡死。</p>
+
+<p>再看按下之后的系统调用构成（20M 步 / 3 次按键那次，共 761 次）：</p>
+<table>
+<tr><th>服务号</th><th>函数</th><th>次数</th></tr>
+<tr><td>−53</td><td><code>wai_sem</code></td><td>130</td></tr>
+<tr><td>−55</td><td><code>sig_sem</code></td><td>129</td></tr>
+<tr><td>−106</td><td><code>pol_flg</code></td><td>102</td></tr>
+<tr><td>−47</td><td><code>clr_flg</code></td><td>95</td></tr>
+<tr><td>−27</td><td><code>chg_pri</code></td><td>43</td></tr>
+<tr><td>−48</td><td><code>set_flg</code></td><td>37</td></tr>
+<tr><td>−20</td><td><code>ref_tsk</code></td><td>32</td></tr>
+<tr><td>−85</td><td><code>dly_tsk</code></td><td>23</td></tr>
+<tr><td>−24</td><td><code>get_tid</code></td><td>21</td></tr>
+<tr><td>−46</td><td><code>wai_flg</code></td><td>20</td></tr>
+<tr><td>−37</td><td><code>tslp_tsk</code></td><td>20</td></tr>
+<tr><td>−23</td><td><code>sta_tsk</code></td><td>16</td></tr>
+<tr><td>−83</td><td><code>set_tim</code></td><td>1</td></tr>
+</table>
+<p class="small">注：另有一个服务号 <code>+86</code>（0x56）出现 92 次，它是正数、不在 μITRON 服务号区间 [−176, −1] 内，是我在派发器入口按 PC 采样时的误记，已剔除，不计入。</p>
+
+<p><code>tslp_tsk</code> 20 次 = 消抖函数里 <code>tslp_tsk(10)</code> 每次按键跑 10 遍、共 2 次完整消抖；<code>sta_tsk</code> 16 次包含 <code>0x198004</code> 里的 <code>sta_tsk(20)</code>——<b>说明显示更新函数确实执行过</b>。</p>
+
+<h2>四、决定性的一刀：显示对象数组是空的</h2>
+
+<p>光看计数不够。我把显示相关的 RAM 整块 dump 出来（<code>0x9F5A0000</code> 起 32KB）逐字节查：</p>
+
+<table>
+<tr><th>地址</th><th>内容</th></tr>
+<tr><td><code>0x9F5A3110</code></td><td><code>01</code> —— <code>0x198004</code> 写的「画面已更新」标志，<b>说明显示更新函数跑了</b></td></tr>
+<tr><td><code>0x9F5A0CC0</code></td><td>11 条 4 字节指针（每条重复 2 次）的<b>图层表</b>，指向 <code>0x9F56206C</code>、<code>0x9F55D260</code>… 已初始化</td></tr>
+<tr><td><code>0x9F5A0F60</code></td><td><b>显示对象数组</b>（= <code>0x9F5A0D00 + 0x260</code>，9 个槽 × 18 字节）—— <b>全部为 0</b></td></tr>
+<tr><td><code>0x9F5A10F0</code></td><td><b>显示命令队列</b>（= <code>0x9F5A0D00 + 0x3F0</code>，显示任务 19 从这里取命令）—— <b>全部为 0</b></td></tr>
+<tr><td><code>0x9F5A3207</code></td><td>23 字节残留：<code>02 00 00 04 3D 63 62 62 28 63 63 03 E7 63 62 62 28 63 63 03 E7 88 02</code>（格式未解码）</td></tr>
+</table>
+
+<div class="warn">
+<b>这就是最终答案。</b>显示更新函数被调用了、图层表初始化好了、"画面已更新"标志也置上了，可是它往显示对象数组里<b>一个东西都没写</b>，命令队列也是空的。固件判断"当前没有要显示的界面"，于是整条显示链路空转。<br><br>
+这不是模拟器的锅。真机上开机后屏幕是要亮出拍摄信息的，而模拟器里没有镜头、没有存储卡、没有电池组、没有 EXPEED 的真实应答，UI 状态机根本没走到"要画菜单"的分支。
+</div>
+
+<h3>一条必须自我证伪的旁证</h3>
+<p>我在统计里看到"界面文字区（<code>0x1C0000</code>–<code>0x1E0000</code>）被读了 56 次（20M 步）/ 133 次（40M 步）"，一度以为按键触发了文字读取。<b>这是错的</b>，我把读它的地址全 dump 出来验证：</p>
+<ul>
+<li><code>0x001C0244</code>（8 次）→ 内容是 <code>00 02 01 03 00 02 01 03</code>，不是文字</li>
+<li><code>0x001CFDE7</code>（8 次）→ <code>28 28 29 2A 2B 2C 2D 2E 2F 30 31 32 32 32 32 32...</code>，一张带连续段的查表数据</li>
+<li><code>0x001CFEA7</code>（40 次）→ 混合二进制，不是文字</li>
+</ul>
+<p>而且读它们的 PC 是 <code>0x19ECD4</code>/<code>0x19ECDC</code>/<code>0x19ECE8</code>/<code>0x19ECF8</code>/<code>0x19ED02</code>/<code>0x19ED0C</code>——<b>全都在 <code>0x19ECC0</code> 那个 EXPEED 心跳查询函数里</b>（第七轮已确认它每约 178 万步发一次 <code>0xA6</code> 查询）。读取次数只随步数增长、与按键次数完全无关。<br>
+另外，菜单/帮助文字池（<code>0x3A0000</code>–<code>0x3B0000</code>）全程<b>读取 0 次</b>。</p>
+
+<h2>五、这一轮留下的坐标</h2>
+<table>
+<tr><th>东西</th><th>地址</th></tr>
+<tr><td>按键中断（外部通道 3 / 请求号 <code>0x13</code>）</td><td>向量 <code>0x42A2C</code> → ISR <code>0x17584C</code></td></tr>
+<tr><td>按键电平引脚</td><td>端口 P7（<code>0x50000107</code>）的 <b>bit3</b></td></tr>
+<tr><td>消抖</td><td><code>0x175876</code>，读 bit3、<code>tslp_tsk(10)</code>、连续 10 次稳定</td></tr>
+<tr><td>「有按键」RAM 标志</td><td><code>0x9F5A31E8</code> bit3</td></tr>
+<tr><td>按键状态机（任务 6）</td><td><code>0x175192</code></td></tr>
+<tr><td>显示更新分发器</td><td><code>0x198004</code></td></tr>
+<tr><td>5 个绘制子模块</td><td><code>0x19A27A</code> / <code>0x19A2E8</code> / <code>0x19ACF2</code> / <code>0x19AE58</code> / <code>0x19B2CE</code></td></tr>
+<tr><td>低级绘制原语</td><td><code>0x124F46</code> / <code>0x124F5A</code></td></tr>
+<tr><td>图层表</td><td><code>0x9F5A0CC0</code>（11 条 × 4 字节 × 2）</td></tr>
+<tr><td>显示对象数组</td><td><code>0x9F5A0F60</code>（9 槽 × 18 字节）—— <b>实测全 0</b></td></tr>
+<tr><td>显示命令队列</td><td><code>0x9F5A10F0</code> —— <b>实测全 0</b></td></tr>
+<tr><td>显示任务（任务 19）</td><td><code>0x198062</code></td></tr>
+<tr><td>任务表</td><td><code>0x54C10</code> 起，步长 <code>0x1C</code>，28 条</td></tr>
+</table>
+
+<h3>下一步能做的（按性价比排序）</h3>
+<ol>
+<li><b>解码 <code>0x9F5A3207</code> 那 23 字节命令流。</b>它是目前唯一一段真实的、格式未知的显示数据，解出来就能知道 B 段给显示模块的命令长什么样。</li>
+<li><b>伪造外设应答把 UI 状态机推过去。</b>显示对象数组之所以全 0，是因为上游状态位（如 <code>0x9F58D40C</code>、<code>0x9F58D02D</code>）没有置起来。找出它们依赖的外设（镜头/存储卡/电池），逐个打桩。</li>
+<li><b>给 5 个绘制子模块做单元测试。</b>直接调 <code>0x19A27A</code> 并手工填好图层表，看它能不能往 <code>0x9F5A0F60</code> 写出对象——这是"让固件自己画东西"最短的一条路。</li>
+</ol>
+
+<div class="meta">本轮新增工具：<code>D300Press.java</code>（按键注入驱动，支持引脚位、按下时刻、保持时长、次数）、<code>IoCensusListener</code> 增加「关注区读取地址记录」。数据：<code>press_scan.txt</code>（修坑前）、<code>press_scan2.txt</code>（修坑 1 后）、<code>press3.txt</code>、<code>press10.txt</code>、<code>press_dose.txt</code>、<code>ram_9F5A.bin</code> / <code>ram_9F59.bin</code> / <code>ram_9F58.bin</code>。</div>
+
+</body>
+</html>
