@@ -25,8 +25,11 @@ D300-emulator/
 ├── tools/
 │   ├── analyze_cover.py    覆盖率位图的调用图前沿分析
 │   └── build_emu.sh        编译脚本
-└── results/                筛选过的实验输出（< 400 KB/项）
+├── data/                   固件 + 反汇编（>2 MB 的已 gzip，需解压）
+└── results/                全部原始实验输出（60+ 份，大文件同样已压缩）
 ```
+
+> **数据文件**：`data/B3000111.bin` 和 `A3000111.bin` 未压缩，直接可用；`d300_b_full.asm.gz`（156 MB 原始 / 18.5 MB 压缩）超过 GitHub 单文件上限，必须压缩存放，用前 `gunzip -k`。详见 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) 第四节。
 
 ---
 
@@ -94,6 +97,10 @@ B↔EXPEED 总线      位串行，不是显存
 ## 快速开始
 
 ```bash
+# 0. 解压大文件（反汇编 156 MB，超过 GitHub 单文件上限所以是压缩包）
+gunzip -k data/d300_b_full.asm.gz
+gunzip -k data/d300_full.asm.gz
+
 # 1. 拿到上游 NikonEmulator，把 drivers/ 下的文件放进对应包目录
 #    drivers/com/nikonhacker/emu/*.java              → src/main/com/nikonhacker/emu/
 #    drivers/com/nikonhacker/emu/memory/listener/fr/ → 同名目录
@@ -171,4 +178,6 @@ python tools/analyze_cover.py d300_b_full.asm cover0.bin
 
 ## 引用
 
-如果你用到了这里的结论，请同时引用上游项目 NikonEmulator。固件本身是尼康公司的知识产权，本仓库不包含任何固件二进制。
+如果你用到了这里的结论，请同时引用上游项目 NikonEmulator。
+
+`data/` 下的固件二进制是尼康公司的知识产权，放在这里只为了让分析过程可复现 —— 引用前请自行判断合规性。
