@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>D300 固件 · 显示管线终于跑起来了</title>
+<style>
+:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+--hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+.wrap{max-width:940px;margin:0 auto}
+h1{font-size:26px;margin:0 0 6px;font-weight:600}
+.sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+th{background:#eef1f6;font-weight:600}
+td.m{font-family:var(--mono);font-size:12.5px}
+.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+.t-new{background:#fdecea;color:var(--hi)}
+.t-ok{background:#e7f6ec;color:var(--ok)}
+.t-wn{background:#fdf3e2;color:var(--warn)}
+.note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+.warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+.okbox{background:#f2faf5;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+ul{margin:8px 0 8px 22px;padding:0}
+li{margin:4px 0}
+.big{font-size:22px;font-weight:600;color:var(--acc)}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:4px 12px;font-size:14px}
+.kv div:nth-child(odd){color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 · 显示管线终于跑起来了</h1>
+<div class="sub">把"画不出界面"这个结论拆开，找到确切的卡点，并且真的让固件自己走完了整条绘制流程 · 2026-10-24</div>
+
+<div class="card">
+<div class="okbox">
+<b>一句话结论</b>：D300 的界面不是"没画"，是<b>卡在等一个永远不会来的信号</b>。
+显示更新任务（任务 4）一直在等事件标志 <code>flag 3</code> 的 <b>bit4（0x10）</b>，
+而整个 B 段固件里<b>没有任何一处代码会置这个位</b>——
+它由显示控制器的硬件中断来置。我们手动把这个位置上去之后，
+固件<b>一口气处理并绘制了 7 个显示对象</b>，调用了 4 个真实的绘制函数。
+</div>
+</div>
+
+<h2>一、这轮解出来的三张表</h2>
+
+<p>之前几轮一直在"猜"哪些内存地址是干什么的，这轮把支撑显示的三张核心表全部解了出来，
+都是可以直接反推的静态结构，不是推测。</p>
+
+<h3>1. 事件标志对象表 — <code>0x000551B0</code></h3>
+<p>在内核的 <code>set_flg</code> 实现（<code>0x41A48</code>）里，第一行就把表基址写死了：
+<code>LDI:32 #0x000551B0,R14</code>。表头是「条目数 = 17，元素大小 = 16 字节」，
+第 N 号标志的控制块指针在 <code>0x551B0 + 4 + (N-1)×16</code>。</p>
+
+<div class="kv">
+<div>表基址</div><div><code>0x000551B0</code>（17 条 × 16B）</div>
+<div>flag N 的控制块</div><div><code>0x680008B8 + (N-1)×0x10</code></div>
+<div>位模式存放处</div><div><b>控制块 + 8</b>　→ flag 3 就是 <code>0x680008E0</code></div>
+<div>控制块 +0</div><div>等待队列链表指针</div>
+<div>控制块 +0x0E</div><div>等待模式（wfmode，半字）</div>
+<div>控制块 +0x14</div><div>等待位模式（waiptn）</div>
+</div>
+
+<div class="note">
+顺带把 <code>wai_flg</code> 的参数约定也钉死了（内核 <code>0x41B0A</code> 里逐条对照出来的）：
+<b>R5 = flag 号，R6 = 等待位模式，R7 = 等待模式，R4 = 结果输出指针</b>。
+这和 <code>set_flg / clr_flg</code> 的「R4 = flag 号，R5 = 位模式」<b>不是同一套顺序</b>，
+之前几轮按 set_flg 的顺序去读 wai_flg，读出来的"flag 号"是一串内存地址，就是这个原因。
+等待模式的判定位是 <code>R7 &amp; 0x02</code>：置位走 OR 等待（任一位命中即可），清零走 AND 等待（要全部命中）。
+</div>
+
+<h3>2. 任务定义表 — <code>0x00054C10</code></h3>
+<p>28 条，步长 0x1C。每条的第 0 个 u32 是任务入口，第 1 个是栈顶，第 4 个 u32 的高 16 位是任务号、低 16 位是优先级。</p>
+
+<table>
+<tr><th>#</th><th>入口</th><th>栈顶</th><th>优先级</th><th>已知身份</th></tr>
+<tr><td>0</td><td class="m">0x00150D1A</td><td class="m">0x9F8002A4</td><td class="m">2 / 1</td><td>—</td></tr>
+<tr><td>1</td><td class="m">0x001200AC</td><td class="m">0x9F800AA4</td><td class="m">3 / 2</td><td><b>开机总装配</b>（依次 sta_tsk 拉起其余任务）</td></tr>
+<tr><td>3</td><td class="m">0x00126454</td><td class="m">0x9F802EA4</td><td class="m">5 / 4</td><td>—</td></tr>
+<tr><td><b>4</b></td><td class="m"><b>0x0012DFAE</b></td><td class="m">0x9F8036A4</td><td class="m">6 / 5</td><td><span class="tag t-new">本轮主角</span><b>显示状态更新任务</b></td></tr>
+<tr><td>6</td><td class="m">0x00175192</td><td class="m">0x9F805AA4</td><td class="m">8 / 7</td><td>按键处理（前几轮已解出）</td></tr>
+<tr><td>16</td><td class="m">0x00137B12</td><td class="m">0x9F810EA4</td><td class="m">12 / 10</td><td>—</td></tr>
+<tr><td>19</td><td class="m">0x00198062</td><td class="m">0x9F8136A4</td><td class="m">15 / 11</td><td>显示相关（此前误当作主显示任务）</td></tr>
+<tr><td>21</td><td class="m">0x00242DA0</td><td class="m">0x9F8196A4</td><td class="m">17 / 12</td><td><b>等 flag 10</b> → 疑似显示输出下游</td></tr>
+<tr><td>27</td><td class="m">0x0015B288</td><td class="m">0x9F8222A4</td><td class="m">0x21 / 0x20</td><td>优先级最低，标志位 <code>0x80000000</code></td></tr>
+</table>
+<p style="color:var(--sub);font-size:13.5px">表只列出有代表性的几条，其余 20 条同样解出，格式完全一致。</p>
+
+<h3>3. 显示对象描述符表 — <code>0x001BC020</code></h3>
+<p>70 个对象（编号 0x00–0x45），每个 16 字节，四个 u32：</p>
+
+<pre>0x001BC020 + id × 16 :
+    +0x00   数据缓冲区地址（RAM，0x9F58Dxxx）
+    +0x04   数据长度（字节）
+    +0x08   类型标志（0 / 1 / 2）
+    +0x0C   ★ 绘制函数指针</pre>
+
+<p>这是本轮最有用的一张表——它把"id"和"绘制动作"直接对应起来了。举几个后面会用到的：</p>
+<table>
+<tr><th>id</th><th>数据缓冲</th><th>长度</th><th>类型</th><th>绘制函数</th></tr>
+<tr><td class="m">0x01</td><td class="m">0x9F58D4FB</td><td>3</td><td>1</td><td class="m">0x12E752（空操作）</td></tr>
+<tr><td class="m">0x05</td><td class="m">0x9F58D4A8</td><td>33</td><td>1</td><td class="m">0x12E806</td></tr>
+<tr><td class="m">0x07</td><td class="m">0x9F58D475</td><td>18</td><td>1</td><td class="m">0x12E8E2</td></tr>
+<tr><td class="m">0x0B</td><td class="m">0x9F58D452</td><td>5</td><td>1</td><td class="m">0x12EC98</td></tr>
+<tr><td class="m">0x10</td><td class="m">0x9F58D44A</td><td>1</td><td>1</td><td class="m">0x12E752（空操作）</td></tr>
+<tr><td class="m">0x29</td><td class="m">0x9F58D0DB</td><td>3</td><td>1</td><td class="m">0x12F452</td></tr>
+<tr><td class="m">0x45</td><td class="m">0x9F58D038</td><td>50</td><td>1</td><td class="m">0x12E752（空操作）</td></tr>
+</table>
+
+<h2>二、显示管线的五个阶段</h2>
+
+<p>任务 4 的循环体在 <code>0x12DFAE</code>，是一段很规整的流水线。每一段的失败都会跳到
+<code>0x12E48E</code>（等待 / 错误处理）重新开始。</p>
+
+<pre>0x12DFAE  循环开始
+  ├─ CALL 0x12E006   阶段 0：重置，清空 70 个节点的脏位
+  ├─ CALL 0x12E0F8   阶段 1：从待绘制链表头取一个 id
+  ├─ CALL 0x12E162   阶段 2：等待 flag 3 就绪      ← ★ 卡在这里
+  ├─ CALL 0x12E1EC   阶段 3：选定对象，算出描述符指针 0x9F58D858
+  ├─ CALL 0x12E326   阶段 4：取数据
+  ├─ CALL 0x12E412   阶段 5：把数据拷进目标缓冲
+  └─ CALL 0x12E674   阶段 6：★ 真正的"绘制"——调用 描述符[+0x0C]</pre>
+
+<p>待绘制队列本身也解出来了：<b>链表头在 <code>0x9F58D500</code></b>，
+节点数组从 <code>0x9F58D508</code> 起，每个 12 字节（前 4B = next，中 4B = prev，第 9 字节 = id，最高位 0x80 = 待更新）。</p>
+
+<div class="card">
+<b>基线实测（2000 万步，不做任何干预）</b>
+<table>
+<tr><th>阶段</th><th>命中次数</th></tr>
+<tr><td>0x12DFAE 循环体</td><td class="m">1</td></tr>
+<tr><td>0x12E0F8 取对象</td><td class="m">1</td></tr>
+<tr><td>0x12E162 等 flag 3</td><td class="m">1</td></tr>
+<tr><td>0x12E1EC 选对象</td><td class="m"><b>0</b></td></tr>
+<tr><td>0x12E326 取数据</td><td class="m"><b>0</b></td></tr>
+<tr><td>0x12E412 拷数据</td><td class="m"><b>0</b></td></tr>
+<tr><td><b>0x12E674 绘制</b></td><td class="m"><b>0</b></td></tr>
+<tr><td>0x12E6F8 往链表里插入请求</td><td class="m">9</td></tr>
+</table>
+</div>
+
+<p>也就是说：<b>请求进队列了（9 次），但消费端一次都没跑</b>。</p>
+
+<h2>三、确切的卡点</h2>
+
+<p>阶段 2 的函数 <code>0x12E162</code> 里，是一条带超时的等待：</p>
+
+<pre>twai_flg(flag=3, waiptn=0x74, wfmode=OR, tmout=100)
+返回后：
+    R0 = 实际取到的 flag 值
+    R0 &amp;= 0x74
+    if (R0 == 0x10)  → 返回值 R4 = 1（继续）
+    else             → 返回值 R4 = 0（退回 0x12E48E 等待）</pre>
+
+<p>判据是 <code>(flag3 &amp; 0x74) == 0x10</code>，也就是 <b>bit4 必须为 1，且 bit2 / bit5 / bit6 必须为 0</b>。
+把整个 B 段扫了一遍，往 flag 3 上写过的位模式只有这几种：</p>
+
+<table>
+<tr><th>位</th><th>谁写的</th><th>调用点</th></tr>
+<tr><td class="m">0x01</td><td>set_flg</td><td class="m">0x12E0EC / 0x12E51A</td></tr>
+<tr><td class="m">0x02</td><td>（无人置位，但 0x12E48E 在等它）</td><td class="m">—</td></tr>
+<tr><td class="m">0x08</td><td>set_flg（往链表插入请求时）</td><td class="m">0x12E738</td></tr>
+<tr><td class="m">0x10</td><td><span class="tag t-new">没有任何一处</span></td><td class="m">—</td></tr>
+<tr><td class="m">0x80</td><td>set_flg</td><td class="m">0x12E630</td></tr>
+<tr><td class="m">0x200</td><td>set_flg</td><td class="m">0x15C87A</td></tr>
+<tr><td class="m">0x800</td><td>set_flg（id 9 的绘制函数里）</td><td class="m">0x12ECDA</td></tr>
+</table>
+
+<div class="warnbox">
+<b>bit4 是唯一的缺口。</b>它不在任何一条 <code>set_flg</code> 的立即数里，
+也不在任何 <code>clr_flg</code> 会保留的位里（<code>0x12E34A</code> 的 <code>clr_flg(3, 0xFFFFFF8F)</code>
+保留的是 bit4/5/6，说明固件<b>预期 bit4 已经被别人置好了</b>）。
+这符合"硬件中断里置位"的特征：信号来自 B 段之外的显示控制器 / 帧同步中断，
+在我们的单芯片仿真里永远不会发生。
+</div>
+
+<h2>四、把 bit4 补上之后：管线真的跑通了</h2>
+
+<p>做法：每执行一步就强制把 flag 3 的位模式修正为 <code>(cur &amp; ~0x64) | 0x10</code>，
+即保证 bit4 = 1、bit2/5/6 = 0，其余位不动。这是<b>最小干预</b>——
+不去改任何代码、不去伪造数据，只补上那个缺失的信号。</p>
+
+<div class="okbox">
+<b>结果：任务 4 连续处理并绘制了 7 个显示对象，调用了 4 个真实的绘制函数。</b>
+</div>
+
+<table>
+<tr><th>次序</th><th>步数</th><th>对象 id</th><th>描述符</th><th>被调用的绘制函数</th></tr>
+<tr><td>1</td><td class="m">3,111,384</td><td class="m">0x01</td><td class="m">0x1BC030</td><td class="m">(0x12E752 空操作)</td></tr>
+<tr><td>2</td><td class="m">3,115,023</td><td class="m">0x07</td><td class="m">0x1BC090</td><td class="m"><b>0x12E8E2</b></td></tr>
+<tr><td>3</td><td class="m">3,121,033</td><td class="m">0x29</td><td class="m">0x1BC2B0</td><td class="m"><b>0x12F452</b></td></tr>
+<tr><td>4</td><td class="m">3,124,528</td><td class="m">0x05</td><td class="m">0x1BC070</td><td class="m"><b>0x12E806</b></td></tr>
+<tr><td>5</td><td class="m">3,130,074</td><td class="m">0x45</td><td class="m">0x1BC470</td><td class="m">(0x12E752 空操作)</td></tr>
+<tr><td>6</td><td class="m">3,133,661</td><td class="m">0x0B</td><td class="m">0x1BC0D0</td><td class="m"><b>0x12EC98</b></td></tr>
+<tr><td>7</td><td class="m">3,136,702</td><td class="m">0x10</td><td class="m">0x1BC120</td><td class="m">(0x12E752 空操作)</td></tr>
+</table>
+
+<p>整段只花了约 26,000 步，之后链表头 <code>0x9F58D500</code> 的 next 指回自己——
+<b>待更新队列被清空了</b>，说明这 7 个对象是完整的 backlog，全部处理完毕。</p>
+
+<h2>五、"绘制函数"到底是什么——这轮的意外收获</h2>
+
+<p>原来以为 <code>描述符[+0x0C]</code> 是一段画像素的代码。翻开 <code>0x12F452</code>（id 0x29 的绘制函数），
+它全部内容只有三行：</p>
+
+<pre>0012F452  LDI:8   #0x0A,R4          ; flag 号 = 10
+0012F454  LDI:20  #0x08000,R5       ; 位模式 = bit15
+0012F458  LDI:8   #0xD0,R12         ; set_flg
+0012F45C  INT     #0x40
+0012F45E  RET</pre>
+
+<div class="okbox">
+<b>所谓"绘制"，就是给下游任务发一个事件标志。</b>
+它不是在写帧缓冲，也不是在往串口吐数据——它只是说"0x29 号状态变了，你看着办"。
+另外两个也印证了这一点：<code>0x12E8E2</code>（id 7）和 <code>0x12E806</code>（id 5）都是
+拿数据缓冲里的字节去和当前状态字节逐位比对，变了就更新状态、置标志位，没变就直接返回。
+</div>
+
+<p>再往下追一层：全固件等待 <code>flag 10</code> 的 <code>wai_flg</code> 有三处，
+其中 <code>0x242BF4</code> 落在<b>任务 21（入口 0x242DA0）</b>的代码范围内，
+而 <code>flag 10</code> 也是全固件 <code>set_flg</code> 次数第二多的标志（194 处）。</p>
+
+<h3>重新拼出来的架构</h3>
+
+<pre>  按键 / 状态变化
+        │
+        ▼
+  0x12E6F8  把对象 id 挂进待更新链表 (0x9F58D500)，set_flg(3, 0x08)
+        │
+        ▼
+  任务 4 (0x12DFAE)   ← 本轮解开的那条流水线
+    取 id → 拷数据 → 调 描述符[+0x0C]
+        │
+        ▼
+  绘制函数 = 更新状态字节 + set_flg(下游 flag, bit)
+        │
+        ▼
+  任务 21 (0x242DA0) 等 flag 10 ┄┄ 打包发给显示控制器 / EXPEED
+        │
+        ▼
+   真正的像素（不在 B 段里）</pre>
+
+<div class="note">
+这解释了之前几轮一个一直没想通的现象：
+<code>0x9F5A0F60</code> 那个"显示对象数组"为什么永远是全 0——
+它根本不在这条链上。B 段只维护<b>状态</b>，像素是下游的事。
+</div>
+
+<h2>六、顺手修掉的一个模拟器缺陷</h2>
+
+<p>跑通之后，固件在 <code>step 3,119,524</code> 崩了，报的是：</p>
+<pre>Serial Interface 0: cannot be configured in mode MD=0b001.
+Only CSIO mode (0b010) and minimal UART (0b000) are supported for now</pre>
+<p>之前已经为异步模式 0（MD=<code>0b000</code>）加了旁路，这次把多机异步模式（MD=<code>0b001</code>）
+也放行，同样走"记录字节但不真发"的旁路。D300 显然把串口 0 用在了非 CSIO 的用途上。</p>
+
+<h2>七、下一步</h2>
+<ul>
+<li><b>找 bit4 的真实来源。</b>它不在 B 段代码里，那就去查中断向量表里跟显示相关的那几路 ISR，
+看有没有哪条在 <code>set_flg</code> 到 flag 3（用运行时算出来的位模式，静态扫不出来）。</li>
+<li><b>把任务 21 接上。</b>它等 flag 10，是绘制的下游。如果能把它也推起来，
+它才是真正把命令发给显示控制器的那一环——那里才有"画面"的影子。</li>
+<li><b>跑双芯片。</b>目前只仿真了主控（B 段）。协处理器（A 段）没跑，
+很多"硬件就绪"信号可能本来就来自那里。</li>
+</ul>
+
+<div class="card" style="font-size:13.5px;color:var(--sub)">
+<b>方法说明</b>：全部结论来自在模拟器上实跑（每档 2000 万步）与固件的线性反汇编交叉验证。
+新写的驱动是 <code>D300Draw.java</code>（模式 0 = 不干预，模式 7/9/10 = 逐步补位），
+输出文件 <code>draw0.out</code> / <code>draw10d.out</code> 保留了每一步的现场记录。
+文中所有"命中次数"都是实测量；"下游是任务 21"属于按地址范围归属的推断，已标注。
+</div>
+
+</div>
+</body>
+</html>
