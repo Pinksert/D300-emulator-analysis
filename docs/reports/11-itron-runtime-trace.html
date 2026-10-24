@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件 · μITRON 运行时追踪</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:940px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  td.r{text-align:right;font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdecea}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-new{background:#fdecea;color:var(--hi)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .t-hi{background:#fdecea;color:var(--hi)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .big{font-size:22px;font-weight:600;color:var(--acc)}
+  .up{color:var(--hi);font-weight:600}
+  .dn{color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 · μITRON 运行时追踪</h1>
+<div class="sub">不再数代码里写了多少处，而是真的让它跑起来、听它喊了什么 · 2026-10-15</div>
+
+<div class="card">
+<b>一句话结论</b>：把系统调用的钩子挂进模拟器之后，D300 的固件在停机之前一共喊了
+<span class="big">161</span> 次、用到 <b>13</b> 个服务。
+而排在第一的不是上一份静态统计里的 <span class="mono">set_flg</span>，
+是 <span class="tag t-new">chg_pri（改任务优先级）27 次</span>。
+开机阶段真正被启动起来的任务是 <b>16</b> 个。
+<br><br>
+更值得记的一句是：<b>"代码里写了多少处"和"跑起来先调谁"完全是两回事</b>——
+两张榜的第一名不对，名次前后颠倒的地方有十几处，还有两个服务是静态扫描根本没看见的。
+</div>
+
+<h2>一、钩子挂在哪儿</h2>
+
+<p>上一份报告已经把分发机制解出来了：<span class="mono">INT #0x40</span> 是 μITRON 的陷阱，
+中断号 64 在向量表（TBR = <span class="mono">0x000EFC00</span>，倒序排列）里对应 #191，
+表项写着 <span class="mono">0x00040668</span>——这就是所有系统调用的<b>唯一入口</b>。
+出口是它末尾的 <span class="mono">0x000406E2 RETI</span>。</p>
+
+<p>所以不用去实现这 176 个服务（固件里本来就有一份真的 μITRON 内核），
+只要在每次 PC 落到 <span class="mono">0x40668</span> 的时候把寄存器抄下来就行：</p>
+
+<pre>; 每次进入分派器时记录
+服务号 = R12 & 0xFF        ; 负数（8 位有符号），例 0xD0 = -48 = set_flg
+参数   = R4 起             ; 按 μITRON/FR 惯例
+返回地址 = [R15]           ; INT 压栈的那个 PC，用来定位是谁调的</pre>
+
+<h3>踩到一个坑：一次调用被记了 6 遍</h3>
+<p>第一版跑出来是 <b>966</b> 次，看着挺热闹。但把日志摊开就露馅了——
+每一次都是<b>连续 6 行、步进号挨着、寄存器一模一样</b>：</p>
+<pre>SVC 2870654  n=0xCB wai_sem  r4=0x10 ...
+SVC 2870655  n=0xCB wai_sem  r4=0x10 ...     <- 同一次，重复
+SVC 2870656  n=0xCB wai_sem  r4=0x10 ...     <- 同一次，重复</pre>
+<p>原因在模拟器的主循环里：一条指令如果需要好几个时钟周期，
+<span class="mono">onClockTick()</span> 会连着几拍<b>只消耗周期、不推进 PC</b>。
+我数的是"拍"不是"条"，于是同一条指令被抄了六次。
+加上去抖（PC 刚进分派器时只记一次）之后：<b>966 ÷ 6 = 161</b>，整齐得能反过来印证这个判断。</p>
+
+<h2>二、运行时实测：161 次，13 个服务</h2>
+
+<p>从复位开始一路跑到 <span class="mono">0x407DC</span> 那条自转指令停住，共执行约 <b>1,660 万</b>拍：</p>
+
+<table>
+<tr><th>服务号</th><th>服务名</th><th class="r">次数</th><th class="r">占比</th><th>说明</th></tr>
+<tr class="hi"><td class="m">0xE5</td><td>chg_pri</td><td class="r">27</td><td class="r">16.8%</td><td>改任务优先级</td></tr>
+<tr><td class="m">0xCB</td><td>wai_sem</td><td class="r">22</td><td class="r">13.7%</td><td>等信号量</td></tr>
+<tr><td class="m">0xC9</td><td>sig_sem</td><td class="r">21</td><td class="r">13.0%</td><td>释放信号量</td></tr>
+<tr><td class="m">0xD2</td><td>wai_flg</td><td class="r">18</td><td class="r">11.2%</td><td>等事件标志</td></tr>
+<tr><td class="m">0xD1</td><td>clr_flg</td><td class="r">17</td><td class="r">10.6%</td><td>清事件标志</td></tr>
+<tr><td class="m">0xE9</td><td>sta_tsk</td><td class="r">16</td><td class="r">9.9%</td><td>启动任务（16 个）</td></tr>
+<tr><td class="m">0xE8</td><td>get_tid</td><td class="r">12</td><td class="r">7.5%</td><td>取当前任务号</td></tr>
+<tr><td class="m">0xD0</td><td>set_flg</td><td class="r">11</td><td class="r">6.8%</td><td>置事件标志</td></tr>
+<tr><td class="m">0x96</td><td>pol_flg</td><td class="r">10</td><td class="r">6.2%</td><td>查事件标志（不等待）</td></tr>
+<tr><td class="m">0x56</td><td>twai_flg</td><td class="r">3</td><td class="r">1.9%</td><td>等事件标志（带超时）</td></tr>
+<tr><td class="m">0xAB</td><td>dly_tsk</td><td class="r">2</td><td class="r">1.2%</td><td>延时</td></tr>
+<tr><td class="m">0xAD</td><td>set_tim</td><td class="r">1</td><td class="r">0.6%</td><td>设系统时间（全场的第一次）</td></tr>
+<tr><td class="m">0xDB</td><td>tslp_tsk</td><td class="r">1</td><td class="r">0.6%</td><td>睡眠（带超时）</td></tr>
+<tr><td class="m" colspan="2">合计</td><td class="r"><b>161</b></td><td class="r">100%</td><td></td></tr>
+</table>
+
+<div class="note">
+<b>第一次系统调用发生在第 191,934 拍</b>，是 <span class="mono">set_tim</span>（设系统时间）。
+也就是说前面十九万拍都在干清零内存、搬数据、配寄存器这类"还没进操作系统"的裸机活儿。
+</div>
+
+<h2>三、★ 静态与运行时：两张榜对不上</h2>
+
+<p>上一份报告数的是"整段反汇编里出现了多少次调用指令"，这一次是"真跑起来先调谁"。
+把两张榜并排：</p>
+
+<table>
+<tr><th>服务名</th><th class="r">静态（代码里几处）</th><th class="r">静态名次</th><th class="r">运行时（真调几次）</th><th class="r">运行时名次</th><th>变化</th></tr>
+<tr class="hi"><td>chg_pri</td><td class="r">22</td><td class="r">9</td><td class="r">27</td><td class="r"><b>1</b></td><td class="up">↑ 8 位，冲到第一</td></tr>
+<tr><td>set_flg</td><td class="r">676</td><td class="r"><b>1</b></td><td class="r">11</td><td class="r">8</td><td class="dn">↓ 7 位</td></tr>
+<tr><td>clr_flg</td><td class="r">423</td><td class="r">2</td><td class="r">17</td><td class="r">5</td><td class="dn">↓ 3 位</td></tr>
+<tr><td>wai_sem</td><td class="r">114</td><td class="r">7</td><td class="r">22</td><td class="r">2</td><td class="up">↑ 5 位</td></tr>
+<tr><td>sig_sem</td><td class="r">137</td><td class="r">4</td><td class="r">21</td><td class="r">3</td><td class="up">↑ 1 位</td></tr>
+<tr><td>wai_flg</td><td class="r">140</td><td class="r">3</td><td class="r">18</td><td class="r">4</td><td class="dn">↓ 1 位</td></tr>
+<tr><td>tslp_tsk</td><td class="r">136</td><td class="r">5</td><td class="r">1</td><td class="r">13</td><td class="dn">↓ 8 位</td></tr>
+<tr><td>dly_tsk</td><td class="r">120</td><td class="r">6</td><td class="r">2</td><td class="r">11</td><td class="dn">↓ 5 位</td></tr>
+<tr><td>get_tid</td><td class="r">20</td><td class="r">10</td><td class="r">12</td><td class="r">7</td><td class="up">↑ 3 位</td></tr>
+<tr><td>sta_tsk</td><td class="r">14</td><td class="r">11</td><td class="r">16</td><td class="r">6</td><td class="up">↑ 5 位</td></tr>
+<tr><td>pol_flg</td><td class="r">29</td><td class="r">8</td><td class="r">10</td><td class="r">9</td><td class="dn">↓ 1 位</td></tr>
+<tr><td>twai_flg</td><td class="r">（静态榜里没有）</td><td class="r">—</td><td class="r">3</td><td class="r">10</td><td class="up">静态漏检，运行时才看见</td></tr>
+<tr><td>set_tim</td><td class="r">（静态榜里没有）</td><td class="r">—</td><td class="r">1</td><td class="r">12</td><td class="up">静态漏检，运行时才看见</td></tr>
+</table>
+
+<div class="card">
+<p><b>两条最值得记的规律：</b></p>
+<ul>
+<li><b>调用点多的 ≠ 跑得多的。</b><span class="mono">set_flg</span> 在代码里写了 676 处（占静态的三分之一），
+运行时只走了 11 次——那 676 处绝大多数藏在深层分支里，开机这一段根本没走到。</li>
+<li><b>调用点少的 ≠ 不重要的。</b><span class="mono">chg_pri</span> 静态只有 22 处，
+运行时却是第一（27 次）——它是每次任务切换都要做的事，
+<b>写的地方少、执行的次数多</b>，这正是"调度器"该有的样子。</li>
+<li><b>带超时的一类几乎没出现。</b>静态里 <span class="mono">dly_tsk</span> 120 处、
+<span class="mono">tslp_tsk</span> 136 处，运行时只有 2 次和 1 次。
+等待超时这种事，是机器"没事干"的时候才做的，开机冲刺阶段用不上。</li>
+<li><b>静态榜会漏。</b><span class="mono">twai_flg</span> 和 <span class="mono">set_tim</span>
+两个服务在静态清单里完全没出现——静态扫描是按"往 R12 里装立即数"这种固定写法找的，
+换个装载形式就抓不到。运行时追踪补上了。</li>
+</ul>
+</div>
+
+<h2>四、真正被启动的任务：16 个</h2>
+
+<p>16 次 <span class="mono">sta_tsk</span>，任务号（R4）分别是：</p>
+
+<pre>1  3  4  5  6  7  9  10  11  16  17  20  21  26  27  28</pre>
+
+<p>对照从内核代码里抠出来的任务表（基址 <span class="mono">0x00054BFC</span>，见下一节），
+表里一共定义了 <b>28</b> 条。也就是说<b>开机这一段先启动了 16 个，剩下的还没轮到就停住了</b>。</p>
+
+<div class="note">
+顺带记一个现象：<span class="mono">wai_flg</span> / <span class="mono">twai_flg</span> /
+<span class="mono">get_tid</span> / <span class="mono">pol_flg</span> 这几个服务，R4 里装的都是
+<span class="mono">0x9F80xxxx</span> 这种形态的值，和任务表每条记录的第二个字段同形，
+看起来是内核对象的控制块地址。但这几种服务的参数惯例（有的从 R5 起）还没逐条核过，
+这里只记现象，不下结论。
+</div>
+
+<h2>五、顺带：把 D300 自己的两张内核表找出来了</h2>
+
+<p>之前只能靠 D300S 的配置文件去猜 D300 的表在哪儿（那份写的是
+<span class="mono">tblTaskData @0x63EF0</span>，而 D300 里那一片全是 <span class="mono">FF</span>）。
+这次换个办法——<b>直接读内核代码里的常量</b>：</p>
+
+<table>
+<tr><th>内核服务</th><th class="m">第一条实指令</th><th>抠出的常量</th></tr>
+<tr><td>sta_tsk / ext_tsk / ter_tsk / rot_rdq / get_tid / ref_tsk</td><td class="m">ldi:32 #…, R14</td><td class="m"><b>0x00054BFC</b> ← 任务表</td></tr>
+<tr><td>set_flg / clr_flg / wai_flg / pol_flg</td><td class="m">ldi:32 #…, R14</td><td class="m"><b>0x000551B0</b> ← 事件标志表</td></tr>
+</table>
+
+<p>六个任务相关的服务指向同一个常量，四个标志相关的服务指向另一个——
+这个"分组一致性"本身就是证据。任务表从 <span class="mono">+0x14</span>（即 <span class="mono">0x54C10</span>）
+起每 <span class="mono">0x1C</span>（28）字节一条，共 28 条，首字段是任务入口地址。</p>
+
+<h3>顺便修正上一份报告的一处错误</h3>
+<div class="warnbox">
+上一份写的是"D300S 的 39 个任务入口，在 D300 里 <b>一个都没命中</b>"。
+<b>这句错了</b>：逐条实测的结果是有 <b>1 个命中</b>——
+<span class="mono">task_0x02</span>（注释写着 <span class="mono">/* Autorun */</span>，入口
+<span class="mono">0x1200AC</span>）在 D300 里<b>一字不差地存在</b>，位于 <span class="mono">0x054C2C</span>；
+其余 38 个在 D300 里找不到同值。
+<br><br>
+修正后的说法更有意思：<b>两台机器的任务编号顺序一一对应，代码位置各自不同，
+只有 Autorun 这一颗是原样搬过来的。</b>
+</div>
+
+<h2>六、边界：哪些别写死</h2>
+<div class="warnbox">
+<ul>
+<li><b>这 161 次是在一个残缺环境里跑出来的。</b>
+模拟环境里有 <b>1,102 个外设寄存器没有建模</b>，
+那个让固件继续往下走的自由运行计数器（<span class="mono">0x5C003034</span>）是我<b>手工打桩</b>的，
+每毫秒加 1000。最终的 <span class="mono">0x407DC</span> 自转也说明它没走完。
+所以这是"在我们这台假机器上跑到停机为止"的行为，不是"真相机开机时的行为"。</li>
+<li><b>161 只是开机这一段。</b>任务表定义了 28 个任务，只启动了 16 个；
+真正的菜单、拍摄、存取卡一次都没跑到。</li>
+<li><b>静态与运行时的名次差异，有一部分是环境造成的</b>，
+不能全归到"代码特性"头上——但"写的地方多 ≠ 跑的次数多"这条方向性结论不受影响。</li>
+<li><b>参数解读只对了一部分。</b>服务号（R12）和返回地址是确定的；
+R4 起的参数按 μITRON/FR 惯例读，但有几个服务的参数从 R5 起，还没逐条核过。</li>
+<li><b>0x9F80xxxx 是控制块地址</b>这个说法是推断，依据是它与任务表第二字段同形、
+且只出现在"要传对象"的那几个服务里。没有第二份材料可比对。</li>
+</ul>
+</div>
+
+<h2>七、复现方法</h2>
+<div class="card">
+<ul>
+<li>驱动源码：<span class="mono">nft/Java/Emulator/src/main/com/nikonhacker/emu/D300Sys.java</span>
+（用完整 EmulationFramework 建平台，但不启动主时钟，改成自己一步步
+<span class="mono">onClockTick()</span>，每步前比对 PC）</li>
+<li>编译：<span class="mono">.workbuddy/tmp/build_emu.sh</span>（Temurin JDK 8，350+ 个 .java）</li>
+<li>运行：<span class="mono">java -Dfile.encoding=UTF-8 -cp batch_build/classes:lib/* com.nikonhacker.emu.D300Sys B3000111.bin 40000000</span></li>
+<li>日志：<span class="mono">svc_run2.txt</span>（逐次调用）、本次统计在该文件末尾</li>
+<li>辅助脚本：<span class="mono">dig_tasktbl.py</span>（抠内核常量）、<span class="mono">dig_tables.py</span>、
+<span class="mono">chk_tasks.py</span>（复核 39 个任务入口）</li>
+</ul>
+</div>
+
+</div>
+</body>
+</html>
