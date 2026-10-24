@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件 1.11 · 函数级仿真实验报告</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-new{background:#fdecea;color:var(--hi)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .big{font-size:22px;font-weight:600;color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件 1.11：把那 4 处改动真的跑了一遍</h1>
+<div class="sub">函数级仿真台实验报告 · A 固件（A3000110 / A3000111）· 2026-10-12</div>
+
+<div class="card">
+<b>一句话结论</b>：1.11 新增的那一位（RAM <span class="mono">0x3F81C</span> 的 bit6）
+<b>不改变任何光圈行程参数</b>，它只改变<b>一次子程序调用的时机</b>——
+把 <span class="mono">0xC0D9E</span> 从「开头」挪到「结尾」（<span class="mono">0x3FAF1</span> 不是参数，见文末修订说明）。
+而决定行程常量的旧开关（bit3）在两版里行为完全一致。
+</div>
+
+<h2>一、为什么不是 QEMU</h2>
+<ul>
+<li>QEMU 现有目标里<b>没有任何富士通 FR</b>（68k / Alpha / Arm / AVR / Hexagon / HPPA / LoongArch / Microblaze / MIPS / OpenRISC / PPC / RX / SH4 / RISC-V / s390x / SPARC / TriCore / x86 / Xtensa）。</li>
+<li>QEMU 历史上确实有过 <span class="mono">frv</span>，但那是 FR-V —— 一条 VLIW 媒体处理器产品线（FR500/550/1000），和 D300 用的 FR 微控制器指令集不是一回事，而且早已移除。</li>
+<li>近年社区还在<b>删</b>冷门目标（moxie、lm32、unicore32 在 6.1 移除），新加 FR 目标几乎不可能进主线。</li>
+<li>更根本的：D300 是 A（IO 协处理器）+ B（主控）+ EXPEED 至少三个处理器，整机仿真是个无底洞。</li>
+</ul>
+<p class="kv">所以走「函数级仿真台」路线：不追求开机进菜单，只把要验证的那段代码拿来单跑。</p>
+
+<h2>二、仿真台是怎么搭的</h2>
+<div class="grid2">
+<div class="card">
+<h3>CPU</h3>
+<ul>
+<li>指令表来自 binutils 的 <span class="mono">cpu/fr30.cpu</span> + <span class="mono">opcodes/fr30-opc.c</span>（CGEN 生成物）</li>
+<li>语义按 <span class="mono">fr30.cpu</span> 里的 <span class="mono">(dni ...)</span> 定义实现：目标操作数是<b>最后一个</b>；<span class="mono">call</span> 返回地址进<b>专用寄存器 RP</b>而不是压栈；<span class="mono">:d</span> 是延迟分支</li>
+<li>16 个通用寄存器 + CCR + ILM + TBR/RP/SSP/USP/MDH/MDL</li>
+</ul>
+</div>
+<div class="card">
+<h3>环境</h3>
+<ul>
+<li>ROM：<span class="mono">0x00080000</span> 起，两版镜像都先过 <b>CRC16/XMODEM</b> 校验（<span class="mono">0xC297</span> / <span class="mono">0x4F36</span> 均吻合）</li>
+<li>RAM：稀疏内存，初值 0；<span class="mono">&lt;0x1000</span> 视为外设，读返回 0、写丢弃并记账</li>
+<li>子程序调用、μITRON 服务调用（<span class="mono">int #0x40</span>）<b>全部打桩</b>，只记录目标地址和参数寄存器</li>
+</ul>
+</div>
+</div>
+<p class="kv">脚本：解码器/CPU <span class="mono">.workbuddy/tmp/fr_emu.py</span>、反汇编 <span class="mono">fr_dis.py</span>、
+实验 <span class="mono">exp_111.py</span>、全扫描 <span class="mono">sweep.py</span>。</p>
+
+<h2>三、先自检：仿真器跑出来的跳转地址对不对</h2>
+<p>实验从 <span class="mono">0x000DB8F0</span> 起步（两版在该地址的字节完全相同）。跑起来之后，把两版各自"调用了哪些子程序"列出来对照——
+这些目标地址的相对位移，应当与此前用字节比对独立算出的位移表吻合：</p>
+<table>
+<tr><th>1.10 里的子程序</th><th>1.11 里的对应者</th><th>位移</th><th>与位移表是否一致</th></tr>
+<tr><td class="m">0x0DB9DE</td><td class="m">0x0DB9EC</td><td class="m">+14</td><td><span class="tag t-ok">吻合</span></td></tr>
+<tr><td class="m">0x0E1F3A</td><td class="m">0x0E1F84</td><td class="m">+74</td><td><span class="tag t-ok">吻合</span></td></tr>
+<tr><td class="m">0x0DCD26</td><td class="m">0x0DCD70</td><td class="m">+74</td><td><span class="tag t-ok">吻合</span></td></tr>
+<tr><td class="m">0x0F1100</td><td class="m">0x0F1158</td><td class="m">+88</td><td><span class="tag t-ok">吻合</span></td></tr>
+<tr><td class="m">0x0C0D9E / 0x0C0E02 / 0x08CA0E</td><td class="m">同上</td><td class="m">+0</td><td><span class="tag t-ok">吻合</span></td></tr>
+</table>
+<div class="note">这不是结论，是<b>自检</b>：解释器如果取指或算分支目标算错了，这些地址不可能同时落在已知位移上。</div>
+
+<h2>四、主实验：把那一个字节的 256 种取值全跑一遍</h2>
+<p>变量只有一个：RAM <span class="mono">0x0003F81C</span> 这一个字节。其余 RAM 变量给固定初值，外设读恒为 0。
+每种取值跑一次，按"调用序列 + 写入结果"归类。</p>
+
+<div class="card">
+<div class="big">1.10：256 种取值 → 只有 2 种走向</div>
+<p class="kv">决定因素只有一个：bit3</p>
+<ul>
+<li>bit3 = 0 → 行程常量 <span class="mono">0x44AA</span>（17578）</li>
+<li>bit3 = 1 → 行程常量 <span class="mono">0x4631</span>（17969），并多调两次 <span class="mono">0xF1100</span>（参数 <span class="mono">0x46D</span>）</li>
+<li><b>bit6 完全不起作用</b>：<span class="mono">0x00</span> 与 <span class="mono">0x40</span> 的行为逐字节相同</li>
+</ul>
+</div>
+
+<div class="card">
+<div class="big">1.11：256 种取值 → 4 种走向</div>
+<p class="kv">决定因素变成两个：bit3 × bit6</p>
+<ul>
+<li>bit6 = 0 → 走向与 1.10 等价</li>
+<li>bit6 = 1 → 走一条新的路（见下节）</li>
+</ul>
+</div>
+
+<h3>两版在 bit6 = 1 时的差别</h3>
+<table>
+<tr><th></th><th>1.10（无视 bit6）</th><th>1.11（bit6 = 1）</th></tr>
+<tr><td>开头</td><td class="m">call 0xC0D9E　（r0 = 0）</td><td class="m">不调用</td></tr>
+<tr><td>结尾</td><td class="m">call 0xC0E02　（r0 = 0x3FAF1）</td><td class="m">call 0xC0D9E<br>call 0xC0E02</td></tr>
+<tr><td>行程常量</td><td class="m">0x44AA / 0x4631</td><td class="m">0x44AA / 0x4631（未改）</td></tr>
+</table>
+
+<h3>对应的机器码（1.11 新增的那两句）</h3>
+<pre>; 1.11 @0x000DB900（开头）           ; 1.11 @0x000DB9C2（结尾）
+ldi:20  #0x3F81C, r9                borl    #0x2, @r0        ; 给 0x3FAF1 置位
+btsth   #0x4,   @r9   ; 测 bit6  ★  btsth   #0x4, @r9       ; 再测一次 bit6 ★
+bne     +6            ; bit6=1 跳过  beq     +6              ; bit6=0 跳过
+ldi:20  #0xC0D9E, r12                ldi:20  #0xC0D9E, r12
+call    @r12                         call    @r12            ; r0 里残留着 0x3FAF1，但随即被覆盖
+btstl   #0x8,   @r9   ; 老判断 bit3  ldi:20  #0xC0E02, r12
+</pre>
+<p class="kv"><span class="mono">btsth #4</span> 的立即数 4 是<b>掩码</b>不是位号：4 左移 4 位 = <span class="mono">0x40</span> = bit6；
+老的 <span class="mono">btstl #0x8</span> 不左移，直接就是 bit3。两条指令规则相反，别混着算。</p>
+
+<h2>五、这条结论对文章意味着什么</h2>
+<div class="card">
+<ul>
+<li><span class="tag t-ok">可写</span>1.11 新增的是<b>一个开关（bit6）和一次调用时机的调整</b>，不是光圈行程参数——三个常量 7812 / 17578 / 17969 在两版里都对得上，且都由旧的 bit3 决定。</li>
+<li><span class="tag t-ok">已解决</span>被挪动的 <span class="mono">0xC0D9E</span> 干什么，见<a href="D300固件-1.11-第二层-0xC0D9E解剖.html">第二层报告</a>：它是一个 50 条指令的纯判断函数，唯一输出是 <span class="mono">0x3FAE9</span> 的 bit5。</li>
+<li><span class="tag t-old">不支持</span>不能据此说"1.11 才支持电磁光圈"——bit3（旧开关）在 1.10 里就已经在选行程常量了，说明电磁光圈通路本来就存在。</li>
+</ul>
+</div>
+
+<h2>六、这份结果的可信边界</h2>
+<div class="warnbox">
+<b>打桩了什么</b>：① 所有子程序调用（<span class="mono">call</span>）没真正进去，只记地址和 r0..r3，返回时把 r0 置 0；
+② μITRON 服务调用（<span class="mono">int #0x40</span>）没实现，本次实验里这段路径<b>一次都没触发</b>；
+③ 外设读恒为 0（本次实验 0 次外设访问）。
+<br><br>
+<b>因此</b>：结论只对"这段函数自身做了什么分支判断、按什么顺序调用谁"有效；
+<b>每个被调子程序内部干了什么，本次没有验证</b>。另外，扫描只覆盖 <span class="mono">0x3F81C</span> 这一个字节，
+其他 RAM 变量取的是人为初值——换初值可能暴露别的分支（已验证的是：bit3 与 bit6 之外的 6 个位都不影响走向）。
+</div>
+
+<h2>七、下一步：长期路线（NikonEmulator）</h2>
+<p>Nikon Hacker 社区有一个现成的 FR 仿真器，源码在 <span class="mono">github.com/simeonpilgrim/nikon-firmware-tools</span> 的
+<span class="mono">Java/Emulator</span> 目录：<span class="mono">FrEmulator.java</span>（FR80）、<span class="mono">TxEmulator.java</span>（TX19）、
+<span class="mono">itron/</span>（μITRON 服务调用层）、<span class="mono">peripherials/</span>（LCD、按键、串口、SD、JPEG、镜像箱、A/D、时钟、中断控制器、DMA），
+自带 <span class="mono">dfr</span> 反汇编器和 FR IDA 插件。要跑 D300 需要自建 platform（内存映射、加载地址、入口点）——
+仓库里现成的示例只有 D3100 / D5100 的 eeprom，那两台是 TX 机型。</p>
+
+
+<h2>【本次修订说明】</h2>
+<div class="card">
+<ul>
+<li><b>2026-10-15 改正</b>：原文表格里「<span class="mono">call 0xC0D9E（r0 = 0x3FAF1）</span>」的表述有误。
+<span class="mono">0x3FAF1</span> 是上一条 <span class="mono">borl #0x2, @r0</span> 用剩下的指针残留；
+<span class="mono">0xC0D9E</span> 的头两条指令 <span class="mono">ldi:20 #0x3FAE9, r4</span> 与
+<span class="mono">ldub @r12, r0</span> 立刻把 r4、r0 全部覆盖，<b>不构成参数传递</b>。
+正确说法是「这次调用被从开头挪到了结尾」。</li>
+<li>其余结论（bit3 = 旧开关、bit6 = 1.11 新增、三个行程常量两版一致）<b>全部不变</b>。</li>
+<li>后续进展见：<a href="D300固件-1.11-第二层-0xC0D9E解剖.html">第二层：<span class="mono">0xC0D9E</span> 解剖</a>。</li>
+</ul>
+</div>
+</div>
+</body>
+</html>
