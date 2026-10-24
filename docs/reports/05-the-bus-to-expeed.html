@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件：B 段与 EXPEED 之间的那条线</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1f2328; --mut:#5b6470; --line:#e2e6ea;
+    --acc:#0b5cad; --accbg:#eef5fc; --warn:#8a4b00; --warnbg:#fff6e5;
+    --ok:#0d6b3f; --okbg:#eaf7ef; --code:#f6f8fa;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.85 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:920px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:30px;line-height:1.35;margin:0 0 8px}
+  .sub{color:var(--mut);font-size:14px;margin-bottom:28px}
+  h2{font-size:22px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:17px;margin:26px 0 10px;color:var(--acc)}
+  p{margin:0 0 14px}
+  ul,ol{margin:0 0 14px;padding-left:24px}
+  li{margin:6px 0}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;
+       font-family:"Cascadia Mono",Consolas,monospace;font-size:14px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+      padding:14px 16px;overflow-x:auto;font-family:"Cascadia Mono",Consolas,monospace;
+      font-size:13px;line-height:1.65;margin:0 0 16px}
+  table{border-collapse:collapse;width:100%;margin:0 0 18px;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--code);font-weight:600}
+  .note{background:var(--accbg);border-left:4px solid var(--acc);padding:12px 16px;margin:0 0 18px;border-radius:0 6px 6px 0}
+  .warn{background:var(--warnbg);border-left:4px solid var(--warn);padding:12px 16px;margin:0 0 18px;border-radius:0 6px 6px 0}
+  .ok{background:var(--okbg);border-left:4px solid var(--ok);padding:12px 16px;margin:0 0 18px;border-radius:0 6px 6px 0}
+  .k{font-weight:600}
+  .mono{font-family:"Cascadia Mono",Consolas,monospace}
+  .small{font-size:13.5px;color:var(--mut)}
+  figure{margin:20px 0 24px}
+  figcaption{font-size:13px;color:var(--mut);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>D300 固件：B 段与 EXPEED 之间的那条线</h1>
+<div class="sub">第七轮 · 2026-10-16 · 固件 <span class="mono">B3000111.bin</span>（7,340,032 字节，末 2 字节 CRC16 = 0x4F36）</div>
+
+<div class="note">
+<b>这一轮干了什么。</b>上一轮证明了"模拟器画不出 UI"，但没说清 B 段到底怎么跟 EXPEED 说话。
+这一轮把 <span class="mono">0x7000xxxx</span> 窗口挂上探针，反汇编了发送/接收两个函数，
+把那根线完整地解了出来——<b>它是一条位串行总线，三条线：片选、时钟、双向数据</b>。
+顺手还修掉了两个让 EXPEED 外设一直"没通电"的 bug。
+</div>
+
+<h2>一、先修掉两个坑</h2>
+
+<h3>坑 1：我自己上一轮埋的守卫写错了</h3>
+<p>
+上一轮为了让"片上 RAM 被当成未建模外设"的误报消失，我在
+<span class="mono">ExpeedProxyIoListener</span> 里加了一个地址上界：
+</p>
+<pre>private IoActivityListener get(int address) {
+    if (address >= IO_ADDR_LIMIT) return null;   // IO_ADDR_LIMIT = 0x1000
+    return listeners.get(address>>>16);
+}</pre>
+<p>
+问题在于它判断的是<b>完整地址</b>，不是页内偏移。于是任何高于 <span class="mono">0x1000</span>
+的地址——包括 <span class="mono">0x4002xxxx</span>、<span class="mono">0x4003xxxx</span>、
+<span class="mono">0x4006xxxx</span>、<span class="mono">0x4018xxxx</span>、
+<span class="mono">0x5000xxxx</span>、<span class="mono">0x5C00xxxx</span>、
+<span class="mono">0x6300/6400/6B00xxxx</span> 和 <span class="mono">0x7000xxxx</span>——
+统统返回 <span class="mono">null</span>。<b>也就是说：EXPEED 的十来个外设模型一次都没被触发过，等于全部断电。</b>
+</p>
+<p>正确写法是按"页号 + 页内偏移"判断，只挡住页 <span class="mono">0x0000</span> 里 <span class="mono">0x1000</span> 以上的片上 RAM：</p>
+<pre>if (page == 0x0000 && (address & 0xFFFF) >= IO_ADDR_LIMIT) return null;
+return listeners.get(page);</pre>
+<p>本轮用一个 <span class="mono">routeAll</span> 开关把它做成可切换，以便做前后对照。</p>
+
+<h3>坑 2：改好路由之后必崩——上游真 bug</h3>
+<p>改好守卫第一次跑，在第 <b>4,208,204 步</b>（PC = <span class="mono">0x43748</span>）抛空指针。抓到的堆栈：</p>
+<pre>java.lang.NullPointerException
+  at ...FrSerialInterface.getFbyte2(FrSerialInterface.java:869)
+  at ...ExpeedIoListener.onLoadData16(ExpeedIoListener.java:212)</pre>
+<p>
+原因是串口的 <span class="mono">fifo1</span>/<span class="mono">fifo2</span> 在"禁用"状态下恒为
+<span class="mono">null</span>，而 <span class="mono">getFbyte1()</span>/<span class="mono">getFbyte2()</span>
+直接对它们调 <span class="mono">.size()</span>。这是 NikonEmulator 上游代码本身的缺陷，
+只是以前因为坑 1 根本走不到。已加空值保护返回 0。修好后 6000 万步跑满不崩。
+</p>
+
+<h2>二、一个必须纠正的指令语义</h2>
+<div class="warn">
+<b>上一轮记错了一条，这里正式更正。</b>FR 的位操作立即数是<b>掩码</b>没错，但
+<span class="mono">BANDL</span> 的方向我写反了。它在
+<span class="mono">FrInstructionSet</span> 里的实现是 <span class="mono">byte &amp;= (0xF0 | u4)</span>，
+也就是<b>清掉 u4 里「没置位」的那几个低位</b>，而不是"清掉 u4 指定的位"。
+</div>
+<table>
+<tr><th>指令</th><th>实际含义</th><th>例</th></tr>
+<tr><td><span class="mono">BANDL #u4,@Ri</span></td><td>清 u4 未置位的低位</td><td><span class="mono">#0xD</span> → 只清 <b>bit1</b>（不是 bit0/2/3）</td></tr>
+<tr><td><span class="mono">BORL #u4,@Ri</span></td><td>置 u4 已置位的低位</td><td><span class="mono">#0x2</span> 置 bit1，<span class="mono">#0x4</span> 置 bit2</td></tr>
+<tr><td><span class="mono">BTSTL #u4,@Ri</span></td><td>测 u4 掩码</td><td><span class="mono">#0x4</span> 测 <b>bit2</b>（不是 bit4）</td></tr>
+</table>
+<p>这条更正是后面所有结论的基础——按旧理解，那三条线根本对不上。</p>
+
+<h2>三、总线：三条线各是什么</h2>
+<p>
+探针挂上后做的第一件事，是看 <span class="mono">0x7000xxxx</span> 到底有几个地址被碰。结果意外地小：
+6000 万步里，整个 <span class="mono">0x7000</span> 页只有 <b>9 个地址</b>被访问（读 7058 次 / 写 5160 次），
+而且全挤在 <span class="mono">0x70000000</span>–<span class="mono">0x7000000F</span> 这 16 个字节里。
+</p>
+<p>
+按访问次数排序，<span class="mono">0x7000000A</span> 独占 4947 写 / 6754 读，其余都是个位数。
+顺着 PC 热点找到 <span class="mono">0x19EEF8</span> 和 <span class="mono">0x19EF3C</span> 两个函数，
+反汇编一读，结构立刻清楚了。
+</p>
+
+<h3>发送函数 <span class="mono">0x19EEF8</span></h3>
+<pre>0019EEFE  8B4A           MOV     R4,R10        ; R4 = 待发字节
+0019EF00  9F88 7000 0000 LDI:32  #0x70000000,R8
+0019EF06  C089           LDI:8   #0x08,R9      ; 8 位
+0019EF08  8B80           MOV     R8,R0
+0019EF0A  A4A0           ADD     #0xA,R0       ; → 0x7000000A
+0019EF0C  80D0           BANDL   #0xD,@R0      ; 时钟拉低（清 bit1）
+0019EF0E  C010           LDI:8   #0x01,R0
+0019EF10  82A0           AND     R10,R0        ; 取最低位
+0019EF12  F204           BEQ:D   0x0019EF1C
+0019EF18  9040           BORL    #0x4,@R0      ; 数据 = 1（置 bit2）
+0019EF1A  E002           BRA     0x0019EF20
+0019EF1E  80B0           BANDL   #0xB,@R0      ; 数据 = 0（清 bit2）
+0019EF20  B01A           LSR     #1,R10        ; 下一位
+0019EF22  D82A           CALL:D  0x0019EF78    ; 延时
+0019EF2A  9020           BORL    #0x2,@R0      ; 时钟拉高（置 bit1）
+0019EF2C  D025           CALL    0x0019EF78    ; 延时
+0019EF2E  A5F9           ADD2    #-0x01,R9
+0019EF32  EDEA           BGT     0x0019EF08    ; 8 位循环</pre>
+
+<h3>接收函数 <span class="mono">0x19EF3C</span></h3>
+<pre>0019EF4C  8BA0           MOV     R10,R0
+0019EF4E  A4A0           ADD     #0xA,R0
+0019EF50  80D0           BANDL   #0xD,@R0      ; 时钟拉低
+0019EF52  D012           CALL    0x0019EF78    ; 延时
+0019EF58  9020           BORL    #0x2,@R0      ; 时钟拉高
+0019EF5E  8840           BTSTL   #0x4,@R0      ; 采样数据线（bit2）
+0019EF60  E201           BEQ     0x0019EF64
+0019EF62  929B           OR      R9,R11        ; 该位为 1
+0019EF66  A5F8           ADD2    #-0x01,R8
+0019EF6C  B419           LSL     #1,R9         ; 下一位掩码
+0019EF6A  F0F0           BRA:D   0x0019EF4C</pre>
+
+<h3>三条线的定义</h3>
+<table>
+<tr><th>地址</th><th>位</th><th>作用</th><th>置 1</th><th>清 0</th></tr>
+<tr><td><span class="mono">0x70000002</span></td><td>bit2</td><td><b>片选 CS</b>（外围 ASIC 的使能）</td><td><span class="mono">BORL #0x4</span></td><td><span class="mono">BANDL #0xB</span></td></tr>
+<tr><td><span class="mono">0x7000000A</span></td><td>bit1</td><td><b>时钟 CLK</b></td><td><span class="mono">BORL #0x2</span></td><td><span class="mono">BANDL #0xD</span></td></tr>
+<tr><td><span class="mono">0x7000000A</span></td><td>bit2</td><td><b>双向数据 DATA</b></td><td><span class="mono">BORL #0x4</span></td><td><span class="mono">BANDL #0xB</span></td></tr>
+<tr><td><span class="mono">0x7000000A</span></td><td>bit0</td><td>另一条控制线（每次交易前后翻转）</td><td><span class="mono">BORL #0x1</span></td><td><span class="mono">BANDL #0xE</span></td></tr>
+</table>
+
+<figure>
+<svg viewBox="0 0 680 210" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;border:1px solid #e2e6ea;border-radius:8px;background:#fff">
+  <style>
+    .lbl{font:12px -apple-system,"Microsoft YaHei",sans-serif;fill:#1f2328}
+    .lbl2{font:11px "Cascadia Mono",Consolas,monospace;fill:#5b6470}
+    .sig{stroke:#0b5cad;stroke-width:2;fill:none}
+    .dim{stroke:#c7ced6;stroke-width:1}
+    .hi{font:12px "Cascadia Mono",Consolas,monospace;fill:#0b5cad}
+  </style>
+  <!-- CS -->
+  <text class="lbl" x="12" y="34">CS</text><text class="lbl2" x="46" y="34">0x70000002 bit2</text>
+  <path class="sig" d="M150 30 h40 v-14 h150 v14 h60 v-14 h150 v14 h70"/>
+  <!-- CLK -->
+  <text class="lbl" x="12" y="94">CLK</text><text class="lbl2" x="46" y="94">0x7000000A bit1</text>
+  <path class="sig" d="M150 90 h30 v-20 h30 v20 h30 v-20 h30 v20 h30 v-20 h30 v20 h30 v-20 h30 v20 h30 v-20 h30 v20 h30 v-20 h30 v20 h60"/>
+  <!-- DATA -->
+  <text class="lbl" x="12" y="154">DATA</text><text class="lbl2" x="46" y="154">0x7000000A bit2</text>
+  <path class="sig" d="M150 150 h30 v-20 h60 v20 h30 v-20 h60 v20 h30 v-20 h60 v20 h30 v-20 h60 v20 h120"/>
+  <!-- bit labels -->
+  <text class="hi" x="150" y="186">D0</text>
+  <text class="hi" x="210" y="186">D1</text>
+  <text class="hi" x="270" y="186">D2</text>
+  <text class="hi" x="330" y="186">D3</text>
+  <text class="hi" x="390" y="186">…</text>
+  <text class="lbl2" x="440" y="186">LSB 先，时钟上升沿采样</text>
+  <!-- grid -->
+  <line class="dim" x1="150" y1="16" x2="150" y2="196"/>
+  <line class="dim" x1="600" y1="16" x2="600" y2="196"/>
+</svg>
+<figcaption>▲ 从两个函数的反汇编还原出来的时序：CS 先选中，然后 8 个时钟周期，数据在每个上升沿被对方采样，最低位先发。位与位之间有一次 <span class="mono">CALL 0x19EF78</span> 延时。</figcaption>
+</figure>
+
+<p>
+顺带一提，<span class="mono">0x70000000</span>–<span class="mono">0x0F</span> 这 16 个字节在复位后极早期
+（第 386–428 步）被写进 8 个 16 位初值：
+<span class="mono">0x7C0F</span>、<span class="mono">0xFF1F</span>、<span class="mono">0x3FFF</span>、
+<span class="mono">0xFFBF</span>、<span class="mono">0x57FF</span>、<span class="mono">0x3E0A</span>、
+<span class="mono">0x31FA</span>、<span class="mono">0xFF3F</span>——看起来是一组 GPIO 方向/初始电平寄存器。
+</p>
+
+<h2>四、实测：这条线上到底跑了什么</h2>
+<p>
+把发送/接收函数挂上钩子，录下每一次调用（注意 <span class="mono">onClockTick()</span> 是多周期指令，
+同一条指令会连续几拍 PC 不变，必须"PC 刚跳进来"才记一次；不去抖的话接收次数会正好翻倍，452 → 226）。
+6000 万步的完整清单：
+</p>
+
+<h3>开机初始化（第 2,870,872 步起）</h3>
+<pre>0x86  → 读 1 字节      0x06  0x01
+0x06  0x0A             0x46  0x00
+0x26  0x07             0x01  0x01
+0x00  0x00             0x00  0x00
+0x36  0x00
+0xF6  → 读 1 字节      0x76  0x00</pre>
+<p class="small">一共 20 个字节。格式是"命令字节 + 参数字节"成对，其中 <span class="mono">0x86</span> 和 <span class="mono">0xF6</span> 后面跟的是读。</p>
+
+<h3>然后就只剩心跳了</h3>
+<pre>0xA6  → 读 7 字节</pre>
+<p>
+这一条每约 <b>1,782,000 步</b>发一次，一共发了 <b>32 次</b>，最后一次在第 58,352,019 步，
+之后到 6000 万步再无动静。7 次读分别来自 7 个不同的调用点
+（<span class="mono">0x19ECD0 / D8 / E4 / F0 / F2 / FE / 08</span>）。
+</p>
+<div class="warn">
+<b>关键观察：这条线上没有画面。</b>6000 万步里 B 段通过这条总线一共只发了 <b>52 个字节</b>。
+一个 640×480 的屏幕哪怕 1 位色也要 38 KB。这条线<b>不可能是显示数据通道</b>——
+它是 B 段用来查询/配置某个外围 ASIC 的控制口（状态、电源、按键矩阵之类的候选），不是画面管道。
+</div>
+
+<h2>五、<span class="mono">0x86</span> 读回来的那个字节是个开关</h2>
+<p>
+既然仿真里没有 EXPEED，读回来的一律是 <span class="mono">0xFF</span>。
+我加了一个桩：只在接收函数体内把数据线拉低，让每次读回 <span class="mono">0x00</span>
+（选函数体内是因为发送函数共用同一条数据线，不能干扰它）。结果序列明显变了：
+</p>
+<table>
+<tr><th>应答</th><th>初始化序列</th><th>发送字节</th><th>调用点</th></tr>
+<tr><td><span class="mono">0xFF</span>（默认，无 EXPEED）</td>
+    <td class="mono">0x86→FF · 0x06 01 · 0x06 0A · 0x46 00 · 0x26 07 · 0x01 01 · 0x00 00 · 0x00 00 · 0x36 00 · 0xF6→FF · 0x76 00</td>
+    <td>52</td><td>21</td></tr>
+<tr><td><span class="mono">0x00</span>（打桩）</td>
+    <td class="mono">0x86→00 · 0x46 00 · 0x36 00 · 0xF6→00 · 0x76 01</td>
+    <td>40</td><td>9</td></tr>
+</table>
+<p>原因在代码里写得很直白：</p>
+<pre>0019E90C  D317           CALL    0x0019EF3C     ; 读回状态字节 → R10
+0019E918  C800           LDI:8   #0x80,R0
+0019E91A  82A0           AND     R10,R0         ; 测 bit7
+0019E91C  F24A           BEQ:D   0x0019E9B2     ; bit7 == 0 就跳过整段配置</pre>
+<p>
+<b>状态字节的 bit7 决定要不要跑中间那 6 组配置写。</b>读回 0x00（bit7 = 0）时固件认为一切正常，
+直接跳到 <span class="mono">0x19E9B2</span>；读回 0xFF（bit7 = 1）时才逐项写
+<span class="mono">0x06</span>/<span class="mono">0x26</span>/<span class="mono">0x01</span>/<span class="mono">0x00</span> 那一串。
+心跳 <span class="mono">0xA6</span> 两种情况下都是 32 次，不受影响。
+</p>
+
+<h2>六、EXPEED 外设接上电之后</h2>
+<p>把坑 1 修好、让 EXPEED 的各个外设模型真正生效，同样的 6000 万步：</p>
+<table>
+<tr><th>指标</th><th>修之前</th><th>修之后</th></tr>
+<tr><td>系统调用次数</td><td>810</td><td><b>2019</b></td></tr>
+<tr><td>被改写过的 4KB 块</td><td>27</td><td><b>58</b></td></tr>
+<tr><td>进入空闲任务的步数</td><td>3,041,494</td><td>3,151,747</td></tr>
+<tr><td>最终 PC</td><td><span class="mono">0x407DC</span></td><td><span class="mono">0x407DC</span></td></tr>
+<tr><td>是否出现整屏写入</td><td>否</td><td>否</td></tr>
+</table>
+<p>
+固件明显活跃了——系统调用翻到 2.5 倍，改写块翻了一倍多，新增的热点有
+<span class="mono">0x9F80E000</span>（17 次）、<span class="mono">0x9F810000</span>（18 → 22 次）。
+这些都是内核数据结构所在的区域，不是画面。
+</p>
+<div class="ok">
+<b>但边界要守死：仍然没有出现任何 300 KB 级（8 位色）或 38 KB 级（1 位色）的整屏连续写入，
+最终 PC 依旧落在空闲任务 <span class="mono">0x407DC</span>。</b>
+换句话说，给 EXPEED 通上电让固件更忙了，但画面还是没出来。
+上一轮的结论没有被推翻，反而被加固了一层。
+</div>
+
+<h2>七、这一轮的结论</h2>
+<ol>
+<li><b>总线解出来了</b>：B 段通过 <span class="mono">0x7000000A</span> 的 bit1（时钟）和 bit2（双向数据）、
+    外加 <span class="mono">0x70000002</span> 的 bit2（片选），用软件翻转 IO 的方式跑一条 8 位串行总线，LSB 先、上升沿采样。</li>
+<li><b>这条线不传画面</b>：6000 万步只发了 52 个字节，全是"命令 + 参数"和状态查询。
+    它管的是配置与状态，不是像素。</li>
+<li><b>修好路由是有收益的</b>：系统调用 810 → 2019，改写块 27 → 58，
+    并且定位并修掉了上游 <span class="mono">FrSerialInterface</span> 的一个空指针缺陷。</li>
+<li><b>但画面依旧没有</b>：B 段手里确实没有帧缓冲，也没有点阵字库——
+    上一轮的判断成立。</li>
+</ol>
+
+<h3>接下来三条路（按信息量排序）</h3>
+<ol>
+<li><b>顺着 <span class="mono">0x19E9B2</span> 往下读</b>：那是"EXPEED 正常"分支的落点，
+    把状态机各分支对应的命令序列摸全，就能写出一个应答表，让固件真正跑完初始化。</li>
+<li><b>找出谁在管画面</b>：既然不是这条串行总线，就去查 <span class="mono">0x4018</span>（图像传输）、
+    <span class="mono">0x4002</span>/<span class="mono">0x400F</span>（分辨率转换）这几个 EXPEED 内部模块，
+    看 B 段有没有走 DMA 或共享内存把位图交出去。</li>
+<li><b>注入按键事件</b>：先统计"哪个 IO 地址被反复读"定位扫描点，再喂一个 MENU 键，
+    看固件会不会走到菜单逻辑——那时候即使画不出来，至少能看到界面状态机在动。</li>
+</ol>
+
+<p class="small" style="margin-top:36px;border-top:1px solid var(--line);padding-top:16px">
+本轮新增代码：<span class="mono">Expeed7000LogListener.java</span>（透传探针，onLoad 一律返回 null、onStore 不改内存，
+因此接入前后固件行为完全一致）、<span class="mono">D300Exp.java</span>、<span class="mono">D300Stream.java</span>；
+<span class="mono">D300Go.java</span> 增加 mode 2/3。数据文件：<span class="mono">exp0.tsv</span>、
+<span class="mono">stream2.tsv</span>（应答 0xFF）、<span class="mono">stream3.tsv</span>（应答 0x00）。
+</p>
+
+</div>
+</body>
+</html>
