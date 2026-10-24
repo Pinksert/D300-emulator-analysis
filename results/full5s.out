@@ -1,0 +1,20 @@
+; loading B3000111.bin into FR80
+; loaded. reset PC=0x40000
+; TBR will be set by firmware itself (vector table)
+; --------------------------------------------------
+; t= 514ms  PC=0x00125A12  cycles=9089441
+; t=1021ms  PC=0x00125A0E  cycles=19918883
+; t=1529ms  PC=0x00125A16  cycles=30982769
+; t=2038ms  PC=0x00125A14  cycles=41964658
+; t=2544ms  PC=0x00125A10  cycles=52896865
+; t=3050ms  PC=0x00125A0C  cycles=63838029
+; t=3554ms  PC=0x00125A10  cycles=74994717
+; t=4059ms  PC=0x00125A14  cycles=86378225
+; t=4565ms  PC=0x00125A0C  cycles=97356130
+; t=5071ms  PC=0x00125A16  cycles=108316376
+; --------------------------------------------------
+; final PC=0x125A14   cycles=108324423
+; PS=0x001F0034 CCR=57 ILM=31
+; regs: r0=0x00000000 r1=0x00008000 r2=0x00000000 r3=0x9F58F594 r4=0x00000001 r5=0x00000000 r6=0x5C003000 r7=0x977B8300 
+;        r8=0x70000000 r9=0x9F5A321E r10=0x9F58D08E r11=0x9F5A321C r12=0x00000000 r13=0x00000034 r14=0x9F800ADC r15=0x9F800AC0 
+;        
