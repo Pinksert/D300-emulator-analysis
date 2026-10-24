@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nikon D300 / D300S 处理器型号与架构分析</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1a1d24; --sub:#5b6472; --line:#e3e7ee;
+    --accent:#0b6fb8; --accent2:#0f9d58; --warn:#c2410c; --code:#f2f5f9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.75;font-size:15px}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:28px;margin:0 0 6px;letter-spacing:-.4px}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:28px}
+  h2{font-size:21px;margin:44px 0 14px;padding-bottom:8px;border-bottom:2px solid var(--line)}
+  h3{font-size:16.5px;margin:26px 0 10px;color:var(--accent)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{background:var(--code);padding:2px 6px;border-radius:4px;font-size:13px;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;color:#0b3d63}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+    padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.6;
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:#eef2f7;font-weight:600}
+  td.addr{font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;white-space:nowrap}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:20px 22px;margin:18px 0}
+  .hl{background:#fff8e6;border-left:4px solid #f0b429;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .ok{background:#eaf6ee;border-left:4px solid var(--accent2);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .bad{background:#fdf0e6;border-left:4px solid var(--warn);padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0}
+  .tag{display:inline-block;background:#e8f1f9;color:var(--accent);border-radius:4px;
+    padding:1px 8px;font-size:12.5px;margin-right:6px;font-weight:600}
+  .tag.g{background:#e7f4ec;color:var(--accent2)}
+  .tag.o{background:#fbeade;color:var(--warn)}
+  .kv{display:grid;grid-template-columns:170px 1fr;gap:6px 14px;font-size:14px}
+  .kv>div:nth-child(odd){color:var(--sub)}
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--sub);font-size:12.5px}
+  .mono{font-family:"SFMono-Regular",Consolas,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Nikon D300 / D300S 处理器型号与架构分析</h1>
+<div class="meta">
+  分析对象：<code>A3000111.bin</code>（D300，524,290 B）、<code>B3000111.bin</code>（D300，7,340,032 B）、
+  <code>a810_010200.bin</code> / <code>b810_102_.bin</code>（D300S 解密产物，同尺寸）<br>
+  方法：固件静态反汇编取证 + 富士通官方内存映射交叉比对 · 全部结论可由 CRC-16 校验过的原始文件复现
+</div>
+
+<div class="ok">
+<strong>一句话结论：</strong>两代机器用的是<strong>同一套处理器</strong>——
+两颗富士通 <strong>FR 系列 32 位 RISC</strong>（大端）微控制器，
+其中协处理器 A 可定位到 <strong>MB91360 系列（512 KB 内部 Flash）</strong>；
+主控 B 同为 FR 系列但<strong>型号不同</strong>，且必须带外部存储器总线。
+<strong>EXPEED 是独立的图像处理 ASIC，不跑这两份固件。</strong>
+</div>
+
+<h2>一、架构是怎么定下来的</h2>
+
+<p>四份固件镜像里都嵌着同一条版权声明，位置固定：</p>
+
+<pre>D300 A  @0x07E471   Softune REALOS/FR is Realtime OS for FR Family,
+D300 B  @0x00073D   based on micro-ITRON  COPYRIGHT(C) FUJITSU LIMITED 1994-1999
+D300S A @0x07E471
+D300S B @0x00073D</pre>
+
+<p>这条字符串只说明"用了富士通的 FR 家族"。真正把它钉死的是下面三条<strong>硬件级证据</strong>：</p>
+
+<h3>1. 中断向量表：FR 的 TBR 结构</h3>
+<p>A 固件末尾 1 KB（文件偏移 <code>0x7FC00</code>）是一张规整的 256 项大端地址表——
+这正是 FR 架构的 <strong>TBR（Table Base Register）向量表</strong>：256 个向量 × 4 字节 = 1 KB，
+用于 EIT（异常 / 中断 / 陷阱）处理。</p>
+
+<pre>0007FC00  00 0f e2 50  00 0f e2 50  ...   ← 默认 handler 0x000FE250（210 项）
+0007FF00  00 0f e7 76  00 08 12 9c  00 08 12 36  ...
+0007FFF0  00 0f e2 50  00 0f e2 50  07 00 00 00  00 0f c0 00
+                                    ↑ mode data   ↑ 复位向量</pre>
+
+<h3>2. mode data = 0x07：FR 规范的强制值</h3>
+<p>向量表倒数第二个字是 <code>0x07000000</code>。富士通 FR 硬件手册规定：
+模式数据必须放在 <code>0x000FFFF8</code>，且 bit31–24 <strong>必须为 <code>00000111</code>（即 0x07）</strong>，
+否则芯片不保证正常工作。固件里这个字节精确等于 <code>0x07</code>。</p>
+
+<h3>3. 复位向量与启动代码自洽</h3>
+<p>末 4 字节 = <code>0x000FC000</code>。把它当文件偏移（减去 ROM 基址 <code>0x00080000</code>）跳过去，
+落地处正是合法的 FR 指令流：</p>
+
+<pre>0007C000  9f 8f 00 04 61 6c   87 10
+          9f 80 00 0f fc 00   b3 00     ← 装载 0x000FFC00 并写入 TBR
+          9f 8d 00 0f 80 10   97 1d
+          9f 8d 00 08 00 44   97 1d</pre>
+
+<p><code>9F 8n + imm32</code> 是 FR 的 <code>LDI:32</code>（装载 32 位立即数，6 字节指令）。
+这段启动代码依次做了：设栈指针 → <strong>把 <code>0x000FFC00</code> 写入 TBR</strong> → 初始化数据区。
+TBR 值与向量表在文件中的位置完全对得上，形成闭环。</p>
+
+<div class="hl">
+<strong>字节序（endianness）由此确认为大端（big-endian）</strong>：
+向量表地址、mode data 的高位字节在前，且与富士通文档"FR family uses the big endian"一致。
+</div>
+
+<h2>二、协处理器 A：可定位到 MB91360 系列</h2>
+
+<p>把 A 固件的地址空间和富士通官方内存映射对照，<strong>五个区域逐一吻合</strong>：</p>
+
+<table>
+<thead><tr><th style="width:190px">区域</th><th style="width:210px">A 固件实测地址</th><th>MB91360 系列官方映射</th></tr></thead>
+<tbody>
+<tr><td>内部 Flash（用户代码）</td><td class="addr">0x00080000 – 0x000EFFFF</td><td class="addr">Flash ROM User Code 0x080000–0x0EFFFF</td></tr>
+<tr><td>引导扇区 / 向量 / 常量</td><td class="addr">0x000F4000 – 0x000FFFFF</td><td class="addr">START, CONST, VECTORS 0x0F4000–0x0FFFFF</td></tr>
+<tr><td>中断向量表（TBR）</td><td class="addr">0x000FFC00</td><td class="addr">同上区间内</td></tr>
+<tr><td>mode data / 复位向量</td><td class="addr">0x000FFFF8 / 0x000FFFFC</td><td class="addr">FR 规范固定位置</td></tr>
+<tr><td>D-bus User RAM</td><td class="addr">用到 0x0003FBB0</td><td class="addr">User RAM 16 KB (D-bus) 0x03C000–0x03FFFC</td></tr>
+<tr><td>F-bus Fast RAM</td><td class="addr">0x00040000 起，SP = 0x0004616C</td><td class="addr">Fast RAM 16 KB (F-bus) 0x040000–0x043FFC</td></tr>
+</tbody>
+</table>
+
+<p>其中 <strong>D-bus / F-bus 分离</strong>是关键指纹——这是 FR 中的
+<strong>Harvard 架构</strong>特征：指令总线（F-bus）与数据总线（D-bus）独立，可并行取指与取数。
+MB91360G 系列的片上资源正是这样组织的：</p>
+
+<pre>MB91360G 系列 I/O Map（官方）
+  0x000000 – 0x000400   直接寻址 I/O 区
+  0x010000 – 0x010FFC   I-Cache      4 KB
+  0x011000 – 0x011FFC   I-RAM        4 KB
+  0x03C000 – 0x03FFFC   User RAM    16 KB (D-bus)
+  0x040000 – 0x043FFC   Fast RAM    16 KB (F-bus)
+  0x050000 – 0x0507FC   Boot ROM     2 KB
+  0x080000 – 0x0FFFFF   Flash ROM  512 KB</pre>
+
+<div class="ok">
+<strong>判定：</strong>A 处理器属于<strong>富士通 MB91360 系列（512 KB Flash 版本）</strong>。
+该系列公开型号中 512 KB Flash 的有：
+<span class="tag">MB91F362GA</span><span class="tag">MB91F365GB</span><span class="tag">MB91F366GB</span>
+<span class="tag">MB91F367GB</span><span class="tag">MB91F368GB</span><span class="tag">MB91F369GA</span>
+（最高 64 MHz，36 KB RAM，5 通道 DMA，16 通道 10-bit A/D，CAN / I²C / UART / 步进电机控制器）。
+</div>
+
+<div class="bad">
+<strong>无法唯一确定的部分：</strong>固件里<strong>没有任何芯片型号字符串</strong>
+（已扫描 <code>MB9</code>/<code>MB90</code>/<code>MB91</code>/<code>FR60</code>/<code>FR70</code>/<code>FR80</code> 等关键字，零命中）。
+尼康对这类定制 MCU 通常打自己的丝印料号。此外实测的 Fast RAM 用到 <code>0x0004616C</code>，
+略大于文档标称的 16 KB，说明可能是更大 RAM 的版本或尼康定制规格。
+因此只能定位到<strong>系列</strong>，不能落到具体型号后缀。
+</div>
+
+<h3>A 的中断资源使用情况</h3>
+<p>256 个向量中，<strong>210 个</strong>指向同一个默认 handler <code>0x000FE250</code>（未使用），
+<strong>46 个</strong>挂了专属服务程序，共 45 个不同的入口。
+有实际中断源的向量段集中在 <strong>191–248</strong>，对应定时器、UART、A/D、外部中断等片上外设。
+这与"协处理器负责测光、对焦驱动、按键扫描"的角色吻合。</p>
+
+<h2>三、主控 B：同为 FR 系列，但不是同一颗芯片</h2>
+
+<p>B 固件 7 MB，头部就是启动代码。用同样的 <code>LDI:32</code> 解码：</p>
+
+<pre>00000000  9f 80 50 00 00 00   c0 11  15 01  87 10
+          9f 8f 00 00 84 00            ← 栈指针 = 0x00008400
+          9f 80 00 0e fc 00   b3 00    ← TBR  = 0x000EFC00
+          9b 00 06 00  9b 41 01 75  ...  ← 逐个填充向量表</pre>
+
+<p>启动模板与 A <strong>完全同构</strong>（设栈 → 写 TBR → 填向量），
+证明<strong>指令集与 A 相同</strong>；但地址常量完全不同，证明<strong>是另一颗芯片</strong>：</p>
+
+<table>
+<thead><tr><th style="width:150px">特征</th><th style="width:230px">协处理器 A</th><th>主控 B</th></tr></thead>
+<tbody>
+<tr><td>TBR 向量表</td><td class="addr">0x000FFC00</td><td class="addr">0x000EFC00</td></tr>
+<tr><td>初始栈指针</td><td class="addr">0x0004616C</td><td class="addr">0x00008400</td></tr>
+<tr><td>片上 RAM 基址</td><td class="addr">0x00040000（F-bus）</td><td class="addr">0x00008000</td></tr>
+<tr><td>片上数据区</td><td class="addr">0x0003C000 / 0x00040000 双总线</td><td class="addr">0x00008400 – 0x000084BC 一带</td></tr>
+<tr><td>高端地址常量</td><td class="addr">无</td><td class="addr">0x68000000 一带（外部空间）</td></tr>
+<tr><td>固件规模</td><td class="addr">512 KB（内部 Flash 装得下）</td><td class="addr">7 MB（必须外扩）</td></tr>
+<tr><td>镜像内含向量表</td><td>有</td><td><strong>无</strong>（全片扫描未找到）</td></tr>
+</tbody>
+</table>
+
+<h3>三条推论</h3>
+<ol>
+<li><strong>B 必然带外部存储器总线。</strong>7,340,032 字节的映像远超任何 FR 单片机的内部 Flash 容量
+（该系列上限 512 KB）。代码只能放在外部 Flash 上执行（XIP）。</li>
+<li><strong>B 的引导由内部 Boot ROM 完成。</strong>7 MB 镜像里找不到任何 256 项向量表
+（放宽到"≥120 项同值"扫描仍无命中），说明镜像只是<strong>应用程序映像</strong>，
+向量表在芯片内部 ROM 或运行时构造。</li>
+<li><strong>B 的性能档位更高。</strong>它承载了菜单、文件系统、TCP/IP + FTP 栈、
+15 国语言包、ICC 色彩配置和 FotoNation 红眼算法库，是整机的事务中心。</li>
+</ol>
+
+<div class="hl">
+<strong>佐证 A/B 同架构：</strong>B 固件偏移 <code>0x700</code> 处（REALOS 版权串紧前面）
+的 RTOS 初始化代码，与 A 固件偏移 <code>0x7E430</code> 处<strong>字节级同构</strong>——
+同一段 <code>d0 6e / d0 b1 / ...</code> 指令序列 + 同一条 <code>9f 80 &lt;addr&gt; / 9f 81 00 00 00 01 / 14 01</code> 调用模板，
+只是地址常量不同（A 用 <code>0x0003FBB0</code>，B 用 <code>0x6800B984</code>）。
+这是两家共用同一套 REALOS/FR 启动流程的直接证据。
+</div>
+
+<h2>四、D300 与 D300S：硬件平台完全相同</h2>
+
+<p>这是本次分析最干净的一条结论，有两处<strong>字节级</strong>证据：</p>
+
+<table>
+<thead><tr><th style="width:230px">比对项</th><th>结果</th></tr></thead>
+<tbody>
+<tr><td>A 固件中断向量表（256 项）</td><td><strong>256 / 256 完全相同</strong>，复位向量同为 <code>0x000FC000</code></td></tr>
+<tr><td>B 固件启动代码（前 64 字节）</td><td><strong>逐字节完全一致</strong>（含 SP=<code>0x8400</code>、TBR=<code>0x000EFC00</code>）</td></tr>
+<tr><td>REALOS 版权串偏移</td><td>两代完全相同（A: <code>0x7E471</code>，B: <code>0x73D</code>）</td></tr>
+<tr><td>固件内容差异</td><td>A 约 86%、B 约 73% 的字节不同（此前比对结果）</td></tr>
+</tbody>
+</table>
+
+<div class="ok">
+<strong>结论：D300S 沿用了 D300 的整套处理器方案——同样的芯片、同样的内存映射、同样的链接布局，
+软件则大幅重写（新增视频拍摄、双卡槽、外接麦、HDMI 等）。</strong>
+这正是"向量表一模一样、但固件内容七成不同"所表达的含义：硬件不动，代码推倒重来。
+</div>
+
+<h3>一处有趣的差异</h3>
+<p>两代 B 固件的<strong>片上数据区常量不同</strong>：D300 集中在 <code>0x000084xx</code>，
+D300S 集中在 <code>0x000090xx</code>。这不是硬件变了（启动代码字节级相同），
+而是链接器给全局变量分配的地址随版本挪动，属于纯软件差异。</p>
+
+<h2>五、关于 EXPEED</h2>
+
+<p>A、B 两份固件中<strong>都没有出现 <code>EXPEED</code> 字样</strong>。
+结合公开拆解资料（EXPEED 是独立封装、丝印尼康自家料号的图像处理 ASIC），可以确认：</p>
+
+<ul>
+<li><strong>EXPEED 不跑这两份固件</strong>。它是专用的图像流水线和降噪 ASIC，
+负责去马赛克、白平衡、压缩等重算力工作，与运行 REALOS/FR 的 MCU 是两套东西。</li>
+<li>整机至少有三颗处理器：<strong>EXPEED 图像 ASIC</strong> + <strong>主控 MCU（B 固件）</strong>
++ <strong>协处理器 MCU（A 固件）</strong>，再加上 Multi-CAM 3500DX 对焦模块和 1,005 像素 RGB 测光传感器里的专用电路。</li>
+<li>固件里能看到的第三方代码签名是：富士通 REALOS/FR（RTOS）、
+NEC CIPHERUNICORN-S（加密库，在 A）、FotoNation RedEye Library v2.10.0.0（红眼修正，在 B）。</li>
+</ul>
+
+<h2>六、结论不确定性的诚实说明</h2>
+
+<table>
+<thead><tr><th style="width:230px">结论</th><th style="width:110px">把握程度</th><th>依据 / 限制</th></tr></thead>
+<tbody>
+<tr><td>架构是富士通 FR 系列</td><td><span class="tag g">确定</span></td><td>REALOS/FR 版权串 + TBR 向量表 + mode data 0x07 三重印证</td></tr>
+<tr><td>大端字节序</td><td><span class="tag g">确定</span></td><td>向量表与 mode data 的字节排列，与官方"FR uses big endian"一致</td></tr>
+<tr><td>A 属 MB91360 系列、512 KB Flash</td><td><span class="tag g">高</span></td><td>五个内存区域逐一吻合官方映射；Flash 布局精确到 0x0F4000 分界</td></tr>
+<tr><td>A 的具体型号后缀</td><td><span class="tag o">无法确定</span></td><td>固件无型号串；Fast RAM 用量略超文档标称，疑为尼康定制规格</td></tr>
+<tr><td>B 是 FR 系列且与 A 不同型号</td><td><span class="tag g">高</span></td><td>启动代码同构但 TBR/RAM/高端地址常量全部不同</td></tr>
+<tr><td>B 的具体系列</td><td><span class="tag o">未定</span></td><td>RAM 基址 0x00008000 未匹配到公开型号；7 MB 映像需外部总线，型号空间过大</td></tr>
+<tr><td>D300 与 D300S 处理器相同</td><td><span class="tag g">确定</span></td><td>A 向量表 256/256 相同；B 启动代码 64 字节逐字节相同</td></tr>
+</tbody>
+</table>
+
+<footer>
+本文所有结论均基于本地固件镜像的静态分析，分析脚本位于 <code>.workbuddy/tmp/cpu1.py – cpu8.py</code>，
+可用官方固件自带的 CRC-16 校验复现。<br>
+芯片内存映射比对依据富士通公开的 MB91360 系列硬件手册 / Starterkit 用户手册与 MB91265、MB91106、MB91210 系列数据表。
+</footer>
+
+</div>
+</body>
+</html>
