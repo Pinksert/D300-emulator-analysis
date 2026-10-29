@@ -1,5 +1,86 @@
 # 环境搭建与运行
 
+本仓库有两条线，环境要求完全不同：**只想跑模拟器的话只需要 Python 3，B 部分可以整段跳过。**
+
+| | A 部分：frbox | B 部分：NikonEmulator |
+|---|---|---|
+| 需要装 | Python 3（3.8+，标准库） | JDK 8 + 上游源码 + 5 处补丁 |
+| 在哪 | `emu/` | `drivers/` |
+| 上手时间 | 一条命令 | 编译一次几十分钟 |
+
+---
+
+# A 部分：frbox（纯 Python，零依赖）
+
+## A.0 准备
+
+不需要装任何东西。固件已经在仓库里：
+
+```bash
+data/A3000111.bin      # A 段 512 KB，未压缩
+data/B3000111.bin      # B 段 7.0 MB，未压缩
+```
+
+要用别的目录的固件（比如自己从尼康升级包解出来的）：
+
+```bash
+export FRBOX_FW_DIR=/path/to/D300Update      # Windows: set FRBOX_FW_DIR=...
+```
+
+解析顺序是 `FRBOX_FW_DIR` → 仓库 `data/` → 仓库同级 `D300Update/`。
+
+## A.1 自检（先跑这个）
+
+```bash
+cd emu
+python fr_selftest.py        # CPU 核心 54 条
+python frbox_selftest.py     # 整机 120 条
+```
+
+两套都应该是全绿。**自检不过时，取证脚本的结论没有意义** —— 这是这个项目自己踩过的坑。
+
+## A.2 运行
+
+```bash
+python -m frbox -M help                                   # 列出机器
+python -m frbox -M d300-a -c "bp 0xFE50C;c;info"          # A 段跑到启动链尽头
+python -m frbox -M d300-b -c "bp 0x407D8;c;info"          # B 段跑到复位链尽头
+python -m frbox -M d300-a -S                              # 停在 monitor 交互
+python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;info"
+```
+
+常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| `-M d300-a` / `-M d300-b` | 选机器（A 段 IO 协处理 / B 段主控） |
+| `-kernel PATH` | 换固件镜像 |
+| `-S` | 启动即暂停，进 monitor |
+| `-c "cmd;cmd"` | 执行 monitor 命令后退出（脚本化用这个） |
+| `-d in_asm,int,dev,svc,guest` | 日志类别，`-D file` 落盘 |
+| `-max-steps N` | 步数上限 |
+| `--clk-lock N` | 时钟寄存器 `0x482` 就绪要几个 tick（默认 8，0 = 立刻） |
+| `--poke ADDR=VAL[:SIZE]` | 复位后写一次（模拟外设就绪） |
+| `--latch ADDR=VAL[:N]` | 第 N 次读之后返回 VAL（模拟对方置位） |
+| `--task ENTRY:SP:ARG:STOPPC` | 手工启动任务（跳过 REALOS 调度器） |
+| `--itron` | 挂表驱动 μITRON 层 |
+
+monitor 里能做什么、快照格式、分层设计，见 [`docs/03-frbox.md`](docs/03-frbox.md)。
+
+## A.3 速度
+
+单线程 CPython 3.13 下 30,000–43,000 步/秒。B 段复位链 191,518 步 ≈ 6 秒，
+A 段 43,446 步 ≈ 1.5 秒。跑长实验（千万步级）请用快照代替重跑：
+
+```bash
+python -m frbox -M d300-b -c "bp 0x407D8;c;savevm b_base.snap"      # 存一次
+python -m frbox -M d300-b -c "loadvm b_base.snap;step 100000;info"  # 之后每次从同一点开始
+```
+
+---
+
+# B 部分：NikonEmulator 函数级（需要 JDK 8）
+
 ## 0. 你需要准备的东西
 
 ### 仓库里已经有的
