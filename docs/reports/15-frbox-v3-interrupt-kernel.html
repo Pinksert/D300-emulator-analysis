@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件仿真台 V3 · 中断、向量表与 μITRON 内核</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V3：把中断、向量表和 μITRON 内核接上</h1>
+<div class="sub">D300 固件函数级仿真台 · 第三次加固报告 · 2026-10-29</div>
+
+<div class="card">
+<b>一句话</b>：前两版能跑「一个函数」，但跑不了「一个中断」——因为中断入口、向量表、内核派发这三段都没实现。
+这次补上之后，<b>两段固件各自的 256 条向量槽全部读通，94 条真接线的中断能一条条拉起来跑，其中 83 条能自己跑完 <span class="mono">reti</span> 回来</b>；
+μITRON 那层也不再靠猜，而是直接读固件自己的分发表。<br><br>
+顺带在固件里挖到一条 <b>binutils 指令表里根本没有的 FR80 专有指令</b>（SRCH1），而它就在 IRQ 0x3F 的处理程序里。
+</div>
+
+<div class="kpis">
+<div class="kpi"><b>54</b><span>自检断言（原 38）</span></div>
+<div class="kpi"><b>176×2</b><span>两段的内核服务槽</span></div>
+<div class="kpi"><b>94</b><span>真接线的中断</span></div>
+<div class="kpi"><b>83</b><span>能独立跑回 reti</span></div>
+</div>
+
+<h2>一、先补的是「进中断」这条路</h2>
+
+<p>之前仿真台能从一个函数入口跑到底，但固件里真正干活的很多东西不是被「调用」的，是被「打断」进来的。
+中断处理这条路要四件事配合：把 PS 和 PC 压进系统栈、切到系统栈、按 TBR 算向量槽、跳进去。少了任何一环，
+要么跳错地方，要么 <span class="mono">reti</span> 弹出一堆垃圾。</p>
+
+<p>动手前先确认了 FR 的入栈顺序。<span class="mono">fr30.cpu</span> 里 <span class="mono">int</span> 指令的注释写得很清楚：
+先压 PS、再压返回地址，都压到 <b>系统栈</b>（<span class="mono">h-dr 2</span>），然后置 <span class="mono">I=0</span>、<span class="mono">S=0</span>。
+所以栈顶是返回地址，<span class="mono">reti</span> 先弹 PC、再弹 PS —— 顺序反了不会报错，只会静默跑飞。</p>
+
+<div class="warnbox">
+<b>顺手抓到一个真 bug</b>：原来的 <span class="mono">SSP/USP</span> 是两套各管一半 —— 一个 <span class="mono">stack_bank</span> 字典负责 S 位切换，
+专用寄存器 <span class="mono">dr2/dr3</span> 又单独存了一份，两者从不同步。结果是「读 SSP」和「切换栈」拿到的是不同的值。
+现在统一成：<span class="mono">dr2/dr3</span> 是权威值，<span class="mono">R15</span> 永远等于当前 S 位选中的那一支。
+这个 bug 只在 <span class="mono">reti</span> 恢复 S 位时才暴露，<b>不写这条自检就永远发现不了</b>。
+</div>
+
+<h3>补了 16 项自检，专门盯不会报错的错</h3>
+<p>中断这块最麻烦的地方是「错了也照跑」：栈指针错 8 字节、PS 恢复成脏值、ILM 屏蔽判断反了，程序都不会崩，
+只是行为不对。所以每一项都单独验：</p>
+<ul>
+<li>向量槽地址 = <span class="mono">TBR + (255 - 向量号) × 4</span>（倒序）</li>
+<li>入栈后 SSP 恰好下移 8；栈顶是返回地址；栈顶 +4 是旧 PS，且旧 PS 的 S 位原样保留</li>
+<li>进中断后 <span class="mono">I</span> 被清 0、<span class="mono">S</span> 变 0（走系统栈）、USP 被存进 dr3</li>
+<li><span class="mono">reti</span> 之后 PC 回到断点、S 位恢复、R15 回到 USP、SSP 复原</li>
+<li>中断级别 ≤ ILM 时不受理且请求留在队列；<span class="mono">I=0</span> 时不受理</li>
+</ul>
+<p>自检总数从 38 条涨到 <b>54 条</b>，全过。</p>
+
+<h2>二、向量表：两段各 256 条槽，摸清了</h2>
+
+<p>把两段固件的 TBR 定下来，再把 256 条槽全部读出来。判据很干脆：<b>没接的中断统一填一个兜底地址</b>，
+所以「地址 != 兜底」就等于「这台机器真接了这条中断」。</p>
+
+<table>
+<tr><th>段</th><th>TBR</th><th>兜底地址</th><th>占位</th><th>真接线</th><th>去重处理程序</th></tr>
+<tr><td>A（IO 协处理）</td><td class="m">0x000FFC00</td><td class="m">0x000FE250</td><td class="m">210</td><td class="m">46</td><td class="m">44</td></tr>
+<tr><td>B（主控）</td><td class="m">0x000EFC00</td><td class="m">0x000404F8</td><td class="m">208</td><td class="m">48</td><td class="m">46</td></tr>
+</table>
+
+<p>两个兜底地址的形态也不一样，值得记一笔：</p>
+<ul>
+<li>A 段的兜底 <span class="mono">0x000FE250</span> 是一段真实代码的起点，接着往下是「压栈 → 取默认处理 → 返回」的流程；</li>
+<li>B 段的兜底 <span class="mono">0x000404F8</span> 是两条指令：<span class="mono">ldi:32 #0x404DE, r13</span> 加 <span class="mono">jmp @r13</span>，
+而 <span class="mono">0x404DE</span> 是 <span class="mono">borh #8, r13</span> 接 <span class="mono">bra *-2</span> —— 一个<b>原地自旋的死循环</b>。
+也就是说 B 段的设计意图是「没接的中断一旦误触发，就停在那儿」，不是静默返回。</li>
+</ul>
+
+<p>A 段那 46 条接线中断里，0x10 到 0x33 这一段处理程序地址几乎是等间距的（相邻相差 <span class="mono">0x32</span> 字节），
+是典型的<b>中断桩表</b>：每个桩只做「压栈、记下自己是几号中断、跳到公共处理」。B 段则是各中断各写各的，
+处理程序散落在 0x42xxx（内核区）、0x12Dxxx/0x12Fxxx（驱动区）、0x172xxx/0x1A5xxx（应用区）。</p>
+
+<h2>三、μITRON：不猜服务号，直接读固件自己的表</h2>
+
+<p>上一版的 μITRON 层是「服务号 → 查社区那份名称表 → 直接返回成功」。这其实有个隐患：万一服务号偏了一位，
+或者那份表和这份固件的版本对不上，整个分析就建立在一个错的前提上，而它<b>不会报错</b>。</p>
+
+<p>这次找到了固件自己的派发方式。A 段的 μITRON 陷阱入口在 <span class="mono">0x000FE3C0</span>，B 段在 <span class="mono">0x00040668</span>，
+两处代码结构一模一样：</p>
+
+<pre>    lsl   #1, r12            ; 服务号 × 2 → 字节偏移
+    ldi:32 #0x000FE3B8, r13  ; 表尾地址（B 段是 0x00040660）
+    lduh  @(r12, r13), r12   ; 取 16 位「相对表尾的偏移」
+    extsh r12                ; 符号扩展（偏移可以为负）
+    add   r13, r12           ; 目标 = 表尾 + 偏移
+    call  @r12</pre>
+
+<p>于是服务号是负数、从 -1 往下数，表尾就是基址 —— 和之前从调用点反推出来的口径完全一致。
+把表整张倒出来：</p>
+
+<table>
+<tr><th>段</th><th>表尾</th><th>槽数</th><th>真实现</th><th>指向桩</th></tr>
+<tr><td>A</td><td class="m">0x000FE3B8</td><td class="m">176</td><td class="m">18</td><td class="m">158</td></tr>
+<tr><td>B</td><td class="m">0x00040660</td><td class="m">176</td><td class="m">56</td><td class="m">120</td></tr>
+</table>
+
+<p>两个桩就贴在表尾前面，各两条指令，<span class="mono">ret:d</span> 加一条往 <span class="mono">R12</span> 塞错误码的延时槽指令：</p>
+<pre>000FE3B8  9F20      ret:d
+000FE3BA  CEFC      ldi:8 #0xEF, r12     ; 有符号 = -17
+000FE3BC  9F20      ret:d
+000FE3BE  CECC      ldi:8 #0xEC, r12     ; 有符号 = -20</pre>
+<p class="kv">按 μITRON 标准错误码表，-17 是 E_PAR、-20 是 E_NOMEM。但固件里没有直接证据说明它为什么挑这两个码，
+所以这里只当「未实现的服务返回负数」看，<b>不当成「这里报了参数错误」</b>。</p>
+
+<h3>一个能自证的数字</h3>
+<p>A 段只实现 18 个服务，B 段实现 56 个。把两个集合对一下：</p>
+<ul>
+<li><b>A 的 18 个，全部落在 B 的 56 个里面</b>，一个不漏（A − B = 空集）；</li>
+<li>B 多出来的 38 个，恰好是定时器（<span class="mono">cyc/alm</span>）、内存池与块、信号量、邮箱、任务挂起/恢复、
+调度器开关、版本与系统信息这一整批；</li>
+<li>之前从光圈函数里实测到的 4 次服务调用（<span class="mono">clr_flg</span>×2、<span class="mono">wai_flg</span>、<span class="mono">sta_tsk</span>），
+<b>4 条全在 A 的 18 个实现里</b>。</li>
+</ul>
+<p>如果服务号偏了一位，这三条同时成立的几率极低 —— 尤其「子集关系」这一条，错位之后必然被打断。
+所以这次可以说：<span class="tag t-ok">服务号编号已交叉验证</span></p>
+
+<h2>四、真跑一条中断：串口 ISR 到底通知谁</h2>
+
+<p>有了中断机制，就能把某条中断单独拉起来跑，还能往直接页寄存器里喂值看它走哪条分支。
+IRQ 0x1B（Serial IF0）的入口是 <span class="mono">0x0012FDB4</span>，它做判断的方式很简单：
+读直接页 <span class="mono">0x60</span>，和 <span class="mono">0xE0</span> 做与，为 0 就直接返回。</p>
+
+<table>
+<tr><th>喂给 0x60 的值</th><th>步数</th><th>峰值栈</th><th>读的外设</th><th>μITRON 调用</th></tr>
+<tr><td class="m">0x00</td><td class="m">31</td><td class="m">60 B</td><td class="m">0x60, 0x61</td><td>无</td></tr>
+<tr><td class="m">0x20 / 0x40 / 0x80 / 0xE0 / 0xFF</td><td class="m">31</td><td class="m">60 B</td><td class="m">0x60, 0x62</td><td class="m">sys_set_flg(flag=3, pattern=0x20)</td></tr>
+</table>
+
+<p>读清楚了：<b>这条串口中断只要看到状态位非零，就置「事件标志 3 的第 5 位（0x20）」</b>，唤醒在等这个标志的任务；
+状态位是 0 就一声不响地返回。等它的是谁，还没往下跟。</p>
+
+<p>另一条 IRQ 0x20（EXT9）的入口 <span class="mono">0x0012FE54</span> 走的是另一套：从 <span class="mono">0x9F58DA85</span> 读一个字节当索引、
+左移 2 位、加到 <span class="mono">0x1BC480</span> 的函数指针表上再 <span class="mono">call</span>，最后往直接页 <span class="mono">0x38</span> 写 <span class="mono">0xFB</span> 清中断。
+和之前从静态分析得到的口径对得上。</p>
+
+<h2>五、意外收获：一条 binutils 表里没有的指令</h2>
+
+<p>把 48 条中断逐条拉起来跑，IRQ 0x3F 卡住了：<span class="mono">0x00040E20</span> 处的字节解不出来。
+那个字节是 <span class="mono">97DD</span>。查 NikonEmulator 的实现，这个族被明确标了注释：</p>
+<pre>/* SRCH0 Ri */  // FR80/FR81 only
+/* SRCH1 Ri */  // FR80/FR81 only
+/* SRCHC Ri */  // FR80/FR81 only</pre>
+<p>也就是说 binutils 的 <span class="mono">fr30</span> 指令表只覆盖 FR30，而 D300 用的是 FR80 —— 差的那几条就是位检索指令。
+补进去之后：</p>
+<ul>
+<li>编码空间的可解码数从 <b>64634</b> 涨到 <b>64682</b>（多了 48 个编码），助记符从 119 种涨到 <b>122 种</b>；</li>
+<li>未定义编码从 902 降到 <b>854</b>；</li>
+<li>IRQ 0x3F 从「跑到 0x40E20 卡死」变成「41 步跑完 reti」。</li>
+</ul>
+
+<div class="warnbox">
+<b>一个没定下来的地方</b>：参考实现里 <span class="mono">bitSearch</span> 的循环只走 31 次，<b>漏掉了最低位</b>。
+遇到「只有 bit0 匹配」的输入，它返回 32（等于"没找到"），而按「从最高位起第一个匹配位的序号」这个定义应该返回 31。
+本实现按后者写，并在代码里标注了这个分歧。哪个对得上真机，目前没有证据 —— <b>不猜</b>。
+这条只影响 SRCH 的极端输入，对上面所有结论没有影响。
+</div>
+
+<h2>六、成绩单</h2>
+
+<table>
+<tr><th>段</th><th>真接线中断</th><th>能跑到 reti</th><th>没跑完的是谁</th></tr>
+<tr><td>A</td><td class="m">46</td><td class="m">41</td><td>0x00（复位入口）、0x07/0x08/0x0E（异常处理，本来就该停）、0x01（指向段外 0x07000000）</td></tr>
+<tr><td>B</td><td class="m">48</td><td class="m">42</td><td>0x00（复位入口）、0x07/0x08/0x0E（异常处理）、0x18、0x40（内核调度陷阱）</td></tr>
+</table>
+
+<p class="kv">说明：跑的条件是「RAM 全 0、外设读一律返回 0、遇到服务调用立即返回」。这套条件下能跑完，说明处理程序本身的控制流是通的；
+不代表接了真实外设之后还一样。复位入口和异常处理不返回是设计如此，不算失败。</p>
+
+<p>上一次的结论也回归过一遍，没有被推翻：1.10 / 1.11 各跑 2 组，步数仍是 <b>552 / 608 / 596 / 664</b>，
+256 种标志位取值扫描仍是「1.10 两种走向、1.11 四种走向」，三个行程常量 7812 / 17578 / 17969 一个没变。</p>
+
+<h2>七、还差什么</h2>
+<ul>
+<li><b>外设还是假的</b>。直接页 0x0–0xFFF 读一律返回 0，写只记日志。<span class="mono">0x60</span>、<span class="mono">0x62</span>、<span class="mono">0x38</span>
+这些地址已经知道「有语义」，但不知道「什么条件下是什么值」——那需要示波器级别的时间模型，或者厂商文档。</li>
+<li><b>调度器没跑起来</b>。IRQ 0x40（内核陷阱本身）单独拉起来会一直往下跑、栈越堆越高，这是正常的：
+它期待的是「切到另一个任务」，而仿真台里只有一个任务。要跑通得把任务表和就绪队列一起建模。</li>
+<li><b>0xBE00–0xBEFF 这一整块 256 个编码，两份参考实现里都没有定义</b>。B 段里有 1353 个字以 <span class="mono">0xBE</span> 开头，
+但多数看着像数据。目前跑过的代码路径一次都没碰到它。</li>
+<li><b>A 段向量 0x01 指向 <span class="mono">0x07000000</span></b>，落在镜像之外。仿真台没有那段内存，判断不了它是外设区还是没初始化的槽。</li>
+</ul>
+
+<h2>八、这次动到的文件</h2>
+<table>
+<tr><th>文件</th><th>变化</th></tr>
+<tr><td class="m">fr_emu.py</td><td>加 EIT/中断派发（<span class="mono">request_irq / eit / vector_addr</span>）；SSP/USP 与 R15 统一；补 SRCH0/1/C</td></tr>
+<tr><td class="m">fr_itron.py</td><td>改成表驱动：按固件自己的分发表判定「真实现 / 桩」，并按签名只记声明为输入的寄存器</td></tr>
+<tr><td class="m">fr_svc.py</td><td>新增。倒出 μITRON 服务表，交叉验证社区那份名称映射</td></tr>
+<tr><td class="m">fr_irq.py</td><td>新增。向量表测绘 + 单条 ISR 试跑 + 全表扫描</td></tr>
+<tr><td class="m">fr_selftest.py</td><td>38 → 54 条断言，新增 EIT 一组</td></tr>
+<tr><td class="m">exp_irq.py</td><td>新增。中断注入 + 外设喂值的小实验台</td></tr>
+</table>
+
+</div>
+</body>
+</html>
