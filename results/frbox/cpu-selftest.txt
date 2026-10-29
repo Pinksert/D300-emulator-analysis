@@ -1,0 +1,62 @@
+[1] 有符号除法：DIV0S + 32×DIV1 + DIV2 + DIV3 + DIV4S
+  OK    1000 / 7 商                                 got=0x0000008E want=0x0000008E
+  OK    1000 / 7 余数                                got=0x00000006 want=0x00000006
+  OK    -1000 / 7 商                                got=0xFFFFFF72 want=0xFFFFFF72
+  OK    -1000 / 7 余数                               got=0xFFFFFFFA want=0xFFFFFFFA
+  OK    1000 / -7 商                                got=0xFFFFFF72 want=0xFFFFFF72
+  OK    1000 / -7 余数                               got=0x00000006 want=0x00000006
+  OK    -1000 / -7 商                               got=0x0000008E want=0x0000008E
+  OK    -1000 / -7 余数                              got=0xFFFFFFFA want=0xFFFFFFFA
+  OK    2147483647 / 3 商                           got=0x2AAAAAAA want=0x2AAAAAAA
+  OK    2147483647 / 3 余数                          got=0x00000001 want=0x00000001
+  OK    -1 / 1 商                                   got=0xFFFFFFFF want=0xFFFFFFFF
+  OK    -1 / 1 余数                                  got=0x00000000 want=0x00000000
+  OK    123456 / -789 商                            got=0xFFFFFF64 want=0xFFFFFF64
+  OK    123456 / -789 余数                           got=0x00000174 want=0x00000174
+  OK    0 / 5 商                                    got=0x00000000 want=0x00000000
+  OK    0 / 5 余数                                   got=0x00000000 want=0x00000000
+  OK    -2147483648 / 2 商                          got=0xC0000000 want=0xC0000000
+  OK    -2147483648 / 2 余数                         got=0x00000000 want=0x00000000
+[2] 加减法与标志位
+  OK    0x7FFFFFFF+1 结果                            got=0x80000000 want=0x80000000
+  OK    0x7FFFFFFF+1 V                             got=0x00000001 want=0x00000001
+  OK    0x7FFFFFFF+1 N                             got=0x00000001 want=0x00000001
+  OK    5-7 借位 C                                   got=0x00000001 want=0x00000001
+  OK    5-7 N                                      got=0x00000001 want=0x00000001
+  OK    SUBN 结果                                    got=0xFFFFFFFE want=0xFFFFFFFE
+  OK    SUBN 不改 Z                                  got=0x00000000 want=0x00000000
+  OK    AND 清 V                                    got=0x00000000 want=0x00000000
+  OK    AND 置 Z                                    got=0x00000001 want=0x00000001
+[3] 移位
+  OK    lsl #4                                     got=0x00000010 want=0x00000010
+  OK    lsr #4                                     got=0x08000000 want=0x08000000
+  OK    asr #4                                     got=0xF8000000 want=0xF8000000
+[4] @(disp,R14) 负偏移（编译器存取局部变量全靠它）
+  OK    ld @(-4,R14),R1                            got=0xDEADBEEF want=0xDEADBEEF
+  OK    st R1,@(-4,R14)                            got=0x12345678 want=0x12345678
+[5] 其它：XCHB / LDI:8 / PS 布局
+  OK    XCHB 后 R0（高 24 位保留）                        got=0x112233AA want=0x112233AA
+  OK    XCHB 后内存字节                                 got=0x00000044 want=0x00000044
+  OK    LDI:8 #0xFF（无符号）                           got=0x000000FF want=0x000000FF
+  OK    PS 回读                                      got=0x00050223 want=0x00050223
+  OK    PS.S 位 (bit5)                              got=0x00000001 want=0x00000001
+  OK    PS.D0 位 (SCR bit1)                         got=0x00000001 want=0x00000001
+[6] EIT / 中断：入栈顺序、ILM 屏蔽、SSP-USP 切换
+  OK    向量槽地址公式                                    got=0x0007FFD0 want=0x0007FFD0
+  OK    S=1 时 R15 指向 USP                           got=0x00061000 want=0x00061000
+  OK    受理后跳到 handler                              got=0x00080100 want=0x00080100
+  OK    入栈后 SSP 下移 8                               got=0x0005FFF8 want=0x0005FFF8
+  OK    栈顶(SP) = 返回地址                              got=0x00080200 want=0x00080200
+  OK    SP+4 = 旧 PS 的 S 位仍是 1                      got=0x00000001 want=0x00000001
+  OK    进中断后 I 位被清                                 got=0x00000000 want=0x00000000
+  OK    进中断后 S=0（走系统栈）                             got=0x00000000 want=0x00000000
+  OK    USP 被保存                                    got=0x00061000 want=0x00061000
+  OK    reti 回到断点                                  got=0x00080200 want=0x00080200
+  OK    reti 恢复 S=1                                got=0x00000001 want=0x00000001
+  OK    reti 后 R15 回到 USP                          got=0x00061000 want=0x00061000
+  OK    reti 后 SSP 复原                              got=0x00060000 want=0x00060000
+  OK    level<=ILM 被屏蔽（没进 EIT）                     got=0x00000001 want=0x00000001
+  OK    被屏蔽的请求仍在队列                                 got=0x00000001 want=0x00000001
+  OK    I=0 时不受理                                   got=0x00000002 want=0x00000002
+
+通过 全部；失败项 无
