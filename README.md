@@ -1,72 +1,179 @@
 # D300 Firmware Emulator Analysis
 
-把尼康 D300 相机的 **B 段主控固件**（富士通 FR 架构，富士通/ITRON/Softune 工具链）放进 [NikonEmulator](https://github.com/nikonhacker) 做函数级仿真，逐段拆开它的显示管线、事件标志系统和与 EXPEED 芯片之间的通信。
+把尼康 D300 相机的固件放进模拟器里跑，看它到底做了什么。
 
-这不是一个"能开机出画面"的模拟器 —— 它跑不到那一步，原因写在 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)。它是一份**逆向过程的记录**：哪些链路已经走通、卡在哪一位上、以及踩过哪些坑。
+这里有两套东西，目标不同：
 
-> ⚠️ 先读 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)。那里有 19 条，其中 5 条是**必须对上游打补丁才能跑起来**的缺陷，6 条是让我得出过错误结论的方法论陷阱。
+| | **frbox 0.7.0** | NikonEmulator 驱动 |
+|---|---|---|
+| 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
+| 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
+| 要不要装东西 | 不要，标准库就行 | 要 JDK 8 + 编译上游 + 打 5 处补丁 |
+| 代码 | [`emu/`](emu/)　·　设计文档 [`docs/03-frbox.md`](docs/03-frbox.md) | [`drivers/`](drivers/) |
+| 什么时候用 | 想看指令级执行、中断进出、内存映射、快照回放 | 想复现 2026-10 那批显示管线/总线实验 |
+
+**这不是一个"能开机出画面"的模拟器**，原因写在 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)：
+固件的启动链走到某一条 `ret` 就结束了，跟模拟器完整度无关。
+它是一份**逆向过程的记录**：哪些链路已经走通、卡在哪一位上、踩过哪些坑。
+
+---
+
+## 30 秒上手
+
+```bash
+git clone https://github.com/Pinksert/D300-emulator-analysis
+cd D300-emulator-analysis/emu
+
+python -m frbox -M help                              # 两台机器
+python -m frbox -M d300-a -c "bp 0xFE50C;c;info"     # A 段跑到启动链尽头（43,446 步）
+python -m frbox -M d300-b -c "bp 0x407D8;c;info"     # B 段跑到复位链尽头（191,518 步）
+python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;info"   # 手工拉起任务 1
+
+python frbox_selftest.py     # 120/120
+python fr_selftest.py        # 54/54
+```
+
+固件从仓库 `data/` 读；要用别的目录就 `FRBOX_FW_DIR=/path/to/D300Update`。
+完整命令（monitor、断点、快照、日志类别）见 [`docs/03-frbox.md`](docs/03-frbox.md) §11–12。
+
+---
+
+## 三句话说清现状（frbox 线）
+
+1. **两台机器都跑到了固件自己停下为止，一次没崩。** A 段 43,446 步 / 824 个不同 PC /
+   0 次中断，停在 `0x000FE50C` 的 `reti`；B 段 191,518 步 / 1,239 个 PC / 1 次中断，
+   停在 `0x000407D8` 的 `reti`。之后 PC 从系统栈弹出 0 —— **是固件不再往下走，不是模拟器走不动**。
+2. **停下来的原因找到了，是四处空桩。** A 段启动链 `0xFC000 → 0xF8010 → 0x80044 → 0x804FA`，
+   第四跳是一条孤立 `ret`（正是 REALOS `vsta_knl()` 该在的位置），main 的第二条 `call 0x80520`
+   同样是 `ret`。内核对象都建好了（4 个 TCB 在 `0x00045C38`，自引用空环、状态 0），
+   **只是从没 `sta_tsk` 挂上就绪队列**。这四处空桩在 1.02/1.03/1.10/1.11 四版**逐字节一致**。
+3. **那就跳过调度器。** `boottask` 手工构造任务上下文跳进任务 1（`0x8133A`）：1,981 步后
+   到达第一个硬件等待 `0x0DCD2C`，期间踩过 500 个应用区 PC、发过 10 次 `int #0x40`、
+   自己写了 6 个中断回调槽。中断通路本身是通的 —— 48 个向量全量注入，**39 个精确 `reti`
+   回原位且 `r15`/SSP 逐位复原**（`results/frbox/isr-injection.txt`）。
+
+> 老线（NikonEmulator）的三句话仍然成立，且是另一层结论：B 段显示管线能自动前进三级；
+> 但"绘制"只是 `set_flg(0x0A, 0x8000); RET`，不是画像素；剩下的坎是串行口波形，不是隐藏分支。
 
 ---
 
 ## 目录地图
 
 ```
-D300-emulator/
+D300-emulator-analysis/
 ├── README.md               本文件
-├── KNOWN_ISSUES.md         ★ 已知问题（19 条，含已修缺陷与踩坑记录）
-├── BUILD.md                环境搭建：JDK8、编译、固件提取、跑法
+├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
+├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
+├── emu/                    ★ frbox 0.7.0：纯 Python 全系统模拟器
+│   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
+│   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
+│   ├── fr30-opc.c
+│   ├── fr_itron.py         μITRON 半主机层
+│   ├── fr_svc.py           服务表倒出
+│   ├── fr_dis.py           反汇编格式化
+│   ├── fr_cover.py         指令编码空间覆盖率
+│   ├── fr_run.py           函数级运行器
+│   ├── fr_selftest.py      54 条 CPU 断言
+│   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
+│   │                       / icu / machine / monitor / snapshot / trace / cli
+│   ├── frbox_selftest.py   120 条断言
+│   ├── frbox_boot.py       启动诊断
+│   └── probe/              17 个取证脚本（见 probe/README.md）
 ├── docs/
-│   ├── 01-architecture.md  解出来的静态结构：地址表、任务表、管线、总线协议
+│   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
-│   └── reports/            13 份实验报告（HTML，按时间顺序编号）
-├── drivers/                我们写的 18 个仿真驱动（放上游对应目录即可编译）
+│   ├── 03-frbox.md         ★ 模拟器设计与命令参考
+│   └── reports/            19 份报告（HTML，按时间顺序编号）
+├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
-│   └── upstream-changes.md 对 NikonEmulator 上游的 5 处修改
+│   └── upstream-changes.md 对上游的 5 处修改
 ├── tools/
 │   ├── analyze_cover.py    覆盖率位图的调用图前沿分析
 │   └── build_emu.sh        编译脚本
 ├── data/                   固件 + 反汇编（>2 MB 的已 gzip，需解压）
-└── results/                全部原始实验输出（60+ 份，大文件同样已压缩）
+└── results/                原始实验输出；frbox 的在 results/frbox/
 ```
 
-> **数据文件**：`data/B3000111.bin` 和 `A3000111.bin` 未压缩，直接可用；`d300_b_full.asm.gz`（156 MB 原始 / 18.5 MB 压缩）超过 GitHub 单文件上限，必须压缩存放，用前 `gunzip -k`。详见 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) 第四节。
-
----
-
-## 三句话说清现状
-
-1. **显示管线的前半段跑通了。** 只补中断、不打任何补丁，管线自动前进三级（`0x12E162` / `0x12E1EC` / `0x12E326` 各 1195 次），文本缓冲 `0x9F58D97C` 里出现了固件自己写进去的 `31 31 31`（"111"）。
-2. **但"绘制"不是画像素。** `0x12F452` 全文只有 `set_flg(0x0A, 0x8000); RET`。B 段只维护状态并通知下游，真正的输出在任务 21（`0x242DA0`），还没接上。
-3. **剩下的坎不是缺代码，是缺波形。** 卡点是一串串行口时序（见 `KNOWN_ISSUES.md` 第 6 条），需要的是波特率级的收发模型，不是继续找隐藏分支。
+> **数据文件**：`data/B3000111.bin`、`A3000111.bin` 未压缩，frbox 直接就用；
+> `d300_b_full.asm.gz`（156 MB 原始 / 18.5 MB 压缩）超过 GitHub 单文件上限，用前 `gunzip -k`。
 
 ---
 
 ## 关键数字
 
+### frbox 实测（1.11 固件）
+
 | 指标 | 值 |
 |---|---|
-| 代码覆盖率（20M 步） | **0.144%**（5138 / 3,558,418 条指令） |
+| 可执行指令编码 | 64,682（16 位空间 65,536） |
+| 未定义编码 / 未实现指令 | 854 / **0** |
+| 覆盖助记符 | 122 种 |
+| 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
+| 自检 | 120 条（frbox）+ 54 条（CPU），全绿 |
+| A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
+| B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
+| 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
+| 48 向量注入 | 39 个精确 `reti` 回原位，`r15`/SSP 逐位复原 |
+| 任务 1 启动 | 1,981 步到第一个卡点 `0x0DCD2C`，500 个应用区 PC |
+| 快照体积 | B 段 191,517 步时 1,312,632 字节 |
+
+### 老线统计（NikonEmulator，仅供对照）
+
+| 指标 | 值 |
+|---|---|
+| 代码覆盖率（20M 步） | 0.144%（5138 / 3,558,418 条指令） |
 | 触达函数 | 199 / 20,741 |
 | 触达 4KB 页 | 36 / 1792 |
-| B 段固件大小 | 7 MB（CPU 基址 `0x00040000`） |
 | 任务数 | 28（表 `0x00054C10`，步长 `0x1C`） |
 | 事件标志对象 | 17（表 `0x000551B0`） |
 | 显示对象描述符 | 70 条（表 `0x001BC020`，每条 16 B） |
-| 补上 flag 3 bit4 后绘制的对象 | 7 个（id `01/07/29/05/45/0B/10`） |
+
+---
+
+## 两台机器
+
+| | `d300-a` | `d300-b` |
+|---|---|---|
+| 角色 | IO 协处理 | 主控 / UI |
+| ROM | `0x00080000` + 524,290 B | `0x00040000` + 7,340,032 B |
+| RAM | `0x00001000–0x0007FFFF` | `0x00001000–0x0003EFFF` + `0x9F580000` 1 MB |
+| TBR / SSP | `0x000FFC00` / `0x0007F000` | `0x000EFC00` / `0x0003F000` |
+| 复位入口 | `0x000FC000` | `0x00040000` |
+
+数字来源全部是固件自身：ROM 基址与长度 = 镜像大小；TBR = 向量槽里读出复位入口的那个基址；
+RAM 上界 = 固件真正写过的高地址。`0x9F580000` 那块 1 MB 是"未映射写 6,000 多次"逼出来的。
+
+**别忘了**：上面是 **CPU 地址**，读固件文件时 B 段要减 `0x40000`、A 段减 `0x80000`。
+
+---
+
+## frbox 与 QEMU 的对照
+
+| QEMU | frbox |
+|---|---|
+| `qemu-system-x86_64 -M pc` | `python -m frbox -M d300-b` |
+| `-kernel vmlinuz` | `-kernel B3000111.bin` |
+| `-S` | `-S` |
+| `-d in_asm,int -D log.txt` | `-d in_asm,int -D log.txt` |
+| `-monitor stdio` / `-serial stdio` | 同名 |
+| `savevm` / `loadvm` | 同名（自定义格式 `FRBOXSNP`） |
+| `info mtree` / `info registers` | 同名 |
+
+没有做的：gdbstub、多线程 TCG、设备热插拔。原因和取舍见 [`docs/03-frbox.md`](docs/03-frbox.md) §14。
 
 ---
 
 ## 解出来的东西（速查）
 
-完整版在 [`docs/01-architecture.md`](docs/01-architecture.md)，这里只列最常用的：
+完整版在 [`docs/01-architecture.md`](docs/01-architecture.md)，这里只列最常用的（B 段 CPU 地址）：
 
 ```
 B 段基址           0x00040000      固件 7 MB
 空闲任务           0x000407DC
-μITRON dispatch    0x00040668     服务号 = R12 的低 8 位（负数）
-中断向量表 TBR     0x000EFC00     向量 n 在 TBR + (255-n)*4  ← 倒序
-任务表             0x00054C10     28 条 × 0x1C
-flag 对象表        0x000551B0     17 条 × 16 B
+μITRON dispatch    0x00040668      服务号 = R12 的低 8 位（负数）
+中断向量表 TBR     0x000EFC00      向量 n 在 TBR + (255-n)*4  ← 倒序
+任务表             0x00054C10      28 条 × 0x1C
+flag 对象表        0x000551B0      17 条 × 16 B
 flag N 控制块      0x680008B8 + (N-1)*0x10    位模式在 +8
                    (flag 3 → 0x680008E0)
 心跳计数器         0x5C003034
@@ -90,73 +197,52 @@ B↔EXPEED 总线      位串行，不是显存
    心跳命令        0xA6，读 7 字节
 ```
 
-**别忘了**：上面这些是 **CPU 地址**，读固件文件时全部要减 `0x40000`。
+A 段（frbox 线）常用：
 
----
-
-## 快速开始
-
-```bash
-# 0. 解压大文件（反汇编 156 MB，超过 GitHub 单文件上限所以是压缩包）
-gunzip -k data/d300_b_full.asm.gz
-gunzip -k data/d300_full.asm.gz
-
-# 1. 拿到上游 NikonEmulator，把 drivers/ 下的文件放进对应包目录
-#    drivers/com/nikonhacker/emu/*.java              → src/main/com/nikonhacker/emu/
-#    drivers/com/nikonhacker/emu/memory/listener/fr/ → 同名目录
-
-# 2. 打上游补丁（5 处，必须打，否则跑不起来）
-#    见 patches/upstream-changes.md
-
-# 3. 编译
-bash tools/build_emu.sh
-
-# 4. 跑基线：显示管线全程 0 次绘制
-java -Xmx1g com.nikonhacker.emu.D300Draw B3000111.bin 20000000 0 draw0.out
-
-# 5. 补上 flag 3 bit4：管线跑通，绘制 7 个对象
-java -Xmx1g com.nikonhacker.emu.D300Draw B3000111.bin 20000000 10 draw10.out
-
-# 6. 不打补丁，只喂中断：管线自己前进三级
-java -Xmx1g com.nikonhacker.emu.D300Isr B3000111.bin 15000000 11 5000 isr11.out
-
-# 7. 覆盖率
-java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt cover0.bin
-python tools/analyze_cover.py d300_b_full.asm cover0.bin
+```
+启动链             0xFC000 → 0xF8010 → 0x80044 → 0x804FA(空 ret) → 0xFE426
+BSS 清零           0x80506         （0x3F000 → 0x4592C，6,731 字）
+任务表             0xFE00C         任务 1 入口 0x8133A
+TCB                0x45C38 起 4 个，步长 0x10，自引用空环
+中断回调槽         0x3F01C + (vec-0x10)*4
+时钟/复位组        0x482 / 0x483 / 0x484
+48 个 ICR          0x440–0x46F，级别 0x12–0x1F
 ```
 
-完整参数说明见 [`BUILD.md`](BUILD.md)。
-
 ---
 
-## 驱动清单（18 个）
+## 老线：NikonEmulator 驱动（18 个）
+
+```bash
+gunzip -k data/d300_b_full.asm.gz data/d300_full.asm.gz
+# 把 drivers/ 下的文件放进上游对应包目录，按 patches/upstream-changes.md 打 5 处补丁
+bash tools/build_emu.sh
+java -Xmx1g com.nikonhacker.emu.D300Draw B3000111.bin 20000000 10 draw10.out   # 补 bit4：绘制 7 个对象
+java -Xmx1g com.nikonhacker.emu.D300Isr  B3000111.bin 15000000 11 5000 isr11.out
+java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt cover0.bin
+```
 
 | 驱动 | 用途 |
 |---|---|
-| `D300Run` | 最小可跑骨架 |
-| `D300Full` | 带外设的完整建模 |
+| `D300Run` / `D300Full` | 最小骨架 / 带外设的完整建模 |
 | `D300Idle` | 越过空闲任务（修了 4 个缺陷才跑通） |
-| `D300Sys` | μITRON 系统调用采样 |
-| `D300UI` | 界面文字区访问追踪 |
-| `D300Write` | 内存写入追踪 |
-| `D300Go` | EXPEED 窗口录制 |
-| `D300Exp` | `0x7000` 窗口探针 |
-| `D300Stream` | 总线字节流 + 应答桩 |
-| `D300Key` | 按键中断注入 / 剂量曲线 |
-| `D300Press` | 完整按键链路注入 |
+| `D300Sys` / `D300Flag` | μITRON 系统调用 / 事件标志系统调用追踪 |
+| `D300UI` / `D300Write` | 界面文字区访问 / 内存写入追踪 |
+| `D300Go` / `D300Exp` / `D300Stream` | EXPEED 窗口录制 / `0x7000` 探针 / 总线字节流 |
+| `D300Key` / `D300Press` | 按键中断注入 / 完整按键链路 |
 | `D300Clock` | EXPEED 实时时钟应答模型（5 种模式） |
-| `D300Flag` | 事件标志系统调用追踪 |
 | `D300Draw` | ★ 显示管线驱动（mode 10 = 补 bit4） |
 | `D300Cover` | ★ 代码覆盖率位图 |
 | `D300Isr` | ★ 中断注入（11 种模式） |
-| `Expeed7000LogListener` | `0x7000` 窗口透传探针 |
-| `IoCensusListener` | I/O 普查 |
+| `Expeed7000LogListener` / `IoCensusListener` | `0x7000` 窗口透传 / I/O 普查 |
+
+参数说明见 [`BUILD.md`](BUILD.md)。
 
 ---
 
-## 报告索引（13 份）
+## 报告索引（19 份）
 
-按时间顺序，`docs/reports/` 下：
+01–13 是 NikonEmulator 线，14–19 是 frbox 线。
 
 | # | 文件 | 主题 |
 |---|---|---|
@@ -173,11 +259,21 @@ python tools/analyze_cover.py d300_b_full.asm cover0.bin
 | 11 | `11-itron-runtime-trace.html` | μITRON 运行时追踪 |
 | 12 | `12-ui-text-across-four-bodies.html` | 四机型界面文字对照 |
 | 13 | `13-cpu-architecture.html` | 处理器架构分析 |
+| 14 | `14-frbox-v2-hardening.html` | frbox V2：加固与真调用 |
+| 15 | `15-frbox-v3-interrupt-kernel.html` | frbox V3：中断、向量表与 μITRON 内核 |
+| 16 | `16-frbox-v4-full-system.html` | frbox V4：从函数级仿真到全系统模拟器 |
+| 17 | `17-frbox-v5-clock-snapshot.html` | frbox V5：`0x482` 的真身与整机快照 |
+| 18 | `18-frbox-v6-interrupt-system.html` | frbox V6：A 段中断系统全解与 48 向量注入 |
+| 19 | `19-frbox-v7-app-startup.html` | frbox V7：让 A 段应用区跑起来 |
 
 ---
 
-## 引用
+## 引用与合规
 
 如果你用到了这里的结论，请同时引用上游项目 NikonEmulator。
 
-`data/` 下的固件二进制是尼康公司的知识产权，放在这里只为了让分析过程可复现 —— 引用前请自行判断合规性。
+`emu/fr30.cpu` 与 `emu/fr30-opc.c` 取自 GNU binutils（GPLv3），只作为解码表输入，未做修改，
+许可见 [`emu/NOTICE.md`](emu/NOTICE.md)。
+
+`data/` 下的固件二进制是尼康公司的知识产权，放在这里只为了让分析过程可复现 ——
+引用前请自行判断合规性。
