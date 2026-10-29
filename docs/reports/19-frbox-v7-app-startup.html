@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V7 · 让 A 段应用区跑起来</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V7：把 A 段的应用区真正跑起来</h1>
+<div class="sub">D300 固件 A 段（<span class="mono">0x00080000</span> 起 524,290 字节）· 四处空桩的证据链 · 任务入口定位 · 手工启动任务后的应用区实测</div>
+
+<div class="kpis">
+  <div class="kpi"><b>4</b><span>版本一致的空桩</span></div>
+  <div class="kpi"><b>0x8133A</b><span>任务 1 的函数入口</span></div>
+  <div class="kpi"><b>500</b><span>应用区被执行到的 PC</span></div>
+  <div class="kpi"><b>120/120</b><span>自检通过</span></div>
+</div>
+
+<h2>一、先把结论摆出来</h2>
+
+<div class="card">
+<p>V6 说「内核对象建好了，缺的是启动调度器那一行」。这一版把那一行找到了，而且验证了它不是被改小、不是版本回退，而是<strong>从 1.02 起就一直是空的</strong>。同时做了一件此前没做过的事：<strong>跳过 REALOS，手工把任务的初始上下文造出来，让应用区跑起来</strong>——结果它真的活了。</p>
+<ul>
+<li><b>空桩确认</b>：复位链第三跳 <span class="mono">0x804FA</span> 与 main 的第二条 call <span class="mono">0x80520</span>，都是纯 <span class="mono">ret</span>，1.02 / 1.03 / 1.10 / 1.11 四个版本一字不差</li>
+<li><b>任务入口定位</b>：任务定义表在 <span class="mono">0xFE00C</span>，任务 1 的函数入口 = <span class="mono">0x0008133A</span>，第一句就是 <span class="mono">stm1 r12,r13</span> 的标准序言</li>
+<li><b>应用区是活的</b>：手工跳进去之后 1,981 步就走到第一个硬件等待，期间走出 500 个应用区 PC、发起 10 次 μITRON 服务、<strong>自己写入了 6 个中断回调槽</strong></li>
+<li><b>死锁的另一半通了</b>：应用区确实会填回调表——只要它跑起来。之前「应用不跑→回调全空→中断无效→应用不跑」的闭环，断点在「任务从未被 sta_tsk」</li>
+</ul>
+</div>
+
+<h2>二、空桩：不是版本差异，是设计如此</h2>
+
+<p>做法是从每个版本<em>自己的</em>复位入口解析 call 链，再反汇编目标处，这样地址不同也能对上。</p>
+
+<table>
+<tr><th>版本</th><th>复位段 call 链</th><th><span class="mono">0x804FA</span> 处字节</th><th>main 第二 call 目标</th></tr>
+<tr><td>1.02</td><td class="m">0xF8010 → 0x80044 → 0x804FA → jmp 0xFE426</td><td class="m">97 20（ret）</td><td class="m">0x80520 = ret</td></tr>
+<tr><td>1.03</td><td class="m">同上</td><td class="m">97 20（ret）</td><td class="m">0x80520 = ret</td></tr>
+<tr><td>1.10</td><td class="m">同上</td><td class="m">97 20（ret）</td><td class="m">0x80520 = ret</td></tr>
+<tr><td>1.11</td><td class="m">同上</td><td class="m">97 20（ret）</td><td class="m">0x80520 = ret</td></tr>
+</table>
+
+<p><span class="tag t-fix">纠正</span>之前的推测是「1.11 把这行改小了」。四个版本完全一致，这个推测可以撤掉。</p>
+
+<h3>main 的完整代码只有 5 条</h3>
+<pre>
+0x804EC  <span class="kv">; 前一个函数 0x804F0 的尾部</span>
+0x804F0  ldi:8 #0x80, r0
+0x804F2  ldi:20 0x240, r12
+0x804F6  ret:d            <span class="kv">; 延迟返回</span>
+0x804F8  stb r0,@r12      <span class="kv">; 延迟槽：写 0x240 = 0x80</span>
+0x804FA  ret              <span class="kv">★ 一条孤立的 ret —— 复位链第三跳的目标</span>
+0x804FC  st r1,@-r15      <span class="kv">; main 入口</span>
+0x804FE  call 0x80506     <span class="kv">; BSS 清零（33,666 条指令）</span>
+0x80500  call 0x80520     <span class="kv">★ 也是一条孤立的 ret</span>
+0x80502  ld @r15+,r1
+0x80504  ret
+0x80506  ldi:20 0x4592C,r5 / ldi:20 0x3F000,r4 / ldi:20 0x3F000,r0 / cmp ...
+0x80520  ret              <span class="kv">★ 空函数</span>
+0x80522  ldi:8 #0, r0      <span class="kv">; 真实代码从这里开始：清 0x420–0x425</span>
+         stb r0,@(0x420) … stb r0,@(0x425)
+</pre>
+
+<p>注意 <span class="mono">0x80520</span> 和 <span class="mono">0x80522</span> 的关系：<span class="mono">0x80520</span> 是 2 字节的 <span class="mono">ret</span>，<span class="mono">0x80522</span> 紧接着是一段独立的合法函数（把 6 个中断屏蔽字节写 0）。也就是说 <strong>main 的第二条 call 调用了一个空函数，而真正的初始化代码就在它后面两个字节，却没有任何调用者</strong>。</p>
+
+<p>还有一处同样形状：复位段之后 <span class="mono">0xFC030–0xFC03C</span> 是 <strong>7 条连续的空 <span class="mono">ret</span></strong>，直到 <span class="mono">0xFC03E</span> 才开始数据（一张 48 项的中断源序号表）。</p>
+
+<div class="note">
+<span class="tag t-old">口径</span>「空桩」只是描述形态：这些位置在二进制里确实只有一条 <span class="mono">ret</span>，没有内容。至于它们在生产固件里是否被填充过、填充了什么，本报告不做推断，也没有证据支持任何一种说法。
+</div>
+
+<h2>三、任务表与任务入口</h2>
+
+<p>任务定义表在 <span class="mono">0xFE00C</span>。已确认的字段形态是：条目里出现 <span class="mono">0x00010000</span> 这种「高 16 位为任务号」的字（<span class="mono">0x0001</span>、<span class="mono">0x0002</span> …），条目里还有指向 TCB 的指针。</p>
+
+<pre>
+0xFE000: 00000008 0004616C FFFFFFFF 000C001C   <span class="kv">; 0xFE000 是首字（步长信息）</span>
+0xFE010: 000459FC 00010004 00000000 80000000   <span class="kv">; 任务 1：属性 4</span>
+0xFE020: 0008133A 000462EC 00000000 00045A28   <span class="kv">; ★ 0x8133A 就是任务 1 的入口</span>
+0xFE030: 00020004 00000000 00000000 00089632   <span class="kv">; 任务 2：入口 0x89632</span>
+0xFE040: 00046404 00000000 00045A54 00030004   <span class="kv">; 任务 3</span>
+0xFE050: 00000000 00000000 0008B264 000464D8   <span class="kv">; 任务 4：入口 0x8B264</span>
+</pre>
+
+<p>TCB 区在 <span class="mono">0x45C38</span> 起每 16 字节一个，<span class="mono">+0xC</span> 回指 <span class="mono">0xFE184 / 0xFE194 / 0xFE1A4 / 0xFE1B4</span> 四个表项——V6 已实测确认这 4 个 TCB 都建好了、状态是 0（休眠）。</p>
+
+<h3>0x8133A 是一个完整的函数，不是数据</h3>
+<pre>
+0x81336  ret              <span class="kv">; ISR 的默认处理（空回调）</span>
+0x81338  bra -1           <span class="kv">; 停机占位 while(1);</span>
+0x8133A  stm1 r12,r13     <span class="kv">★ 任务 1 入口：标准函数序言</span>
+0x8133C  st r1,@-r15
+0x8133E  enter #2
+0x81340  mov r4,r8        <span class="kv">; 参数从 r4 进来</span>
+0x81342  ldi:20 0x3F0EA,r9 / mov r9,r0 / add 1,r0 / borl #8,@r0
+0x8134C  ldi:8 #0x10,r0 / cmp r0,r8 / bge +0x48
+0x81354  ldi:20 0x81302,r12 / call:d @r12
+</pre>
+
+<p><span class="mono">0x8133A</span> 正好压在「从未执行的应用区」边界上，而它前面两个字节就是 <span class="mono">bra -1</span> 停机点——这个位置关系本身就说明：<strong>这个地址是任务入口，停机点只是它前面的占位</strong>。</p>
+
+<h2>四、手工启动任务：应用区活了</h2>
+
+<p>做法：启动链先跑到 <span class="mono">0x80506</span>（BSS 清零入口，此时内核对象已建好），然后把 <span class="mono">PC</span> 直接设成 <span class="mono">0x8133A</span>、<span class="mono">r15</span> 设成复位入口给的用户栈 <span class="mono">0x4616C</span>、<span class="mono">r4</span>=0。</p>
+
+<table>
+<tr><th>指标</th><th>原始启动链</th><th>手工启动任务 1</th></tr>
+<tr><td>执行步数</td><td class="m">43,446（跑到 reti 弹出）</td><td class="m">1,981 就到第一个硬件等待</td></tr>
+<tr><td>不同 PC（总）</td><td class="m">824</td><td class="m">802（仅统计跳进去之后）</td></tr>
+<tr><td><span class="mono">0x81300</span> 以上应用区 PC</td><td class="m"><span class="tag t-fix">0</span></td><td class="m"><span class="tag t-ok">500</span></td></tr>
+<tr><td><span class="mono">int #0x40</span>（μITRON 服务）</td><td class="m">0 次</td><td class="m">10 次</td></tr>
+<tr><td><span class="mono">0x3F000</span> 中断回调槽被写</td><td class="m">0 个</td><td class="m">6 个</td></tr>
+<tr><td>PC 覆盖的 4KB 页</td><td class="m">0x80000 / 0xFE000</td><td class="m">0x81000 / 0x82000 / 0x88000 / 0xAD000 / 0xDC000 / 0xDD000 / 0xDE000 / 0xE2000 / 0xFE000</td></tr>
+</table>
+
+<p>对照组也做了：<strong>不铺垫</strong>（干净 ROM 直接跳任务入口）只有 207 个 PC、4 次服务、写 1 个槽，跑到 <span class="mono">0x0FECA0</span> 就散架。所以 <span class="mono">0x80506</span> 那次 BSS 清零是必要的——全局变量不清零，应用区走两步就踩垃圾。</p>
+
+<div class="note">
+<span class="tag t-old">规模参照</span>300 万步与 1,000 万步的结果<strong>完全相同</strong>（802 PC / 10 次服务 / 6 个槽）。说明任务 1 在 1,981 步之后就一直卡在同一个硬件等待里空转，不是「跑得慢」。
+</div>
+
+<h2>五、回调槽公式与五个真回调</h2>
+
+<p>48 个 ISR 各自读的回调槽，是<strong>严格线性</strong>排布的：</p>
+<pre>槽地址 = 0x3F01C + (vec - 0x10) × 4</pre>
+<p>逐个验证：vec <span class="mono">0x10</span>→<span class="mono">0x3F01C</span>、<span class="mono">0x11</span>→<span class="mono">0x3F020</span>、<span class="mono">0x12</span>→<span class="mono">0x3F024</span> … <span class="mono">0x24</span>→<span class="mono">0x3F078</span>、<span class="mono">0x2B</span> 例外读 <span class="mono">0x3F018</span>、<span class="mono">0x2F</span>→<span class="mono">0x3F09C</span>。</p>
+
+<p>任务 1 跑起来后被写入的 6 个：</p>
+
+<table>
+<tr><th>槽</th><th>对应向量</th><th>ISR 入口</th><th>状态</th></tr>
+<tr><td class="m">0x3F028</td><td class="m">vec 0x13</td><td class="m">0x080A54</td><td><span class="tag t-ok">已注册回调</span></td></tr>
+<tr><td class="m">0x3F040</td><td class="m">vec 0x19</td><td class="m">0x080B78</td><td><span class="tag t-ok">已注册回调</span></td></tr>
+<tr><td class="m">0x3F048</td><td class="m">vec 0x1B</td><td class="m">0x080BD4</td><td><span class="tag t-ok">已注册回调</span></td></tr>
+<tr><td class="m">0x3F078</td><td class="m">vec 0x24</td><td class="m">0x080DB2</td><td><span class="tag t-ok">已注册回调</span></td></tr>
+<tr><td class="m">0x3F0D4</td><td class="m">vec 0x3C</td><td class="m">0x0811D0</td><td><span class="tag t-ok">已注册回调</span></td></tr>
+<tr><td class="m">0x3F0EB</td><td class="m">—</td><td class="m">—</td><td><span class="tag t-old">不是槽</span> 非 4 字节对齐，是状态位</td></tr>
+</table>
+
+<p>这 5 个就是「A 段真正在乎的中断」。其余 34 个槽在任务 1 这条路径上仍为空。</p>
+
+<h2>六、0x3F01C 的真实回调：0xABFD8</h2>
+
+<p>写了个极简数据流扫描器（只维护「每个寄存器当前的立即数」），把整张回调表的<strong>写入值</strong>全部挖出来：19 个槽、81 条代码指针写入。<span class="mono">0x3F01C</span> 只有一处：</p>
+
+<pre>
+0xABCB0  int #0x40                     <span class="kv">; μITRON 服务</span>
+0xABCB2  ldi:20 0x43,r0 / borl #3,@r0
+0xABCB8  ld @(r15,r4), ...
+0xABCBC  ldi:8 #0xBD → extsb → int #0x40   <span class="kv">; 服务号 -67 = sys_chg_ilm（改中断级别掩码）</span>
+0xABCC0  ldi:20 0x40,r0 / bandl #0xE,@r0   <span class="kv">; 清中断标志</span>
+0xABCC6  ldi:20 0xABFD8,r0                 <span class="kv">; ★ 回调函数地址</span>
+0xABCCA  ldi:20 0x3F01C,r12 / st r0,@r12   <span class="kv">; 注册</span>
+0xABCD0  ldi:20 0x41,r0 / borl #1,@r0      <span class="kv">; 置使能位</span>
+</pre>
+
+<p>这就是一段<strong>带中断屏蔽的中断注册函数</strong>：关中断（<span class="mono">sys_chg_ilm</span>）→ 清标志 → 装回调 → 置使能 → 恢复。而 <span class="mono">0xABFD8</span> 本身第一件事就是把自己的槽清 0：</p>
+
+<pre>
+0xABFD8  st r1,@-r15
+0xABFDA  ldi:20 0x41,r0 / bandl #0xE,@r0   <span class="kv">; 清标志</span>
+0xABFE0  ldi:20 0x40,r0 / bandl #0xE,@r0   <span class="kv">; 清标志</span>
+0xABFE6  ldi:8 #0,r0
+0xABFE8  ldi:20 0x3F01C,r12 / st r0,@r12   <span class="kv">; ★ 自己把槽清 0 = 一次性回调</span>
+</pre>
+
+<p><span class="tag t-ok">顺带确认</span>服务号 <span class="mono">-67</span> = <span class="mono">sys_chg_ilm</span>（社区那份 REALOS 服务名表，A 段 20 处调用、B 段也有）。这也反过来说明 <span class="mono">0xAB000</span> 一带的代码是「应用层自己管中断」的逻辑。</p>
+
+<h3>A 段有 1,000 处 μITRON 服务调用，其中 108 处 sys_sta_tsk</h3>
+
+<p>静态扫 <span class="mono">int #0x40</span> 且 <span class="mono">R12</span> 可静态确定的调用点：</p>
+
+<table>
+<tr><th>服务</th><th>服务号</th><th>A 段调用数</th><th>B 段调用数</th></tr>
+<tr><td class="m">sys_sta_tsk</td><td class="m">-23</td><td class="m">108</td><td class="m">27</td></tr>
+<tr><td class="m">sys_ext_tsk</td><td class="m">-21</td><td class="m">14</td><td class="m">7</td></tr>
+<tr><td class="m">sys_chg_ilm</td><td class="m">-67</td><td class="m">20</td><td class="m">—</td></tr>
+<tr><td class="m">sys_set_flg</td><td class="m">-48</td><td class="m">213</td><td class="m">866</td></tr>
+<tr><td class="m">sys_wai_flg</td><td class="m">-46</td><td class="m">206</td><td class="m">158</td></tr>
+<tr><td class="m">合计（可静态确定的）</td><td class="m">—</td><td class="m">1,000</td><td class="m">2,282</td></tr>
+</table>
+
+<p><strong>108 处 <span class="mono">sys_sta_tsk</span>，启动链一处都没执行到</strong>——首处在 <span class="mono">0x81542</span>，就在应用区里。这和前面的结论完全吻合：任务启动动作写在应用层，而应用层从来没被拉起来。</p>
+
+<h2>七、卡点链：一个接一个的「置启动位 → 轮询就绪位」</h2>
+
+<p>任务 1 在 1,981 步后停下，停点是一段和 <span class="mono">0x80044</span> 等时钟就绪<strong>完全同构</strong>的代码：</p>
+
+<pre>
+卡点一  0x0DCD2C
+0x0DCD26  ldi:20 0x0AF,r0
+0x0DCD2A  borl #2,@r0        <span class="kv">; 置 [0x0AF] bit2 = 启动</span>
+0x0DCD2C  ldi:20 0x0AF,r0
+0x0DCD30  btsth #8,@r0        <span class="kv">; 测 bit7（掩码 8&lt;&lt;4 = 0x80）</span>
+0x0DCD32  beq -4              <span class="kv">; 不满足就回去</span>
+0x0DCD34  ldi:20 0x0AF,r0 / bandl #0xD / bandh #0x7   <span class="kv">; 软件自己清启动位</span>
+0x0DCD3C  ldi:20 0x14,r0 / btstl #1 …               <span class="kv">; 读结果状态</span>
+0x0DCD4C  ldi:20 0x06,r0 / btsth #2 / btsth #4       <span class="kv">; 更细的错误位</span>
+0x0DCD62  ldi:8 #5,r4
+0x0DCD64  ldi:20 0x15,r0 / borl #8,@r0               <span class="kv">; 置完成标志</span>
+</pre>
+
+<p><strong>bit2 = 启动、bit7 = 就绪</strong>——和 <span class="mono">0x80044</span> 那组（<span class="mono">0x482</span> bit3 启动 / bit7 就绪）属于同一类模式，只是启动位换了一位。实测佐证：卡住时 <span class="mono">0x0AF</span> 的影子值是 <span class="mono">0x02</span>，正好是 <span class="mono">borl #2</span> 置的那一位。</p>
+
+<p>给它补上 bit7 之后，任务 1 冲过去了，撞上第二个：</p>
+
+<pre>
+卡点二  0x09C97C
+0x09C974  borl #2,@0x174      <span class="kv">; 置启动</span>
+0x09C97A  btsth #4,@0x174     <span class="kv">; 测 bit6（掩码 4&lt;&lt;4 = 0x40）</span>
+0x09C97C  beq -4
+</pre>
+
+<p>从补上 bit7 到撞上它只用了 79 步。再补 bit6 之后又冲出 <strong>12,981 步</strong>，停在第三个 <span class="mono">0x0CE136</span>——形态一样（<span class="mono">borl #2,@r8</span> / <span class="mono">btsth #4,@r8</span>），但寄存器是运行时算出来的（<span class="mono">r8</span>），不是立即数。</p>
+
+<h3>自动卡点消除器</h3>
+
+<p>既然三处同构，就不该手工一个个填。写了个迭代器：</p>
+<ol>
+<li>连续 1,200 步里 PC 跨度 &lt; 64 且不同 PC ≤ 12 → 判定自旋</li>
+<li>在自旋窗口（<span class="mono">lo..hi</span>，不是固定 span）里反汇编，取 <span class="mono">btsth</span> 的 <span class="mono">u4</span> 得掩码 <span class="mono">u4&lt;&lt;4</span>，取窗口里第一个 <span class="mono">ldi</span> 的直接页地址得当寄存器</li>
+<li>把该寄存器影子值的对应位打开，记录一条，继续</li>
+</ol>
+
+<p>实测输出：</p>
+<pre>
+  #  循环起点    寄存器  等待位   首遇步数   第几次注入
+  1  0x0DCD2C  0x0AF   0x80    3,328      1
+  2  0x09C976  0x174   0x40    4,608      1
+  → 最终停 0x0CE136（第三处，寄存器在 r8 里，超出本方法识别范围）
+</pre>
+
+<div class="warnbox">
+<b>两个实现坑（都踩了）</b><br>
+① 自旋窗口起点不能向下多取整：<span class="mono">lo &amp; ~0x7</span> 从 <span class="mono">0x0DCD2C</span> 取到 <span class="mono">0x0DCD28</span>，那里是 <span class="mono">ldi</span> 立即数的第二个字节，解码全错位 → 只能 <span class="mono">lo &amp; ~1</span>。<br>
+② 解码范围必须用实际自旋的 <span class="mono">lo..hi</span>，不能用固定 <span class="mono">span=0x30</span>：那样会越过循环边界，把后面 <span class="mono">ldi 0x6</span> 当成轮询寄存器（表现是「它去轮询 0x006」）。
+</div>
+
+<div class="note">
+<span class="tag t-wn">方法边界</span>这个方法只处理「<span class="mono">btsth</span> 轮询直接页立即数」这一种形态。第三个卡点用 <span class="mono">r8</span> 动态寻址就抓不到；如果循环是 <span class="mono">ld + cmp + beq</span> 形态也抓不到。它的价值是把「已知同构模式」批量扫掉，不是万能。
+</div>
+
+<h2>八、这套东西现在怎么用</h2>
+
+<p>「手工启动任务」已固化进仿真台，两条命令都能复现本报告的全部数据：</p>
+
+<pre>
+<span class="kv"># 命令行</span>
+python -m frbox -M d300-a --task 0x8133A:0x4616C:0:0x80506 -c "cont 5000; info registers"
+
+<span class="kv"># monitor 里</span>
+boottask 0x8133A:0x4616C:0:0x80506
+cont 2000
+x/8i 0x0DCD2C
+</pre>
+
+<p><span class="mono">--task</span> 的参数是 <span class="mono">ENTRY[:SP[:ARG[:STOPPC]]]</span>：先跑到 <span class="mono">STOPPC</span>（做 BSS 清零），再把 <span class="mono">PC/SP/r4</span> 设好跳进去。<span class="mono">m.boot_task()</span> 返回三元组并留在 <span class="mono">machine.task_boot</span> 里。</p>
+
+<h2>九、回归与工具</h2>
+
+<table>
+<tr><th>项</th><th>结果</th></tr>
+<tr><td><span class="mono">frbox_selftest</span></td><td><span class="tag t-ok">120/120</span>（105 + 手工启动任务 15 条）</td></tr>
+<tr><td><span class="mono">fr_selftest</span></td><td><span class="tag t-ok">全部通过</span></td></tr>
+<tr><td>编码空间</td><td class="m">64,682 可解码 / 122 助记符 / 854 未定义编码（不变）</td></tr>
+<tr><td><span class="mono">exp_order</span></td><td class="m">552 / 608 / 596 / 664（不变）</td></tr>
+<tr><td>A 段基线</td><td class="m">43,446 步 / 824 PC / 0 次 int（不变）</td></tr>
+<tr><td>B 段基线</td><td class="m">191,518 步 / 1,239 PC（不变）</td></tr>
+</table>
+
+<p><b>新增/改动的代码</b>：</p>
+<ul>
+<li><span class="mono">frbox/machine.py</span>：加 <span class="mono">boot_task()</span> 与 <span class="mono">task_table()</span></li>
+<li><span class="mono">frbox/cli.py</span>：加 <span class="mono">--task</span>，版本升 0.7.0</li>
+<li><span class="mono">frbox/monitor.py</span>：加 <span class="mono">boottask</span> 命令</li>
+<li>新取证脚本：<span class="mono">exp_cbmap.py</span>（回调表写入值扫描）、<span class="mono">exp_sta_tsk.py</span>（服务调用点普查）、<span class="mono">exp_isrslot.py</span>（ISR→槽对照）、<span class="mono">exp_xver.py</span>（四版本复位链对照）、<span class="mono">exp_autospin.py</span>（自动卡点消除器）</li>
+</ul>
+
+<p class="kv">口径提示：V6 报的「187 次外设写 / 181 个寄存器」在 V7 变成「205 次」——差别来自时钟寄存器组 <span class="mono">0x480–0x48F</span> 现在走设备模型，写操作被记进设备而不只是影子存储。不是发现变多了。</p>
+
+<h2>十、下一步</h2>
+
+<ol>
+<li><b>把三个卡点做成真设备</b>：<span class="mono">0x0AF</span>（bit2 启动 / bit7 就绪）与 <span class="mono">0x174</span>（bit2 / bit6）的语义已经有实测支撑，可以照 <span class="mono">dev_clk.py</span> 的样子建模；第三个 <span class="mono">0x0CE136</span> 要先追清 <span class="mono">r8</span> 的来源。</li>
+<li><b>让 ISR 真正响一次</b>：现在 vec <span class="mono">0x13 / 0x19 / 0x1B / 0x24 / 0x3C</span> 已经有真实回调，注入这五个向量应该能看到 ISR <span class="mono">call @r0</span> 跳进应用区并执行实质逻辑——这是「中断驱动」第一次真正闭环的机会。</li>
+<li><b>找 sys_sta_tsk 的调用者</b>：108 处里首处 <span class="mono">0x81542</span>，看它是任务 1 自己调的（创建子任务）还是被别的路径调用。</li>
+<li><b>B 段同样的方法</b>：B 段有 27 处 <span class="mono">sys_sta_tsk</span>、2,282 处服务调用，规模更大；如果也能定位任务表入口，同样可以手工拉起。</li>
+</ol>
+
+<p class="kv" style="margin-top:36px">D300 仿真台 V7 · 2026-10-29 · 全部数字来自本机 frbox 0.7.0 实测</p>
+
+</div>
+</body>
+</html>
