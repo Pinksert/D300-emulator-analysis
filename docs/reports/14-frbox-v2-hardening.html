@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 固件仿真台 V2 · 加固与真调用报告</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V2：从「打桩跑窗口」到「真调用跑完整函数」</h1>
+<div class="sub">D300 固件函数级仿真台 · 加固报告 · 2026-10-29</div>
+
+<div class="card">
+<b>一句话</b>：这次没去挖新结论，而是先把<b>尺子校准</b>——修掉 7 处指令语义错误、补上 38 项自检、
+把 65536 个可能的 16 位编码逐个执行一遍，然后让仿真器<b>真的走进子程序</b>（连同 μITRON 服务调用），
+于是同一个函数从「17 步就退出」变成「664 步跑完、24 个调用节点、0 个打桩」。
+</div>
+
+<div class="kpis">
+<div class="kpi"><b>38/38</b><span>自检项全过</span></div>
+<div class="kpi"><b>100%</b><span>可解码编码全可执行</span></div>
+<div class="kpi"><b>664</b><span>步跑完整个函数</span></div>
+<div class="kpi"><b>0</b><span>子程序打桩数</span></div>
+</div>
+
+<h2>一、为什么先修尺子</h2>
+<p>上一版能得出"bit6 是新增开关"的结论，靠的是解出来的调用地址和位移表对得上。但那个自检只证明
+<b>取指和分支算对了</b>，不证明<b>算出来的数是对的</b>——寄存器值、标志位、负偏移寻址任何一处错了，
+分支就会走到别的路上，而位移自检照样通过。真调用之后这一点变得致命：走进去的每一层都依赖上一层算出来的参数。</p>
+
+<h2>二、修掉的 7 处语义错误</h2>
+<p>判据不是"我觉得"，而是三份可对照的源头：富士通 FR80 手册（<span class="mono">CM71-00104-3E</span>）、
+binutils 的 <span class="mono">fr30.cpu</span> 语义定义、以及 NikonEmulator 的 Java 实现（社区已在真机上验证过）。
+三份对得上才改。</p>
+
+<table>
+<tr><th>#</th><th>问题</th><th>旧实现</th><th>正确行为</th><th>影响面</th></tr>
+<tr><td>1</td><td>PS 寄存器位域</td><td class="m">CCR 0–3 / ILM 8–12 / SCR 16–23</td>
+<td class="m">CCR 0–5（C V Z N I S）/ SCR 8–10（T D0 D1）/ ILM 16–20</td>
+<td class="m">mov PS / st PS / reti 全错</td></tr>
+<tr><td>2</td><td>减法后的 C 标志</td><td>当"进位"算（a≥b 时置 1）</td><td>FR 的 C 是<b>借位</b>（a&lt;b 时置 1）</td>
+<td class="m">cmp 之后的 blt/bls/bhi 全反</td></tr>
+<tr><td>3</td><td>DIV0S</td><td class="m">D0←除数符号，MDL←除数</td>
+<td class="m">D0←<b>被除数</b>符号，D1←D0^除数符号，MDH←符号扩展，MDL 不动</td><td class="m">所有除法序列</td></tr>
+<tr><td>4</td><td>DIV1 / DIV2 / DIV3 / DIV4S</td><td><b>空操作</b>（只计数）</td>
+<td>逐步除法四步全实现（移位、试减、置商位、取反）</td>
+<td class="m">A 段 272 处 DIV1，B 段 2592 处</td></tr>
+<tr><td>5</td><td>@(disp,R14) 负偏移</td><td>当无符号处理</td><td>8 位<b>有符号</b>再按宽度缩放（×4 / ×2 / ×1）</td>
+<td class="m">局部变量、入参全走这条</td></tr>
+<tr><td>6</td><td>SUBN 后的标志位</td><td>跟着改 Z/N</td><td>N 后缀 = no flag，<b>一个标志都不动</b></td><td class="m">后续条件分支</td></tr>
+<tr><td>7</td><td>杂项</td><td class="m">AND/OR/EOR 不清 V；XCHB 冲掉高 24 位；st Rs2,@-R15 崩溃</td>
+<td class="m">逻辑运算清 V；XCHB 只换低字节；Rs2 形式单独处理</td><td class="m">—</td></tr>
+</table>
+
+<div class="note">第 3、4 条是这轮最有价值的发现：<b>旧版里所有除法都算错</b>，而且错得"很安静"——
+DIV1 是空操作，商永远等于被除数，程序不会崩，只会拿错数去做判断。</div>
+
+<h2>三、自检：不是"能跑通就算"</h2>
+<p>自检不手写机器码，而是<b>从指令表里反查编码</b>（穷举 65536 个字，找到"助记符 + 指定操作数"对应的那一串），
+再把编好的指令写进 ROM 让 CPU 真执行。这样测的是解释器，不是我的记忆。</p>
+
+<div class="card">
+<h3>除法：用编译器真的会生成的那条序列</h3>
+<pre>DIV0S R2 → DIV1 R2 ×32 → DIV2 R2 → DIV3 → DIV4S      ; 商在 MDL，余数在 MDH</pre>
+<p class="kv">9 组数：1000/7、−1000/7、1000/−7、−1000/−7、0x7FFFFFFF/3、−1/1、123456/−789、0/5、−2147483648/2。
+<b>18 个断言（每组商 + 余数）全部命中</b>，含向零截断和余数符号。</p>
+</div>
+
+<div class="card">
+<h3>其它 20 项</h3>
+<ul>
+<li>加法溢出：<span class="mono">0x7FFFFFFF+1</span> → 结果 <span class="mono">0x80000000</span>、V=1、N=1</li>
+<li>减法借位：<span class="mono">5−7</span> → C=1、N=1（修好第 2 条之前这里是 0）</li>
+<li>SUBN 结果对但不改 Z；AND 清 V 且置 Z</li>
+<li>LSL/LSR/ASR 各一组，含算术右移的符号位填充</li>
+<li><span class="mono">ld/st @(−4,R14)</span>：R14=0x00040000 时确实访问 0x0003FFFC（修好第 5 条之前访问的是 0x00040FFC）</li>
+<li>XCHB 后 R0 = <span class="mono">0x112233AA</span>（高 24 位保留）；LDI:8 #0xFF = 0x000000FF（无符号）</li>
+<li>PS 写入 <span class="mono">0x00050223</span> 能原样读回</li>
+</ul>
+</div>
+
+<h2>四、编码空间审计：65536 个字逐个执行</h2>
+<table>
+<tr><th>指标</th><th>结果</th><th>说明</th></tr>
+<tr><td>16 位指令</td><td class="m">64298</td><td rowspan="2">三种长度合计 <b>64634</b> 个编码可解码，全部单步执行无异常</td></tr>
+<tr><td>32 位 / 48 位首字</td><td class="m">320 / 16</td></tr>
+<tr><td>未定义编码</td><td class="m">902</td><td>16 / 32 / 48 位三种长度下都解不出来</td></tr>
+<tr><td>可执行率</td><td class="m"><span class="tag t-ok">64634 / 100.00%</span></td><td>对"可解码的编码"而言；未实现 0、异常 0</td></tr>
+<tr><td>覆盖助记符</td><td class="m">119 种</td><td>与全镜像里出现的助记符种类一致</td></tr>
+</table>
+<p class="kv">这个审计的价值在于"穷举"：不用猜固件里会不会用到某条指令，直接问"这个编码能不能执行"。
+<span class="mono">902</span> 个未定义编码集中在 <span class="mono">0x0720–0x077F</span>、<span class="mono">0x9Fxx</span> 等 FR30 的保留区，
+固件的正常代码路径上没碰到过。</p>
+
+<h3>顺手和 Java 实现逐编码对了一遍</h3>
+<p>把 NikonEmulator 的 <span class="mono">FrInstructionSet.java</span> 里 223 条"基址 + 掩码 → 助记符"表拉出来，
+和我的解码器对 65536 个编码逐个比较：1172 个不一致，逐类查过之后<b>没有发现真分歧</b>——</p>
+<ul>
+<li><b>Java 那边没收录</b>：<span class="mono">LDRES / STRES</span>（Java 源码里注掉了）、部分 <span class="mono">MOV</span> 形式；</li>
+<li><b>我喂的数据不够长</b>：比较时只给 2 个字节，<span class="mono">LDI:20</span>（4 字节）和 <span class="mono">LDI:32</span>（6 字节）自然解不出来；</li>
+<li><b>只剩一族真差异</b>：Java 有 <span class="mono">SRCH0 / SRCH1 / SRCHC</span>（<span class="mono">0x97C0/97D0/97E0</span>），binutils 的 FR30 表里没有。
+A 段里这三个编码共出现 3 次，逐一看过——<b>全部落在 <span class="mono">ldi:20</span> 的立即数里</b>，不是指令。</li>
+</ul>
+<div class="note">另外一个小差异：对"专用寄存器编号 6–15（未定义）"的 <span class="mono">mov</span>，我这边仍会解码，Java 会拒。
+固件的编译器不会生成这种编码，不影响结果。</div>
+
+<h2>五、μITRON 层：不再死在 int #0x40</h2>
+<p>D300 的 A 固件用 <span class="mono">INT #0x40</span> 进 Softune REALOS/FR 内核，服务号放在 R12 的低 8 位（负数）。
+以前一碰到它就停；现在接了社区仓库里那份 58 条的服务号 → 函数名映射，按"返回 E_OK"处理，并把每次服务调用记进调用树。</p>
+<p class="kv">于是能看到这段代码在等什么：<span class="mono">sys_clr_flg</span>（清标志）、
+<span class="mono">sys_wai_flg</span>（等标志，对象在 <span class="mono">0x3F820</span>）、<span class="mono">sys_sta_tsk</span>（起任务）。</p>
+
+<h2>六、真调用能走多深</h2>
+<p>先纠正一个前提：<span class="mono">0x000DB8F0</span> 只是窗口起点，不是函数入口。真正的入口是
+<span class="mono">0x000DB8EA</span>——它的前两条是 <span class="mono">ld r8,@R15+</span>（从调用者栈上取第 5 个参数）
+加标准序言 <span class="mono">stm1 / st RP / enter</span>。从入口跑，函数才能正确 <span class="mono">ret</span> 回哨兵地址。</p>
+
+<table>
+<tr><th>版本</th><th>0x3F81C</th><th>步数</th><th>不同指令地址</th><th>调用节点</th><th>服务调用</th><th>打桩</th><th>退出原因</th></tr>
+<tr><td>1.10</td><td class="m">0x00</td><td class="m">552</td><td class="m">513</td><td class="m">21</td><td class="m">2</td><td class="m">0</td><td>顶层返回</td></tr>
+<tr><td>1.10</td><td class="m">0x40</td><td class="m">608</td><td class="m">569</td><td class="m">23</td><td class="m">4</td><td class="m">0</td><td>顶层返回</td></tr>
+<tr><td>1.11</td><td class="m">0x00</td><td class="m">596</td><td class="m">518</td><td class="m">22</td><td class="m">2</td><td class="m">0</td><td>顶层返回</td></tr>
+<tr><td>1.11</td><td class="m">0x40</td><td class="m">664</td><td class="m">586</td><td class="m">24</td><td class="m">4</td><td class="m">0</td><td>顶层返回</td></tr>
+</table>
+
+<h3>1.11、bit6 = 1 时的调用树（节选，缩进表示嵌套）</h3>
+<pre>0x000F1158  &lt;- 0x000DB93C   r0=0x44AA              ; 写行程常量
+  0x000DB9EC &lt;- 0x000DB940
+    sys_clr_flg
+    sys_wai_flg                            ; 等标志对象 0x3F820
+0x000E1F84  &lt;- 0x000DB948
+  0x000E217C &lt;- 0x000E1F9A
+    0x000F1158
+    sys_clr_flg
+  0x000E25D0 &lt;- 0x000E213A
+0x000F1158  &lt;- 0x000DB964
+0x000C0D9E  &lt;- 0x000DB9CA   r0=0x3FAF1   ← 从这里开始被挪到后面
+0x000C0E02  &lt;- 0x000DB9D0   r0=0x00000000
+  0x000D981A / 0x000D658A / 0x000D682A …
+0x000DCD70  &lt;- 0x000DB9DC
+0x0008CA0E  &lt;- 0x000DB9E4
+  sys_sta_tsk                            ; 起任务</pre>
+
+<h2>七、回归：之前的结论没有被推翻</h2>
+<p>修了 7 处语义之后，把 <span class="mono">0x3F81C</span> 的 256 种取值重跑一遍：</p>
+<ul>
+<li><b>1.10 仍然是 2 种走向</b>，只由 bit3 决定（<span class="mono">0x44AA</span> / <span class="mono">0x4631</span>，bit3=1 时多两次 <span class="mono">0xF1100(0x46D)</span>）</li>
+<li><b>1.11 仍然是 4 种走向</b>，由 bit3 × bit6 共同决定</li>
+<li>三个行程常量 7812 / 17578 / 17969 两版一致——"1.11 改的是调用时机不是行程参数"这个结论站得住</li>
+</ul>
+<div class="note">唯一被推翻的是<b>措辞</b>：不能写"带着 0x3FAF1 去调用"。
+真调用证实 <span class="mono">0x3FAF1</span> 只是上一条 <span class="mono">borl #0x2,@r0</span> 残留的指针，
+<span class="mono">0xC0D9E</span> 的头两条 <span class="mono">ldi #0x3FAE9,r4</span> 和 <span class="mono">ldub</span> 就把它盖掉了；
+连 <span class="mono">0xC0E02</span> 都不读 r0（它自己第 4 条就 <span class="mono">ldi:8 #0,r0</span>）。这一点与第二层报告的修订一致。</div>
+
+<h2>八、还没做的（别当成"已经能跑固件"）</h2>
+<div class="warnbox">
+<ul>
+<li><b>没有外设</b>：0x00000000–0x00000FFF 读恒 0、写丢弃。镜头通信、定时器、串口都没建模，所以任何依赖硬件的状态机只能走到"永远读到 0"这一支。</li>
+<li><b>没有中断控制器</b>：只做了 <span class="mono">int #0x40</span> 的陷阱式服务调用，硬件中断（IRQ）不进。</li>
+<li><b>902 个未定义编码</b>没有逐个判定归属（这轮只确认了"固件正常代码路径上没遇到"）。真遇到时解释器会明确报"无法解码 @地址"，不会静默算错。</li>
+<li><b>调用深度上限 5</b>、单次 50 万步；超出就退化成打桩并记账。</li>
+<li>上次结论的边界仍然成立：<b>0x3FAE9 那个 bit5 被谁消费，还没跟</b>。</li>
+</ul>
+</div>
+
+<h2>九、脚本清单</h2>
+<table>
+<tr><th>文件</th><th>作用</th></tr>
+<tr><td class="m">fr_emu.py</td><td>FR 指令解释器（解码表来自 fr30.cpu / fr30-opc.c，语义本轮大修）</td></tr>
+<tr><td class="m">fr_selftest.py</td><td>38 项自检；编码用穷举反查，除法用真实序列</td></tr>
+<tr><td class="m">fr_cover.py</td><td>65536 个编码逐个执行，统计可执行率/未实现/异常</td></tr>
+<tr><td class="m">fr_run.py</td><td>真调用运行器：调用树、深度上限、死循环逃生、写入记账</td></tr>
+<tr><td class="m">fr_itron.py</td><td>μITRON 服务层（58 条服务名，返回 E_OK）</td></tr>
+<tr><td class="m">exp_order.py</td><td>1.10 / 1.11 × bit6 四组对照，按时间顺序打印写入</td></tr>
+<tr><td class="m">audit_ops.py / sweep.py / exp_111.py</td><td>助记符分布审计、全取值扫描、第一版窗口实验（保留做回归）</td></tr>
+</table>
+<p class="kv">全部在 <span class="mono">.workbuddy/tmp/</span>，Python 3.13，无第三方依赖。</p>
+
+</div>
+</body>
+</html>
