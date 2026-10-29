@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V4 · 从函数级仿真到全系统模拟器</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V4：把「能跑一个函数」做成「一台机器」</h1>
+<div class="sub">D300 固件全系统模拟器 frbox 0.4 · 2026-10-29</div>
+
+<div class="card">
+<b>一句话</b>：前三版解决的是「CPU 算得对不对」，这一版解决的是「机器装不装得起来」。
+新增 13 个文件、约 2,072 行，把单个 CPU 核心包成<b>地址空间 + 设备 + 中断控制器 + 机器 + monitor + 启动参数</b>六层，
+命令行对齐 QEMU 的肌肉记忆（<span class="mono">-M / -kernel / -S / -d / -D / -c</span>）。<br><br>
+装上之后立刻发现自己缺东西：<b>两台机器都跑不到 200 万步</b>，但卡点不是「CPU 不会算」，而是
+<b>固件在等外设、在等任务</b>。这一版把这两个卡点定位到了具体指令、具体寄存器位。
+</div>
+
+<div class="kpis">
+<div class="kpi"><b>2</b><span>独立机器（A 段 / B 段）</span></div>
+<div class="kpi"><b>65/65</b><span>frbox 自检断言</span></div>
+<div class="kpi"><b>2072</b><span>新增代码行数</span></div>
+<div class="kpi"><b>191,518</b><span>B 段跑到的最远步数</span></div>
+</div>
+
+<h2>一、分层：每个模块对应 QEMU 的哪一块</h2>
+
+<table>
+<tr><th style="width:22%">frbox</th><th style="width:26%">QEMU 对应物</th><th>这一层负责什么</th></tr>
+<tr><td class="m">bus.py</td><td>AddressSpace / MemoryRegion</td><td>ROM、RAM、外设三类区域按地址分派；跨区访问拆成字节；<b>未映射访问逐地址记账</b></td></tr>
+<tr><td class="m">device.py</td><td>DeviceState + qdev</td><td>设备基类；<span class="mono">DirectPage</span> 把 0x0000–0x0FFF 整段占住再按偏移分派给具体设备</td></tr>
+<tr><td class="m">icu.py</td><td>InterruptController</td><td>设备中断线 → 向量号 → CPU 的 <span class="mono">request_irq()</span>；绑定表可配</td></tr>
+<tr><td class="m">dev_serial.py</td><td>16550 / pl011 之类</td><td>FR 串口：0x60 状态、0x61 发送、0x62 接收、0x63 控制</td></tr>
+<tr><td class="m">dev_timer.py</td><td>ARM SP804</td><td>重载定时器：计数、下溢、可选中断；给固件一个真时间源</td></tr>
+<tr><td class="m">machine.py</td><td>MachineClass</td><td>内存映射、复位向量、固件加载与 CRC 校验、运行循环、<b>自旋检测</b></td></tr>
+<tr><td class="m">monitor.py</td><td>HMP（monitor 命令行）</td><td><span class="mono">info / x / step / cont / bp / irq / poke / latch / audit</span></td></tr>
+<tr><td class="m">cli.py</td><td>qemu-system-*</td><td>启动参数解析</td></tr>
+<tr><td class="m">trace.py</td><td>-d / -D</td><td>日志分类：in_asm / exec / int / dev / unimp / svc / guest</td></tr>
+</table>
+
+<div class="note">
+CPU 核心没有改：<span class="mono">fr_emu.Fr</span> 只依赖「有 <span class="mono">rd/wr</span> 的对象」，
+所以把 <span class="mono">Mem</span> 换成 <span class="mono">AddressSpace</span> 之后一行都不用动。
+旧的 <span class="mono">exp_*.py</span> 也照旧能跑，因为新总线补齐了 <span class="mono">load_rom / io_value / io_reads / all_writes</span> 这些字段。
+</div>
+
+<h2>二、命令行：和 QEMU 并排看</h2>
+
+<pre>QEMU                                frbox
+qemu-system-x86_64 -M pc            python -m frbox -M d300-b
+-kernel vmlinuz                     -kernel B3000111.bin
+-S（启动即暂停）                      -S
+-d in_asm,int -D log.txt            -d in_asm,int -D log.txt
+-monitor stdio                      -monitor stdio
+-serial stdio                       -serial stdio（默认，串口字节直接打到终端）
+（无对应物）                          --poke 0x482=0x88
+（无对应物）                          --latch 0x482=0x88:2
+（无对应物）                          --itron   挂表驱动 μITRON 层，INT #0x40 立即返回</pre>
+
+<p class="kv">实际用法举例：</p>
+<pre># 看内存映射和未映射访问审计
+python -m frbox -M d300-b -c "info mtree; audit; dev"
+
+# 停在 monitor 里手动调
+python -m frbox -M d300-a -S
+(frbox) x/16x 0x00080000
+(frbox) x/12i 0x000FC000
+(frbox) bp 0x0008007C
+(frbox) cont 400000
+(frbox) info registers</pre>
+
+<h2>三、两台机器：内存映射从哪来</h2>
+
+<p>D300 不是一个 CPU 加一份固件，而是至少 A（IO 协处理）+ B（主控）两套独立子系统，各有自己的固件、
+自己的向量表、自己的 RAM。所以建的是<b>两台机器</b>，而不是一台机器两个核。</p>
+
+<table>
+<tr><th style="width:14%">机器</th><th>ROM</th><th>RAM</th><th>TBR</th><th>复位入口</th></tr>
+<tr><td class="m">d300-a</td><td class="m">0x00080000 + 524290 字节<br><span class="kv">（A3000111.bin 全长，含末 2 字节 CRC）</span></td>
+    <td class="m">0x00001000–0x0007FFFF<br><span class="kv">520,192 字节</span></td><td class="m">0x000FFC00</td><td class="m">0x000FC000</td></tr>
+<tr><td class="m">d300-b</td><td class="m">0x00040000 + 7,340,032 字节<br><span class="kv">（B3000111.bin 全长）</span></td>
+    <td class="m">0x00001000–0x0003FFFF<br><span class="kv">258,048 字节</span> + <b>0x9F580000 起 1MB</b></td>
+    <td class="m">0x000EFC00</td><td class="m">0x00040000</td></tr>
+</table>
+
+<p class="kv">每条数字的来源都不是猜的，是固件自己的行为：ROM 基址与长度 = 镜像文件大小；TBR = 向量表所在
+（A 段槽 0x000FFFFC 读到 0x000FC000、B 段槽 0x000EFFFC 读到 0x00040000）；RAM 上界 = 固件真正写过的高地址。</p>
+
+<h3>B 段那块 1MB「新 RAM」是怎么发现的</h3>
+
+<p>第一轮跑 B 段时，总线上出现 <b>59,183 次写入无处可去</b>。按 4KB 页汇总一看，写集中在两处：
+<code>0x9F58C000</code> 起 1307 次、<code>0x9F5AA000–0x9F5AF000</code> 五页共 5120 次（步长 4）。</p>
+
+<p>这不像「未映射」，更像把 0x9F58xxxx 当 RAM 在用 —— 而且早先静态分析里，串口 ISR 读
+<code>0x9F58DA86</code>、EXT9 ISR 读 <code>0x9F58DA85</code>，正好落在同一片。于是把
+<code>0x9F580000</code> 起 1MB 映射成第二块 RAM，未映射写从 <b>59,183 次降到 3,868 次</b>：</p>
+
+<table>
+<tr><th>指标</th><th>补之前</th><th>补之后</th></tr>
+<tr><td>未映射写次数</td><td class="m">59,183</td><td class="m">3,868</td></tr>
+<tr><td>未映射写地址数</td><td class="m">58,483</td><td class="m">3,868</td></tr>
+<tr><td>剩余写落在</td><td class="m">0x9F58C000 一带、0x68000000 一带</td><td class="m">0x68000000 一带 3,743 次（96.7%）<br>其余 125 次散在 27 个页</td></tr>
+</table>
+
+<p class="kv">那 125 次散落的写值得单独说一句：主要在 0x4000D000（12 次）、0x50000000（26 次）、
+0x40060000–0x401F0000 之间（约 70 次，横跨 2MB）、0x9F800000（4 次）。
+0x40000000 起那 2MB 窗口像是某种「别名窗口」（写进去不报错、读回来也不影响流程），
+没有文档就只能记成痕迹，不能当 RAM 用。</p>
+
+<div class="note">
+顺带确认了一件事：<b>0x9F58xxxx 是主控的数据 RAM，不是外设</b>。这也解释了为什么早先的 ISR 实验里
+<code>ldub @0x9F58DA86</code> 一直读到 0 —— 那块 RAM 当时根本不存在，读的是「未映射」。
+</div>
+
+<h3>还没建模、但有痕迹的窗口</h3>
+
+<table>
+<tr><th style="width:18%">窗口</th><th>看到什么</th><th style="width:16%">判断</th></tr>
+<tr><td class="m">0x50000000</td><td>复位后第 3 条就是向 0x50000000 写 1；随后读 0x50000001、0x50000008</td><td>外设，语义不明</td></tr>
+<tr><td class="m">0x68000000</td><td>读 0x68000004 / 0x68000174 / 0x68000618；写 3,048 个地址，多为字节</td><td>外设，像寄存器块</td></tr>
+<tr><td class="m">0x4000D000</td><td>写 0x4000D210 / 0x4000D240 / 0x4000D310…，0x0 与 0x8 交替</td><td>外设，像通道使能</td></tr>
+</table>
+
+<p class="kv">这三处没去猜语义（猜了就成假数据），只在 <span class="mono">Machine.known_windows</span> 里登记成
+「已知但未建模」，报告里能一眼区分「不知道」和「没想到」。</p>
+
+<h2>四、启动诊断：四组实测</h2>
+
+<p>判定「跑不下去」分三种形态，必须分开记：<b>停机</b>（CPU 自己 halt）、<b>起飞</b>（PC 离开 ROM 区）、
+<b>自旋</b>（连续 20 万步都在同一 4KB 窗口里）。</p>
+
+<table>
+<tr><th style="width:30%">场景</th><th>结果</th><th>步数</th><th>触碰 PC</th></tr>
+<tr><td>A 段 · 原样</td><td><span class="tag t-wn">自旋</span>0x0008007C 反复 <span class="mono">btsth #8,@r0</span>（r0=0x482）</td><td class="m">200,142<br><span class="kv">其中 200,000 是空转</span></td><td class="m">61</td></tr>
+<tr><td>A 段 · 给 0x482 加握手</td><td><span class="tag t-fix">起飞</span>0x000FE50C <span class="mono">reti</span> → PC=0</td><td class="m">41,565</td><td class="m">824</td></tr>
+<tr><td>B 段 · 原样</td><td><span class="tag t-fix">起飞</span>0x000407D8 <span class="mono">reti</span> → PC=0</td><td class="m">191,518</td><td class="m">1,239</td></tr>
+<tr><td>B 段 · 内核走真代码 + μITRON 半主机</td><td><span class="tag t-fix">起飞</span>同样在 0x000407D8</td><td class="m">191,457</td><td class="m">1,178</td></tr>
+</table>
+
+<h3>4.1 A 段：它在等一个握手位</h3>
+
+<p>卡点只有三条指令，全在 ROM 最前面：</p>
+
+<pre>0x00080078: ldi:20 #0x482, r0        ; r0 = 直接页 0x482
+0x0008007C: btsth  #8, @r0           ; 测 (0x482 & 0x80)
+0x0008007E: beq    0x00080078        ; 零 → 跳回去再测</pre>
+
+<div class="warnbox">
+<b>位掩码这里容易搞错</b>：<span class="mono">btsth #8</span> 不是「测 bit0」，也不是「测 bit3」，
+而是<b>把 4 位立即数当高半字节</b> —— 掩码 = 8 &lt;&lt; 4 = <b>0x80</b>。
+所以它等的是 0x482 的 <b>bit7</b>。这一位我是从 <span class="mono">fr30.cpu</span> 里
+<span class="mono">(sll QI u4 (const 4))</span> 核对的，不是靠猜；改之前我先试过打 0x08，纹丝不动，正是这个原因。
+</div>
+
+<p>而固件自己在进入这个循环之前，已经把 0x482 写成了 <b>0x08</b>（就在 0x80044 那一段里）。
+所以它是在「我先报个到，等你把 bit7 举起来」—— 典型的跨芯片握手。0x482 是直接页寄存器，
+谁来回这一位在我们的模型里是空的，所以只能空转。</p>
+
+<p>用 <code>--latch 0x482=0x88:2</code>（第 2 次读之后返回 0x88）假装对方举手，A 段立刻往下走了
+<b>41,565 步</b>、碰到 <b>824 个不同 PC</b>，然后在 <code>0x000FE50C</code> 的 <code>reti</code> 处把 PC 恢复成 0。</p>
+
+<h3>4.2 B 段：跑到 191,518 步，卡在一次上下文恢复</h3>
+
+<p>B 段的路更长：先做了大段结构体初始化（能看到 12 字节步长的填充循环），执行了一次
+<code>int #0x40</code>（服务号 R12 = 0xAD，即 −83，社区表里是 <span class="mono">sys_set_tim</span>），
+进入内核窗口 0x406xx，最后停在 0x407D8 的 <code>reti</code>。收尾这几条长这样：</p>
+
+<pre>0x000407CC: ld    RP,@r15+          ; 弹返回地址进 RP
+0x000407D2: ldm0  {r8..r15}         ; 批量弹寄存器
+0x000407D4: ldm1  {r0..r7,r12..r15}
+0x000407D6: andccr #0xDF            ; 清 S 位 → 切回系统栈
+0x000407D8: reti                    ; 弹 PC 与 PS</pre>
+
+<div class="card">
+<b>先排除「是不是解释器算错了」</b>：我在 <code>reti</code> 之前直接把栈读出来看 ——
+B 段 r15 = <code>0x00008448</code>，栈顶 8 个字<b>全是 0</b>；A 段 r15 = <code>0x000461B4</code>，
+栈顶 8 个字<b>也全是 0</b>。也就是说 <code>reti</code> 读到的「返回地址」就是 0，
+CPU 老老实实跳到 0，没有算错。<b>是栈上那个上下文帧本来就是空的。</b>
+</div>
+
+<p>两台机器的形态完全一样：都是「清 S 位 → 批量弹寄存器 → reti」，都发生在各自的内核窗口里
+（A 0xFE3xx–0xFE5xx，B 0x406xx–0x407xx），都是把 0 弹进了 PC。这不是两个 bug，是同一个：<b>第一次任务上下文恢复时，
+被恢复的那份上下文是空的</b>。半主机模式（<code>--itron</code>）下结果一模一样，也说明不是内核代码本身跑歪，
+而是它要去恢复的东西不存在。</p>
+
+<h2>五、这一版新增的两个调试手段</h2>
+
+<table>
+<tr><th style="width:24%">命令</th><th>作用</th><th>为什么需要</th></tr>
+<tr><td class="m">--poke ADDR=VAL[:SIZE]</td><td>复位后往任意地址写值，未建模寄存器也有影子存储接着</td><td>模拟「上电时某个外设已经是某个状态」</td></tr>
+<tr><td class="m">--latch ADDR=VAL[:N]</td><td>该地址第 N 次读之后返回 VAL</td><td>静态打值会被固件自己覆盖（0x482 就被写成 0x08），握手必须能「过几拍再响应」</td></tr>
+<tr><td class="m">audit</td><td>未映射访问按 4KB 页汇总，带页码与样例地址</td><td>就是它把 0x9F58xxxx 那片 RAM 找出来的</td></tr>
+<tr><td class="m">自旋检测</td><td>连续 20 万步不出某个 4KB 窗口就停下并报告</td><td>否则「等外设」和「真在算」看起来一样，都是满速跑</td></tr>
+</table>
+
+<h2>六、设备模型的可信度分级</h2>
+
+<p>这部分必须说清楚，免得把推断当实测：</p>
+
+<table>
+<tr><th style="width:18%">设备</th><th style="width:14%">可信度</th><th>依据 / 缺口</th></tr>
+<tr><td>串口</td><td><span class="tag t-ok">有实证</span></td>
+    <td>ISR 在 0x0012FDB4：读 0x60，<code>(值 &amp; 0xE0)==0</code> 直接返回，否则读 0x62 并
+    <code>set_flg(3,0x20)</code>。<b>掩码 0xE0 是实测</b>，三个位各自叫什么（ORE/RDRF/TDRE）是推断</td></tr>
+<tr><td>中断控制器</td><td><span class="tag t-ok">有实证</span></td>
+    <td>只绑两条：线 0x1B → 串口 ISR、线 0x20 → EXT9 ISR，都是从向量表读出来的。其余不猜</td></tr>
+<tr><td>重载定时器</td><td><span class="tag t-wn">推断</span></td>
+    <td>D300 固件里没能把某条向量反查到「这是定时器」，所以默认<b>不绑向量</b>；
+    寄存器布局按 FR 系列常见重载定时器摆，只当时间源用</td></tr>
+<tr><td>直接页其余地址</td><td><span class="tag t-old">影子</span></td>
+    <td>读回上次写入的值、默认 0；B 段一共摸过 52 个这样的寄存器，最热是 0x042/0x043/0x03A/0x03B（各 7–8 次）</td></tr>
+<tr><td>0x50000000 / 0x68000000 / 0x4000D000</td><td><span class="tag t-fix">空白</span></td>
+    <td>读返回 0、写丢弃，但逐地址记账；没有语义就去猜等于造假数据</td></tr>
+</table>
+
+<h2>七、性能与回归</h2>
+
+<table>
+<tr><th>项</th><th>数字</th><th>说明</th></tr>
+<tr><td>执行速度</td><td class="m">30k–43k 步/秒</td><td>纯 Python 解释器；内存访问加了区域查找缓存</td></tr>
+<tr><td>frbox 自检</td><td class="m">65 / 65 通过</td><td>总线 15 条、设备 20 条、EIT 10 条、机器 13 条、自旋 2 条、monitor 8 条、CLI 4 条</td></tr>
+<tr><td>CPU 自检（旧）</td><td class="m">54 / 54 通过</td><td>本轮改了 <span class="mono">btsth</span> 的 N 位（掩码结果带 bit7 时才置 N），未破坏任何旧断言</td></tr>
+<tr><td>编码空间</td><td class="m">64,682 可解码全可执行</td><td>122 种助记符，854 个未定义编码（固件未出现）</td></tr>
+<tr><td>1.11 光圈实验</td><td class="m">552 / 608 / 596 / 664</td><td>步数与上一轮完全一致，结论没被推翻</td></tr>
+</table>
+
+<h2>八、跑不起来的三件事（按重要性）</h2>
+
+<h3>1. 任务上下文是空的</h3>
+<p>两台机器都停在「第一次任务上下文恢复」。μITRON 服务只观察到 1 次调用（<span class="mono">sys_set_tim</span>），
+没有 <span class="mono">cre_tsk / sta_tsk</span>。要么任务创建走的是不经过 <code>int #0x40</code> 的内部路径（那就是我们还没跟到的代码），
+要么任务控制块建在我们没建模的地方。下一步应该绕着「谁写 TCB」而不是「谁恢复 TCB」去查。</p>
+
+<h3>2. A 段等的那一位没人举</h3>
+<p>0x482 的 bit7。这一位要么由 B 段写（跨芯片握手），要么由某个外部芯片写。要判是哪种，
+得把两台机器放进<b>同一个地址空间</b>跑，让 B 真的去写 A 的 0x482 —— 也就是把「双机」做成一台真正的异构机器。</p>
+
+<h3>3. 三处外设窗口语义空白</h3>
+<p>0x50000000 / 0x68000000 / 0x4000D000。它们都不在固件的 RAM 或 ROM 里，只能是外设。
+没有厂商文档或示波器就推不出来，我不打算猜。</p>
+
+<h2>九、下一步的优先级建议</h2>
+
+<table>
+<tr><th style="width:8%">顺位</th><th style="width:34%">做什么</th><th>为什么值得做</th></tr>
+<tr><td>1</td><td>双机互联：把 A、B 放进同一台机器，共享一段邮箱 RAM</td><td>直接验证「0x482 是不是 B 写的」。这也是唯一能让 A 段继续往下走的办法</td></tr>
+<tr><td>2</td><td>反向追 TCB：在 0x8448 / 0x461B4 附近下写断点（watch），看谁写过</td><td>比继续单步有效得多：总线已经支持 watch，改一下 monitor 命令就行</td></tr>
+<tr><td>3</td><td>任务表建模：读 B 段 0x54C10 的 28 条任务表，把就绪队列造出来</td><td>μITRON 那层已经有表驱动的基础（V3 做完了服务表倒出）</td></tr>
+<tr><td>4</td><td>gdbstub（RSP 协议）</td><td>真要当 QEMU 用，这一步迟早要做；但当前瓶颈是设备语义不是调试手段，排后面</td></tr>
+</table>
+
+<h2>十、工具清单</h2>
+
+<pre>frbox/bus.py            地址空间（ROM/RAM/IO + 未映射审计）        297 行
+frbox/device.py         设备基类 + 直接页多路器 + 影子寄存器        124 行
+frbox/dev_serial.py     串口（0x60–0x67）                        151 行
+frbox/dev_timer.py      重载定时器（0x10–0x17）                   124 行
+frbox/icu.py            中断控制器                               77 行
+frbox/machine.py        机器模型（d300-a / d300-b）               371 行
+frbox/monitor.py        HMP 式命令行                             312 行
+frbox/cli.py            QEMU 式启动参数                          156 行
+frbox/trace.py          日志分类                                  50 行
+frbox_selftest.py       65 条自检                                267 行
+frbox_boot.py           启动诊断（四组场景一键跑）                  114 行</pre>
+
+<p class="kv">旧工具全部保留且仍可用：fr_emu.py（CPU）、fr_selftest.py（54 条）、fr_cover.py（编码空间）、
+fr_run.py（真调用）、fr_itron.py（μITRON 表驱动）、fr_svc.py（服务表）、fr_irq.py（向量表）、
+exp_order.py / exp_111.py / sweep.py（1.11 光圈实验）。</p>
+
+<div class="note">
+<b>一句话总结这一版</b>：以前只能说「这个函数算出来是什么」，现在可以说「这台机器跑到第几条指令、
+在哪一个寄存器位上停住、栈上放着什么」。前者是函数级仿真，后者才是模拟器的起点。
+</div>
+
+</div>
+</body>
+</html>
