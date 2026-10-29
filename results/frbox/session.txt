@@ -1,0 +1,105 @@
+=== 1) 两台机器 ===
+可用机器：
+  d300-a   D300 A 段（IO 协处理，512KB 固件）
+  d300-b   D300 B 段（主控，7MB 固件）
+
+=== 2) A 段：跑到时钟锁定、启动链尽头 0xFE50C 的 reti ===
+断点 0x000FE50C（共 1 个）
+命中断点 0x000FE50C
+执行至 0x000FE50C，累计 43,445 步
+  r0=00000000  r1=000FE510  r2=001F0030  r3=000FE250
+  r4=00000000  r5=00000000  r6=00000000  r7=00000000
+  r8=00000000  r9=00000000  r10=00000000  r11=00000000
+  r12=00000000  r13=00000000  r14=00000000  r15=000461B4
+  PC=000FE50C  PS=00100009 (N1 Z0 V0 C1 ILM16)
+  TBR=000FFC00 RP=00000000 MDH=00000000 MDL=00000000
+地址空间 d300-a（3 个区域）
+  0x00000000-0x00000FFF      4,096  io    direct-page                         dev=direct-page
+  0x00001000-0x0007FFFF    520,192  ram   ram                               
+  0x00080000-0x00100001    524,290  rom   rom                               
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=1 个地址/3 次
+  serial: SSR=0x20  TX=0 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=144  计数=0  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x88  0x483=0x5A  0x484=0x36  锁定次数=1  已解锁=True  倒计时=-
+  中断线绑定（只有标注实测的才有硬件依据）：
+    线 0x1B → 向量 0x1B / level 8   串口，实测（ISR 0x0012FDB4）
+    线 0x20 → 向量 0x20 / level 8   EXT9，实测（ISR 0x0012FE54）
+    已受理中断 0 次，待决 0 条
+机器      d300-a  —— D300 A 段（IO 协处理，512KB 固件）
+固件      <repo>\.workbuddy\tmp\gh_upload\D300-emulator-v2\data\A3000111.bin   CRC16 OK（文件 0x4F36 / 计算 0x4F36）
+复位入口  0x000FC000   （向量 0x00 槽 = TBR+0x3FC = 0x000FFFFC）
+当前 PC   0x000FE50C   已执行 43,445 步
+TBR       0x000FFC00    SSP 0x0007F000   ILM 16   I=0
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=1 个地址/3 次
+  serial: SSR=0x20  TX=0 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=144  计数=0  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x88  0x483=0x5A  0x484=0x36  锁定次数=1  已解锁=True  倒计时=-
+
+=== 3) B 段：跑到复位链尽头 0x407D8 ===
+断点 0x000407D8（共 1 个）
+命中断点 0x000407D8
+执行至 0x000407D8，累计 191,517 步
+  r0=00000000  r1=00000000  r2=00000000  r3=00000000
+  r4=00000000  r5=00000000  r6=00000000  r7=00000000
+  r8=00000000  r9=00000000  r10=00000000  r11=00000000
+  r12=00000000  r13=00000000  r14=00000000  r15=00008448
+  PC=000407D8  PS=00100000 (N0 Z0 V0 C0 ILM16)
+  TBR=000EFC00 RP=00000000 MDH=00000000 MDL=00000000
+地址空间 d300-b（4 个区域）
+  0x00000000-0x00000FFF      4,096  io    direct-page                         dev=direct-page
+  0x00001000-0x0003FFFF    258,048  ram   ram                               
+  0x00040000-0x0073FFFF  7,340,032  rom   rom                               
+  0x9F580000-0x9F67FFFF  1,048,576  ram   ram-sdram                         
+  未映射读：6 个地址 / 9 次；最频繁 0x68000004×4，0x50000001×1，0x68000174×1，0x68000618×1，0x50000008×1
+  未映射写：3868 个地址 / 3868 次；最频繁 0x68000004×5，0x50000008×3，0x6800B984×3，0x68000614×3，0x68000610×3
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=52 个地址/80 次
+  serial: SSR=0x20  TX=0 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=0  计数=0  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x03  0x483=0x00  0x484=0x00  锁定次数=0  已解锁=False  倒计时=-
+  中断线绑定（只有标注实测的才有硬件依据）：
+    线 0x1B → 向量 0x1B / level 8   串口，实测（ISR 0x0012FDB4）
+    线 0x20 → 向量 0x20 / level 8   EXT9，实测（ISR 0x0012FE54）
+    已受理中断 1 次，待决 0 条
+机器      d300-b  —— D300 B 段（主控，7MB 固件）
+固件      <repo>\.workbuddy\tmp\gh_upload\D300-emulator-v2\data\B3000111.bin   CRC16 OK（文件 0x9F23 / 计算 0x9F23）
+复位入口  0x00040000   （向量 0x00 槽 = TBR+0x3FC = 0x000EFFFC）
+当前 PC   0x000407D8   已执行 191,517 步
+TBR       0x000EFC00    SSP 0x0003F000   ILM 16   I=0
+
+=== 4) A 段：手工拉起任务 1（跳过 REALOS 调度器）===
+已启动任务：入口 0x08133A  SP=0x0004616C  r4=0x0  （先跑到 0x080506）
+  r0=0003FBB0  r1=00000001  r2=000FE244  r3=00000000
+  r4=00000000  r5=00000000  r6=000FE510  r7=0004617C
+  r8=001F0030  r9=00045984  r10=000459C8  r11=00000007
+  r12=000804FC  r13=00000001  r14=000FF06C  r15=0004616C
+  PC=0008133A  PS=00100008 (N1 Z0 V0 C0 ILM16)
+  TBR=000FFC00 RP=00080500 MDH=00000000 MDL=00000000
+地址空间 d300-a（3 个区域）
+  0x00000000-0x00000FFF      4,096  io    direct-page                         dev=direct-page
+  0x00001000-0x0007FFFF    520,192  ram   ram                               
+  0x00080000-0x00100001    524,290  rom   rom                               
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=1 个地址/3 次
+  serial: SSR=0x20  TX=0 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=144  计数=0  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x88  0x483=0x5A  0x484=0x36  锁定次数=1  已解锁=True  倒计时=-
+  中断线绑定（只有标注实测的才有硬件依据）：
+    线 0x1B → 向量 0x1B / level 8   串口，实测（ISR 0x0012FDB4）
+    线 0x20 → 向量 0x20 / level 8   EXT9，实测（ISR 0x0012FE54）
+    已受理中断 0 次，待决 0 条
+机器      d300-a  —— D300 A 段（IO 协处理，512KB 固件）
+固件      <repo>\.workbuddy\tmp\gh_upload\D300-emulator-v2\data\A3000111.bin   CRC16 OK（文件 0x4F36 / 计算 0x4F36）
+复位入口  0x000FC000   （向量 0x00 槽 = TBR+0x3FC = 0x000FFFFC）
+当前 PC   0x0008133A   已执行 9,716 步
+TBR       0x000FFC00    SSP 0x0007F000   ILM 16   I=0
+
+=== 5) 反汇编与内存 ===
+0x000804F0: C800  ldi:8 op1=0xc, i8=0x80, ri=0x0
+0x000804F2: 9B0C0240  ldi:20 op1=0x9, i20=0x240, op2=0xb, ri=0xc
+0x000804F6: 9F20  ret:d op1=0x9, op2=0xf, op3=0x2, op4=0x0
+0x000804F8: 16C0  stb op1=0x1, op2=0x6, rj=0xc, ri=0x0
+0x000804FA: 9720  ret op1=0x9, op2=0x7, op3=0x2, op4=0x0
+0x000804FC: 1781  st op1=0x1, op2=0x7, op3=0x8, rs2=0x1
+0x000804FE: D003  call op1=0xd, op5=0x0, rel12=0x3
+0x00080500: D010  call op1=0xd, op5=0x0, rel12=0x10
+0x000FE000: 00000008 0004616C FFFFFFFF 000C001C
+0x000FE010: 000459FC 00010004 00000000 80000000
