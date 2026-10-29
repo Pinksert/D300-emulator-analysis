@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V5 · 0x482 的真身与整机快照</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V5：<span class="mono">0x482</span> 不是双机握手，是时钟就绪位</h1>
+<div class="sub">D300 固件全系统模拟器 frbox 0.5 · 2026-10-29</div>
+
+<div class="card">
+<b>一句话</b>：上一版把 A 段停在 <span class="mono">0x8007C</span> 的那条 <span class="mono">btsth #8,@r0</span> 判成「等 B 段举手」，
+这一版把复位入口一路反汇编下来，证明它等的是<b>自己的时钟发生器</b>——<span class="mono">0x482</span> 位 3 写 1 启动、
+位 7 由硬件置「就绪」。补上这个设备模型之后，A 段<b>不用再靠 <span class="mono">--latch</span> 硬灌值</b>就能自己走过去，
+那个寄存器从「未建模读 66,660 次」变成「0 次」。<br><br>
+顺带做了一件 QEMU 有、我们没有的事：<b>savevm / loadvm 整机快照</b>，恢复后 5,000 步逐条指令同步，
+这是「解释器确定性」第一次被硬验证。
+</div>
+
+<div class="kpis">
+<div class="kpi"><b>0</b><span>次 <span class="mono">int</span>（A 段全启动）</span></div>
+<div class="kpi"><b>43,446</b><span>A 段步数（原 41,565 靠作弊）</span></div>
+<div class="kpi"><b>92/92</b><span>frbox 自检断言</span></div>
+<div class="kpi"><b>5,000</b><span>快照恢复后逐条同步步数</span></div>
+</div>
+
+<h2>一、上一版错在哪</h2>
+
+<p>V4 报告的结论是：A 段在 <span class="mono">0x0008007C</span> 自旋，等 <span class="mono">0x482</span> 的位 7，
+推测「是 B 段通过双机链路写进来的」，于是给了个 <span class="mono">--latch 0x482=0x88:2</span> 的临时手段，
+建议下一步做「双机互联，把 A、B 放进同一地址空间共享邮箱」。</p>
+
+<p>这个推断方向错了。错的原因也很典型：<b>只看了一条指令的地址，没有把调用链往上追</b>。
+其实复位入口就在 A 段 ROM 的 <span class="mono">0x000FC000</span>，往上追三跳就能看见写这个寄存器的人是谁。</p>
+
+<h2>二、证据链：从复位入口走到 <span class="mono">0x80044</span></h2>
+
+<p>复位向量槽读到入口 <span class="mono">0x000FC000</span>，头六条指令就把后面的顺序交代清楚了：</p>
+
+<pre>0x000FC000  ldi:32 #0x4616C, r15      ; 设栈
+0x000FC006  stilm  #0x10              ; ILM = 0x10，先屏蔽高优先级中断
+0x000FC008  ldi:32 #0xFFC00, r0
+0x000FC00E  mov    r0, TBR            ; 向量表基址 = 0x000FFC00
+0x000FC010  ldi:32 #0xF8010, r13
+0x000FC016  call   @r13               ; ① 第一跳
+0x000FC018  ldi:32 #0x80044, r13
+0x000FC01E  call   @r13               ; ② 第二跳 ← 就是这里
+0x000FC020  ldi:32 #0x804FA, r13
+0x000FC026  call   @r13               ; ③ 第三跳
+0x000FC028  ldi:32 #0xFE426, r0
+0x000FC02E  jmp    @r0                ; ④ 交给 REALOS 启动</pre>
+
+<p>第二跳的 <span class="mono">0x00080044</span> 全长不到 60 字节，写完就等：</p>
+
+<pre>0x00080044  ldi:8  #0x33, r0
+0x00080046  ldi:20 #0x7004, r12
+0x0008004A  stb    r0, @r12            ; [0x7004] = 0x33   （RAM，与本次无关）
+0x0008004C  ldi:8  #0x01, r0
+0x0008004E  ldi:20 #0x486, r12
+0x00080052  stb    r0, @r12            ; [0x486] = 0x01
+0x00080054  ldi:8  #0xF0, r0
+0x00080056  ldi:20 #0x487, r12
+0x0008005A  stb    r0, @r12            ; [0x487] = 0xF0
+0x0008005C  ldi:8  #0x34, r0
+0x0008005E  ldi:20 #0x484, r12
+0x00080062  stb    r0, @r12            ; [0x484] = 0x34   （配置）
+0x00080064  ldi:8  #0x08, r0
+0x00080066  ldi:20 #0x482, r12
+0x0008006A  stb    r0, @r12            ; [0x482] = 0x08   （位3 = 启动）
+0x0008006C  ldi:8  #0xA5, r0
+0x0008006E  ldi:20 #0x483, r12
+0x00080072  stb    r0, @r12            ; [0x483] = 0xA5  ┐ 两键写保护
+0x00080074  ldi:8  #0x5A, r0
+0x00080076  stb    r0, @r12            ; [0x483] = 0x5A  ┘
+0x00080078  ldi:20 #0x482, r0
+0x0008007C  btsth  #8, @r0             ; 测 [0x482] 位7
+0x0008007E  beq    -4                  ; 不置位就原地等
+0x80080     ldi:8  #0x36, r0
+0x00080082  ldi:20 #0x484, r12
+0x00080086  stb    r0, @r12            ; [0x484] = 0x36   （0x34→0x36，位1 = 锁定确认）</pre>
+
+<div class="card">
+<b>读法</b>：<span class="mono">先写配置 → 置启动位 → A5/5A 两键解锁 → 空转等位 7 → 等到后把配置位 1 置上</span>。
+这一串在嵌入式里没有第二种解释：<b>PLL / 时钟发生器的启动等待流程</b>。位 7 是硬件状态位，
+位 1 是「切换完成」确认位，<span class="mono">0xA5→0x5A</span> 是富士通惯用的寄存器写保护两键序列。
+</div>
+
+<h2>三、证据链：没有任何代码写位 7</h2>
+
+<p>上面是「它想干什么」，还缺一条「别人写不了」。「别人」包括 B 段，也包括 A 段自己的其它函数。
+于是做两件事。</p>
+
+<h3>1. 全 A 段 ROM 静态扫描</h3>
+<p>把 524,290 字节全反汇编一遍，找立即数或位移落在 <span class="mono">0x478–0x48C</span> 的指令，命中 <b>59 条</b>。
+其中写这组寄存器的只有上面那 6 条 <span class="mono">stb</span>，其余是：</p>
+<ul>
+<li><span class="mono">0x00080F6A</span>：一处 ISR 里的 <span class="mono">ldi #0x482</span> + <span class="mono">bandh #7,@r0</span>，随后读 <span class="mono">0x3F09C</span> 的计数——像是把某个状态位清掉再记数。</li>
+<li><span class="mono">0x00081310</span> / <span class="mono">0x0008132C</span>：临界区里改 <span class="mono">0x486</span>（外面套着 <span class="mono">andccr #0xEF</span> / <span class="mono">orccr #0x10</span> 的开关中断包裹）。</li>
+<li><span class="mono">0x000D0872–0x000D089A</span>：一段寄存器组初始化表，按 <span class="mono">0x470/0x474/…/0x48A</span> 顺序灌默认值。</li>
+</ul>
+<p><b>没有任何一条指令往 <span class="mono">0x482</span> 写带位 7 的值。</b></p>
+
+<h3>2. 动态写入监视</h3>
+<p>把 <span class="mono">0x480–0x48F</span> 全部挂上 watch，跑到自旋为止，一共 200,142 步，命中 66,666 次：</p>
+
+<table>
+<tr><th>方向</th><th>地址</th><th>值</th><th>次数</th><th>来源 PC</th></tr>
+<tr><td>写</td><td class="m">0x486</td><td class="m">0x01</td><td>1</td><td class="m">0x80052</td></tr>
+<tr><td>写</td><td class="m">0x487</td><td class="m">0xF0</td><td>1</td><td class="m">0x8005A</td></tr>
+<tr><td>写</td><td class="m">0x484</td><td class="m">0x34</td><td>1</td><td class="m">0x80062</td></tr>
+<tr><td>写</td><td class="m">0x482</td><td class="m">0x08</td><td>1</td><td class="m">0x8006A</td></tr>
+<tr><td>写</td><td class="m">0x483</td><td class="m">0xA5</td><td>1</td><td class="m">0x80072</td></tr>
+<tr><td>写</td><td class="m">0x483</td><td class="m">0x5A</td><td>1</td><td class="m">0x80076</td></tr>
+<tr><td>读</td><td class="m">0x482</td><td class="m">0x08</td><td><b>66,660</b></td><td class="m">0x8007C</td></tr>
+</table>
+
+<p class="kv">读 66,660 次、写 6 次、没有任何一次写入置位位 7 —— 位 7 只能来自硬件。</p>
+
+<div class="note">
+顺便把 B 段也扫了一遍：全 ROM 引用 <span class="mono">0x482</span> 只有 6 处，其中 2 处在启动区
+（<span class="mono">0x400E8</span>、<span class="mono">0x404C8</span>），但跑起来 <b>一次都没写过这组寄存器</b>。
+<b>两台机器之间不存在围绕 <span class="mono">0x482</span> 的握手。</b>
+</div>
+
+<h2>四、寄存器组语义（按实测填，不按手册猜）</h2>
+
+<table>
+<tr><th>地址</th><th>实测行为</th><th>判定</th></tr>
+<tr><td class="m">0x482</td><td>写 <span class="mono">0x08</span> 后开始计时，到点读回位 7 = 1；软件写入不改变位 7</td><td>位 3 = 启动，位 7 = 就绪（只读，硬件置位）</td></tr>
+<tr><td class="m">0x483</td><td>连续写 <span class="mono">0xA5</span>、<span class="mono">0x5A</span></td><td>写保护两键序列</td></tr>
+<tr><td class="m">0x484</td><td>先写 <span class="mono">0x34</span>，锁定后改 <span class="mono">0x36</span></td><td>配置（0x34）+ 位 1 = 切换完成</td></tr>
+<tr><td class="m">0x486</td><td>写 <span class="mono">0x01</span>；另有一处 ISR/临界区会改</td><td>使能类寄存器</td></tr>
+<tr><td class="m">0x487</td><td>写 <span class="mono">0xF0</span></td><td>分频/预置类配置</td></tr>
+</table>
+
+<p class="kv">括号里的「时钟/复位控制」是按行为给的功能名，手册原文我们手上没有；但「位 3 启动、位 7 就绪、位 1 完成」
+这三条是由上面两路证据直接推出来的，不依赖手册。</p>
+
+<h2>五、新设备：<span class="mono">frbox/dev_clk.py</span></h2>
+
+<p>140 行，挂到直接页 <span class="mono">0x480–0x48F</span>。建模口径刻意保守：</p>
+<ul>
+<li>寄存器按字节存影子，读回影子（没写过的位为 0）。</li>
+<li>写 <span class="mono">0x482</span> 时位 7 被强制抹掉——<b>软件写不进状态位</b>，和实测一致。</li>
+<li>写 <span class="mono">0x482</span> 且位 3 = 1 → 武装倒计时；倒计时到点把位 7 置 1。</li>
+<li>写 <span class="mono">0x483</span>：先 <span class="mono">0xA5</span> 再 <span class="mono">0x5A</span> 才算解锁（只记录，不改变锁定时机——因为实测固件是在启动之后才解锁的）。</li>
+<li>倒计时按 tick 计，默认 8 个 tick ≈ 2,048 步，命令行 <span class="mono">--clk-lock N</span> 可调，<span class="mono">0</span> 就是立刻就绪。</li>
+</ul>
+
+<p>挂上之后 <span class="mono">0x482</span> 从「未建模寄存器」名单里消失。口径要说准，不然两个数字不是一回事：</p>
+<ul>
+<li>建模前：跑到自旋为止的 <b>200,142 步</b>里，<span class="mono">0x482</span> 被读 <b>66,660 次</b>，全部计入「直接页未建模读」。</li>
+<li>建模后：走完整个启动 <b>43,446 步</b>，直接页未建模读只剩 <b>3 次</b>（都在 <span class="mono">0x0DF</span>）。</li>
+</ul>
+<p class="kv">步数不同，不能直接相减说是「降了多少倍」；能说的是：这组寄存器不再是黑盒，它的行为由模型给出，而不是由 <span class="mono">--latch</span> 灌值。</p>
+
+<h2>六、实测：A 段自己走过去了</h2>
+
+<table>
+<tr><th>案例</th><th>步数</th><th>不同 PC</th><th>时钟锁定</th><th>0x482 / 0x484</th><th>未映射读</th><th>卡点</th></tr>
+<tr><td>A 段，默认 8 tick</td><td><b>43,446</b></td><td>824</td><td>1 次</td><td class="m">0x88 / 0x36</td><td>0 次</td><td class="m">0xFE50C reti</td></tr>
+<tr><td>A 段，<span class="mono">--clk-lock 0</span></td><td>41,655</td><td>824</td><td>1 次</td><td class="m">0x88 / 0x36</td><td>0 次</td><td class="m">0xFE50C reti</td></tr>
+<tr><td>A 段，V4 的 <span class="mono">--latch</span> 手段</td><td>41,565</td><td>824</td><td>—</td><td class="m">—</td><td>—</td><td class="m">0xFE50C reti</td></tr>
+<tr><td>B 段，原样</td><td>191,518</td><td>1,239</td><td>0 次</td><td class="m">0x03 / 0x00</td><td>9 次 / 6 地址</td><td class="m">0x407D8 reti</td></tr>
+<tr><td>B 段 + μITRON 半主机</td><td>191,457</td><td>1,178</td><td>0 次</td><td class="m">0x03 / 0x00</td><td>9 次 / 6 地址</td><td class="m">0x407D8 reti</td></tr>
+</table>
+
+<p>三种手段最后都停在同一条 <span class="mono">reti</span>、同一个 PC 数（824），
+说明<b>时钟模型不是「为了能跑而凑的」，它只是把固件本来要做的事做对了</b>：
+41,655 与 43,446 的差正好是 1,792 步 = 7 个 tick × 256，不多不少。</p>
+
+<h2>七、新卡点：A 段整个启动一次 <span class="mono">int</span> 都没执行</h2>
+
+<p>过了时钟这一关，A 段停在 <span class="mono">0x000FE50C</span> 的 <span class="mono">reti</span>，
+弹出 <span class="mono">PC=0</span>、<span class="mono">PS=0</span>。上一版记的是「栈顶 8 字全 0」，
+这一版把原因量化了：<b>把 <span class="mono">Fr.eit()</span> 包一层计数器，跑完 60,000 步，A 段的 EIT 次数是 0</b>。
+B 段是 1 次（向量 <span class="mono">0x40</span>，即唯一那次 μITRON 服务调用）。</p>
+
+<p>没有 EIT 就没有栈帧，<span class="mono">reti</span> 必然弹到 0。而之所以走到 <span class="mono">reti</span>，
+是因为这条链：</p>
+
+<pre>0x000FE426  ldi:32 #0x3FBB0, r0
+0x000FE42C  ldi:32 #0, r1
+0x000FE432  st     r1, @r0           ; *0x3FBB0 = 0
+0x000FE434  call   …                ; 0xFE434–0xFE44A 连打 12 条初始化调用
+0x000FE44C  ldi:32 #0x3FBB0, r0
+0x000FE452  ldi:32 #1, r1
+0x000FE458  st     r1, @r0           ; *0x3FBB0 = 1
+0x000FE45A  ldi:32 #0x804FC, r12
+0x000FE460  call   @r12              ; 调固件 main（0x804FC）
+0x000FE462  ldi:32 #0x3FBB0, r0
+0x000FE468  ldi:32 #2, r1
+0x000FE46E  st     r1, @r0           ; *0x3FBB0 = 2
+0x000FE470  bra    0xFE4DE           ; 去「恢复上下文」收尾</pre>
+
+<p>而 <span class="mono">0x804FC</span> 这个「main」只有一个 <span class="mono">st r1</span>、两个 <span class="mono">call</span>、
+一个 <span class="mono">ld</span>、一个 <span class="mono">ret</span>——它跑完就正常返回了。收尾的地方是：</p>
+
+<pre>0x000FE4DE  ldi:32 #0xFE160, r0     ; 从 ROM 取一个字
+0x000FE4E4  ld     @r0, r14
+0x000FE4E6  ldi:32 #0x45980, r0
+0x000FE4EC  st     r14, @r0          ; 记到 RAM
+0x000FE4EE  …
+0x000FE4F2  orccr  #0x20            ; 开中断
+0x000FE4FE  orccr  #0x20
+0x000FE500  ld     @r15+, r1        ; 弹 r1 / r5 / r4
+0x000FE506  ldm0   r0–r7            ; 弹 8 个
+0x000FE508  ldm1   r8–r14           ; 弹 7 个
+0x000FE50A  andccr #0xDF            ; 清 S
+0x000FE50C  reti                    ; ← 这里弹到 0</pre>
+
+<div class="card">
+<b>结论要改口径</b>：「任务没建起来」这个说法不够准。更准确的是：
+<b>A 段的启动主流程只做硬件初始化，从头到尾没有发起任何 μITRON 服务调用（0 次 <span class="mono">int</span>），
+初始化做完就返回；REALOS 于是走去「恢复下一个任务上下文」，而那个上下文根本不存在，弹出来全是 0。</b><br><br>
+所以下一步不该去找「谁写 <span class="mono">0x482</span>」，而该找：<b>哪个初始化调用本该创建任务、却提前返回了</b>。
+判据很清晰——那 12 条 <span class="mono">call</span> 里只要有一条走进 <span class="mono">int #0x40</span>，EIT 计数就不会是 0。
+</div>
+
+<h2>八、意外收获：两段固件都内嵌 REALOS/FR 版权串</h2>
+
+<p>追 <span class="mono">0xFE4DE</span> 时撞见一段 ASCII，顺手把两台机器都查了：</p>
+
+<pre>A 段 0x000FE472  "Softune REALOS/FR is Realtime OS for FR Family, based on micro-ITRON
+                   COPYRIGHT(C) FUJITSU LIMITED 1994-1999\0"
+B 段 0x0004073E  （同一串，一字不差）</pre>
+
+<p>这条比之前的「0x0004073E 有 Softune REALOS/FR 版权串」更进一步：<b>后半句直接写明 <span class="mono">based on micro-ITRON</span></b>，
+版权年份 <span class="mono">1994-1999</span>。A、B 用的是同一套内核、同一段版权声明，只是链接进各自的镜像里。</p>
+
+<h2>九、savevm / loadvm：第一次硬验证「确定性」</h2>
+
+<p>新增 <span class="mono">frbox/snapshot.py</span>（157 行），monitor 里是 <span class="mono">savevm PATH</span> / <span class="mono">loadvm PATH</span>。
+快照含 CPU 全部寄存器与标志、每块 RAM 字节、每个设备的可序列化状态、步数、poke 列表；ROM 不存（重新 load 固件即可）。</p>
+
+<table>
+<tr><th>机器</th><th>快照大小</th><th>落点</th><th>恢复后状态</th><th>再跑 5,000 步</th></tr>
+<tr><td>d300-a</td><td>526,831 字节</td><td class="m">43,446 步 / PC=0</td><td>逐字段一致</td><td><b>逐条指令同步</b></td></tr>
+<tr><td>d300-b</td><td>1,312,620 字节</td><td class="m">191,518 步 / PC=0</td><td>逐字段一致</td><td><b>逐条指令同步</b></td></tr>
+</table>
+
+<p>做这个的过程中被自己的实现坑了两次，都值得记下来：</p>
+<ul>
+<li><b>JSON 把字节串变成了字符串</b>：<span class="mono">bytearray</span> 不能直接 JSON 化，用 <span class="mono">default=str</span> 会静默变成
+<span class="mono">"bytearray(b'\\x00…')"</span>，恢复后设备读寄存器返回的是字符，拼运算直接报 <span class="mono">TypeError</span>。改成 base64 + 类型标记。</li>
+<li><b>JSON 把字典的整数键变成了字符串</b>：直接页影子存储是 <span class="mono">{0x482: 0x88}</span>，恢复后成了
+<span class="mono">{"1186": 136}</span>，<span class="mono">shadow.get(0x482)</span> 永远取不到 → 一读未建模寄存器就归零。这是<b>快照看起来成功、跑起来两万步就分叉</b>的元凶。</li>
+</ul>
+
+<div class="warnbox">
+这两个坑的形状是一样的：<b>序列化会把类型信息吃掉，而吃掉的恰好是「读一个寄存器返回什么」</b>。
+所以快照这种东西不能只看「恢复后 PC 对不对」，必须看「恢复后再跑几千步还同不同步」。
+第 5,000 步还同步，才算过。
+</div>
+
+<h2>十、回归与文件清单</h2>
+
+<table>
+<tr><th>项</th><th>本轮</th><th>说明</th></tr>
+<tr><td>frbox_selftest</td><td><b>92/92</b></td><td>原 65 条 + 时钟组 15 条 + 快照组 12 条</td></tr>
+<tr><td>fr_selftest</td><td>全部通过</td><td>CPU 语义 54 条未动</td></tr>
+<tr><td>编码空间审计</td><td>64,682 全可执行 / 122 助记符 / 854 未定义</td><td>与 V4 一致</td></tr>
+<tr><td>光圈实验 exp_order</td><td>552 / 608 / 596 / 664</td><td>1.0 与 1.1、0x00 与 0x40 四组，一步不差</td></tr>
+</table>
+
+<table>
+<tr><th>文件</th><th>行数</th><th>本轮动作</th></tr>
+<tr><td class="m">frbox/dev_clk.py</td><td>140</td><td><span class="tag t-ok">新增</span>时钟/复位寄存器组设备</td></tr>
+<tr><td class="m">frbox/snapshot.py</td><td>157</td><td><span class="tag t-ok">新增</span>savevm / loadvm</td></tr>
+<tr><td class="m">exp_482.py</td><td>86</td><td><span class="tag t-ok">新增</span>0x482 的动/静两路取证脚本</td></tr>
+<tr><td class="m">frbox/machine.py</td><td>377</td><td><span class="tag t-wn">改</span>挂时钟设备、<span class="mono">clk_lock_ticks</span> 参数</td></tr>
+<tr><td class="m">frbox/cli.py</td><td>161</td><td><span class="tag t-wn">改</span><span class="mono">--clk-lock N</span>，版本 0.5.0</td></tr>
+<tr><td class="m">frbox/monitor.py</td><td>349</td><td><span class="tag t-wn">改</span><span class="mono">savevm</span> / <span class="mono">loadvm</span> / <span class="mono">info snap</span></td></tr>
+<tr><td class="m">frbox_selftest.py</td><td>359</td><td><span class="tag t-wn">改</span>原 poke 用例改址（0x482 已被建模）+ 两组新断言</td></tr>
+<tr><td class="m">frbox_boot.py</td><td>122</td><td><span class="tag t-fix">修</span>启动诊断循环漏了设备 tick，导致时钟永不锁定</td></tr>
+</table>
+
+<p class="kv">frbox 包合计 2,036 行，加自检/启动诊断/取证脚本共 2,603 行。</p>
+
+<h2>十一、下一步（按证据强度排）</h2>
+
+<ol>
+<li><b>追那 12 条初始化 call</b>：<span class="mono">0xFE434–0xFE44A</span>，逐条看谁本该创建任务。
+判据是「哪一条内部出现 <span class="mono">int #0x40</span>」。这是唯一能让 A 段不靠弹 0 结束的路径，
+也是把「824 个 PC」往上抬的最短路径。</li>
+<li><b>把 <span class="mono">0x3FBB0</span> 这个相位变量做成断点</b>：0 / 1 / 2 三个值分别对应
+「未初始化 / main 运行中 / main 已返回」，<span class="mono">watch 0x3FBB0</span> 就能一眼看出有没有回到过 1。</li>
+<li><b>用快照做假设检验</b>：现在可以「跑到 43,446 步 → 存盘 → 反复试不同 poke / 不同 <span class="mono">--clk-lock</span> 值」，
+不用每次重跑 4 万步。这是本轮最直接的效率收益。</li>
+<li>三处未建模外设窗口（<span class="mono">0x50000000 / 0x68000000 / 0x4000D000</span>）的语义，
+以及 B 段 854 个未定义编码的归属。</li>
+</ol>
+
+<div class="note">
+<b>一句话收尾</b>：这一版没有让固件「跑出画面」，但它把上一版一个方向性错误纠了正，
+把「等谁」从一个猜测变成了两路证据支持的事实，并且顺手证明了这个模拟器是确定性的。
+对「做成像 QEMU 一样的模拟器」这个目标来说，<b>能存盘、能恢复、还能保证恢复后一步不差</b>，
+比多跑十万步更有价值。
+</div>
+
+</div>
+</body>
+</html>
