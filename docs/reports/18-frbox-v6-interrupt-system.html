@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V6 · A 段中断系统全解与 48 向量注入验证</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V6：A 段不是「启动没做完」，是「根本没打算启动任务」</h1>
+<div class="sub">D300 固件 A 段（<span class="mono">0x00080000</span> 起 524,290 字节）· 中断系统全解 · 48 个向量全量注入实测</div>
+
+<div class="kpis">
+  <div class="kpi"><b>48</b><span>ISR 向量全量注入</span></div>
+  <div class="kpi"><b>39</b><span>精确 reti 且状态复原</span></div>
+  <div class="kpi"><b>181</b><span>启动配置的外设寄存器</span></div>
+  <div class="kpi"><b>105/105</b><span>frbox 自检</span></div>
+</div>
+
+<div class="card">
+<b>一句话结论：</b>A 段把中断系统配得很齐——48 个中断级别寄存器、39 个真实 ISR、每个 ISR 都按
+<span class="mono">0x3F0xx</span> 上的函数指针分发。但它<b>从头到尾没有启动过任何 REALOS 任务</b>：
+复位链上本该是 <span class="mono">vsta_knl()</span> 的那个位置，是一条空的 <span class="mono">ret</span>。
+所以 <span class="mono">main</span> 结束后去恢复上下文，系统栈上什么帧都没有，<span class="mono">reti</span> 弹出 <span class="mono">0</span>。
+<br><br>
+这一轮之前，我把这件事说成「启动流程只做硬件初始化」。这个说法不够准确——内核对象其实是建好了的
+（4 个及以上 TCB、全套空链表），缺的不是初始化，是<b>启动调度器的那一行</b>。
+</div>
+
+<h2>一、复位链四跳，一条不漏</h2>
+
+<p>入口是向量表中的 <span class="mono">vec 0x00 → 0x000FC000</span>。整条链只有四跳：</p>
+
+<pre>0xFC000  ldi:32 0x4616C,r15     ; 复位就设好用户栈顶
+0xFC006  stilm  #0x10           ; ILM=0x10，只放行级别 ≥16（ICR 配的正是 0x12–0x1F）
+0xFC008  ldi:32 0xFFC00,r0
+0xFC00E  mov    r0,TBR          ; TBR=0xFFC00
+0xFC010  ldi:32 0xF8010,r13
+0xFC016  call   @r13            ; ① 双标记比对（升级模式检测）
+0xFC018  ldi:32 0x80044,r13
+0xFC01E  call   @r13            ; ② 硬件初始化，约 1.2 KB
+0xFC020  ldi:32 0x804FA,r13
+0xFC026  call   @r13            ; ③ ★ 空的：这条就是 ret
+0xFC028  ldi:32 0xFE426,r0
+0xFC02E  jmp    @r0             ; ④ 进 main，永不返回</pre>
+
+<p>第①跳 <span class="mono">0xF8010</span> 里有个分支：先调 <span class="mono">0xF8020</span> 比对
+<span class="mono">0xF2FF8</span> 与 <span class="mono">0xFFBF8</span> 两个地址上的 8 字节标记，
+<b>不等</b>才调 <span class="mono">0xF8580</span>。实测两个标记相等，所以是正常启动、不进升级分支。</p>
+
+<h2>二、<span class="mono">0x80044</span>：一次配置 181 个外设寄存器</h2>
+
+<p>把「运行到 <span class="mono">0xFE426</span> 之前」这段时间里的所有外设写全抓下来，共
+<b>187 次写、覆盖 181 个寄存器</b>，地址全部落在 <span class="mono">0x80000–0x804EE</span>。结构一眼就能分开：</p>
+
+<table>
+<tr><th>地址段</th><th>内容</th><th>判据</th></tr>
+<tr><td class="m">0x000 / 0x400 / 0x600</td><td>三组镜像寄存器</td>
+    <td>值成对互反：<span class="mono">0x600=0xFF ↔ 0x400=0x00</span>、<span class="mono">0x601=0xF0 ↔ 0x401=0x0F</span>，典型的方向/功能选择</td></tr>
+<tr><td class="m">0x440–0x46F</td><td><b>48 个中断级别寄存器</b></td>
+    <td>恰好 0x30 = 48 个，值全在 <span class="mono">0x12–0x1F</span>，与向量表 48 个 ISR 一一对应</td></tr>
+<tr><td class="m">0x040–0x045</td><td>中断标志/控制</td>
+    <td>ISR 里用 <span class="mono">bandl #0xE,@0x40</span> 清标志</td></tr>
+<tr><td class="m">0x0B4–0x0CB</td><td>定时器预置值</td>
+    <td><span class="mono">0xFFFF</span> / <span class="mono">0x44</span> / <span class="mono">0x46</span> / <span class="mono">0x48</span> 这类小常数成组出现</td></tr>
+<tr><td class="m">0x108–0x117</td><td>串行/通信类</td>
+    <td><span class="mono">0x110=0xC2C2</span>、<span class="mono">0x116=0x98</span>（ISR vec 0x2B 正是操作 0x116）</td></tr>
+<tr><td class="m">0x521 / 0x531</td><td>两处 <span class="mono">0x07</span></td>
+    <td>成对出现，疑似两路同构外设的同一字段</td></tr>
+</table>
+
+<div class="note">
+这条链本身就是「A 段是 IO 协处理器」最直接的证据：它不读传感器、不碰影像通路，
+只做一件事——把所有对外引脚、中断优先级、定时/串行接口一次性配好，然后交出控制权。
+</div>
+
+<h2>三、<span class="mono">0x80506</span> 的真身：一次 BSS 清零，不是初始化逻辑</h2>
+
+<p>main 只有 5 条指令，两条 call。第一条 call 进 <span class="mono">0x80506</span>，单独占掉
+<b>33,666 条指令 / 6,732 次内存写</b>——占整个启动的 78%。看代码就三行：</p>
+
+<pre>0x80506  ldi:20 0x4592C,r5      ; 上界
+0x8050A  ldi:20 0x3F000,r4      ; 下界（= sp）
+0x80516  st r0,@r4 / add #4,r4 / cmp r4,r5 / bnc -4    ; 循环写 0</pre>
+
+<p>跨度 <span class="mono">0x3F000 → 0x4592C</span> = 26,924 字节 ÷ 4 = <b>6,731 个字</b>，
+与实测 6,732 次写对得上（多出的 1 次是循环外的首字）。所以它是纯 <span class="mono">memset</span>，
+<b>把 <span class="mono">0x3F000</span> 起的 26 KB 工作区全部清零</b>。这片区域后面会被当成
+硬件状态镜像 + 回调指针表 + REALOS 对象区，三种用途混在一起。</p>
+
+<h2>四、12 条初始化 call，累计 7,198 条指令、0 次 μITRON 陷阱</h2>
+
+<p>逐条执行、逐条记录目标与返回：</p>
+
+<table>
+<tr><th>#</th><th>call</th><th>目标</th><th>指令数</th><th>写了多少</th><th>性质</th></tr>
+<tr><td>0</td><td class="m">0xFE434</td><td class="m">0xFE512</td><td>6,398</td><td>2,124 处</td><td>BSS 清零 0x45980–0x461CB</td></tr>
+<tr><td>1</td><td class="m">0xFE436</td><td class="m">0xFE59A</td><td>4</td><td>0</td><td>写 0x46F=0x1E 后返回</td></tr>
+<tr><td>2</td><td class="m">0xFE438</td><td class="m">0xFE5A4</td><td>49</td><td>18 处</td><td>把 <span class="mono">0xFE000</span> 表展开到 <span class="mono">0x45988</span></td></tr>
+<tr><td>3</td><td class="m">0xFE43A</td><td class="m">0xFE5BE</td><td>13</td><td>7 处</td><td>建 0x459D8 处的三项小表</td></tr>
+<tr><td>4</td><td class="m">0xFE43C</td><td class="m">0xFE5DC</td><td>550</td><td>180 处</td><td><b>建 TCB：0x45C38 起每 16 字节一个</b></td></tr>
+<tr><td>5</td><td class="m">0xFE43E</td><td class="m">0xFE624</td><td>9</td><td>0</td><td>表驱动，空表 → 不做事</td></tr>
+<tr><td>6</td><td class="m">0xFE440</td><td class="m">0xFE64A</td><td>119</td><td>40 处</td><td>写 0x45C38–0x45CD4</td></tr>
+<tr><td>7</td><td class="m">0xFE442</td><td class="m">0xFE670</td><td>20</td><td>5 处</td><td>写 0x45CD8–0x45CE8</td></tr>
+<tr><td>8–11</td><td class="m">0xFE444–0xFE44A</td><td class="m">0xFE696/6E2/728/74E</td><td>各 9</td><td>0</td><td>与 #5 同构，表为空</td></tr>
+</table>
+
+<p>全部 12 条加起来的 <span class="mono">int</span> 触发次数是 <b>0</b>。也就是说这 7,198 条指令里，
+<b>没有一次 μITRON 服务调用</b>。第 5、8–11 号是同一套模板，只是表地址不同
+（<span class="mono">0xFE17C / 0xFE234 / 0xFE238 / 0xFE23C / 0xFE240</span>），
+其中只有 <span class="mono">0xFE17C</span> 那张有内容——首字 <span class="mono">0x10</span> 表示每条 16 字节，
+条目指向 <span class="mono">0x45C38 / 0x45C48 / 0x45C58</span>，正是 TCB。</p>
+
+<h2>五、中断系统：48 个 ICR 对 48 个向量，39 个是真 ISR</h2>
+
+<p>向量表 <span class="mono">TBR=0xFFC00</span>（槽地址 <span class="mono">TBR+(255-vec)*4</span>）里，非兜底项如下：</p>
+
+<table>
+<tr><th>向量</th><th>入口</th><th>数量</th><th>判定</th></tr>
+<tr><td class="m">0x00</td><td class="m">0x000FC000</td><td>1</td><td>复位</td></tr>
+<tr><td class="m">0x01</td><td class="m">0x07000000</td><td>1</td><td>模式向量，填了个非法地址，实际不用</td></tr>
+<tr><td class="m">0x02–0x06、0x09–0x0D、0x0F、0x41–0xFF</td><td class="m">0x000FE250</td><td>—</td><td>兜底：跳到 <span class="mono">0x81338</span> 停机</td></tr>
+<tr><td class="m">0x07、0x08、0x0E</td><td class="m">0x000FE41A</td><td>3</td><td>压 r14 后同样跳兜底（协处理器/保留指令异常）</td></tr>
+<tr><td class="m">0x10–0x3E</td><td class="m">0x0809BE–0x08129C</td><td>47</td><td><b>真实 ISR 群</b>，其中 8 个是兜底填充</td></tr>
+<tr><td class="m">0x3F</td><td class="m">0x000FE776</td><td>1</td><td>唯一开头就 <span class="mono">andccr #0xEF</span> 清 I 位（允许嵌套）的入口</td></tr>
+<tr><td class="m">0x40</td><td class="m">0x000FE3C0</td><td>1</td><td>μITRON 陷阱入口</td></tr>
+</table>
+
+<h2>六、每个 ISR 都是「回调指针分发器」</h2>
+
+<p>39 个真实 ISR 的骨架完全一致，以 vec 0x10 为例：</p>
+
+<pre>0x809BE  stm0 r0–r7 / stm1 r12,r13 / st r4,r5,r1   ; 压现场
+0x809C8  ldi:20 0x3F01C,r4                        ; 回调指针槽
+0x809CC  ldi:20 0x40,r0
+0x809D0  bandl #0xE,@r0                           ; 清中断标志（直接页 0x40）
+0x809D2  ld    @r4,r0                             ; r0 = [0x3F01C]
+0x809D4  cmp   r0,#0
+0x809D6  beq   +3                                 ; 槽为空 → 走默认
+0x809D8  ld    @r4,r0
+0x809DA  call  @r0                                ; ★ 把槽里的值当函数调用
+0x809DC  bra   +3
+0x809DE  ldi:20 0x81336,r12
+0x809E2  call  @r12                               ; 默认处理
+0x809E4  ld 弹 r1,r5,r4 / ldm1 / ldm0
+0x809EE  reti</pre>
+
+<p>而默认处理 <span class="mono">0x81336</span> 只有一条指令：<span class="mono">ret</span>。
+<b>槽为空时，中断进来什么也不做就返回。</b></p>
+
+<div class="warnbox">
+<b>关键：<span class="mono">0x3F000</span> 区在启动阶段被写入 0 次。</b>
+BSS 清零把它整片抹平，之后再没有任何代码去填。所以 39 个 ISR 的回调槽全是 0，
+每一个中断都只会走「清标志 → 空处理 → reti」。
+静态扫下来，引用 <span class="mono">0x3F000–0x3F0FF</span> 的指令有 <b>426 条</b>，
+填表的那批集中在 <span class="mono">0xAB000</span> 一带——那属于从未执行过的应用区。
+</div>
+
+<h2>七、48 个向量全量注入：39 复原、8 停机、1 特殊</h2>
+
+<p>这是本轮最有分量的一组实测。做法：机器跑到 main 的循环里（<span class="mono">0x80506</span>），
+存一份快照；然后对 <span class="mono">vec 0x10–0x3F</span> 每一个向量，各自从快照恢复、注入、单步跑到出结果。</p>
+
+<table>
+<tr><th>判定</th><th>数量</th><th>行为</th></tr>
+<tr><td><span class="tag t-ok">OK</span></td><td>39</td>
+    <td>精确 <span class="mono">reti</span> 回到注入点，r15 与 SSP <b>逐位复原</b></td></tr>
+<tr><td><span class="tag t-wn">停机</span></td><td>8</td>
+    <td>vec <span class="mono">0x1F/0x27/0x2C/0x2D/0x2E/0x37/0x38/0x39</span> 指向兜底 → <span class="mono">0x81338</span> 的 <span class="mono">bra -1</span></td></tr>
+<tr><td><span class="tag t-old">特殊</span></td><td>1</td>
+    <td>vec <span class="mono">0x3F</span> → <span class="mono">0xFE776</span>，先清 I 位再处理 <span class="mono">0x459F0</span> 队列，不按普通中断返回</td></tr>
+</table>
+
+<p>ISR 长度分布很规整：绝大多数是 <b>15–23 条指令</b>，只有 vec <span class="mono">0x2B</span>
+（<span class="mono">0x80588</span>）是 <b>299 步</b>——它同时操作 <span class="mono">0x3F40E / 0x3F404 / 0x3F407</span>
+三个状态区加 <span class="mono">0x3F018</span>，是唯一有实质业务逻辑的中断。</p>
+
+<div class="note">
+<b>为什么这组数据重要：</b>39 个向量各自完整走一遍「硬件压栈 → ISR → 弹栈 → reti」，
+每一次都要求 r15 和 SSP 回到注入前的值。这比单点测一次 EIT 强得多——
+只要压栈顺序、PS/PC 顺序、延迟槽、<span class="mono">stm0/stm1</span> 的寄存器掩码里有任何一处错，
+39 个里必然有若干个回不到原位。现在 39/39 全过。
+</div>
+
+<h2>八、<span class="mono">0x804FA</span>：那个空的 <span class="mono">ret</span></h2>
+
+<p>复位链第③跳 <span class="mono">call 0x804FA</span>，而 <span class="mono">0x804FA</span> 就一条
+<span class="mono">ret</span>。它前面紧挨着的 <span class="mono">0x804F0</span> 是个真函数
+（写 <span class="mono">0x240=0x80</span> 后返回），所以 <span class="mono">0x804FA</span> 是独立的小函数，
+等价于 C 里的 <span class="mono">void f(void) {}</span>。</p>
+
+<p>位置很说明问题：复位链是「初始化 → <b>这一跳</b> → jmp 进 main」。在 REALOS 的标准启动里，
+这个位置正是 <span class="mono">vsta_knl()</span>——启动调度器、然后恢复第一个任务上下文、永不返回。
+这里它是一条空 <span class="mono">ret</span>，于是紧接着的 <span class="mono">jmp 0xFE426</span>
+就成了「直接跳进 main，没有任何任务上下文被建立」。</p>
+
+<p>main 结束时的收尾就很自然了：</p>
+
+<pre>0xFE470  bra 0xFE4DE            ; main 返回后跳过去
+0xFE4DE  orccr #0x20            ; S=1，切系统栈
+0xFE4E2  弹 r1 / r5 / r4
+0xFE4EC  ldm0 r0–r7
+0xFE4F2  ldm1 r8–r14
+0xFE50A  andccr #0xDF           ; S=0
+0xFE50C  reti                   ; ← 从 SSP 弹，弹到全 0</pre>
+
+<p>这段是标准的「中断/任务返回」序列。它要求 SSP 上有一帧，而 SSP 从复位到现在一次都没下压过
+（实测 <span class="mono">0x7F000</span> 纹丝不动），栈顶 8 个字全是 0，于是 PC 变成 0。</p>
+
+<h2>九、内核对象建好了，但一个都没启动</h2>
+
+<p>运行结束后看 <span class="mono">0x45C38</span> 起的内存：</p>
+
+<pre>0x45C38: 00045C38 00045C38 00000000 000FE184
+0x45C48: 00045C48 00045C48 00000000 000FE194
+0x45C58: 00045C58 00045C58 00000000 000FE1A4
+0x45C68: 00045C68 00045C68 00000000 000FE1B4</pre>
+
+<p>每个 16 字节：<span class="mono">+0</span> 和 <span class="mono">+4</span> 都指向自己（双向链表的空环），
+<span class="mono">+8</span> 是状态 0，<span class="mono">+C</span> 挂到表项 <span class="mono">0xFE184/94/A4/B4</span>
+（每条 16 字节，正好接在 <span class="mono">0xFE17C</span> 表头后面）。</p>
+
+<p><span class="mono">0x45988</span> 一带则是成排的自引用对（每 8 字节一个环），
+是 μITRON 对象（信号量、事件标志、邮箱）的等待队列头，全部初始化为空。
+<b>结论：对象内存布局是对的，就是没有一个任务被置为可运行。</b></p>
+
+<h2>十、死锁：约 400 KB 应用代码一行没跑</h2>
+
+<p>A 段 ROM 524,290 字节，实际执行过的 PC 只覆盖两小片：<span class="mono">0x80000–0x81300</span>
+（启动 + ISR）和 <span class="mono">0xFE000</span> 附近（REALOS 库）。中间
+<b><span class="mono">0x81300–0xF2FFF</span> 约 400 KB 是应用主体，一条都没执行</b>。</p>
+
+<p>于是形成一个闭环：</p>
+
+<ul>
+<li>回调表 <span class="mono">0x3F000</span> 由应用区（<span class="mono">0xAB000</span> 一带）填 → 应用没跑 → 表全 0</li>
+<li>表全 0 → 所有中断只清标志后空返回 → 不会把应用拉起来</li>
+<li>任务不启动 → 应用区没有别的入口 → 回到第一条</li>
+</ul>
+
+<p>要打破它，只有两条路：一是找到应用区的另一个入口（某个还没被识别的调用链），
+二是外部事件先让某个 ISR 的回调槽有值。前者是静态问题，后者需要建模具体外设。</p>
+
+<h2>十一、对 V5 两处说法的修正</h2>
+
+<table>
+<tr><th>V5 的说法</th><th>V6 的修正</th></tr>
+<tr><td><span class="tag t-fix">改</span>「启动只做硬件初始化、根本没发起 μITRON 服务调用，做完就返回，REALOS 去恢复一个不存在的任务上下文」</td>
+    <td>「没发起服务调用」成立（12 条 call 里 int 为 0），但<b>内核对象确实建好了</b>——4 个 TCB、全套空链表。缺的是启动调度器那一行，即 <span class="mono">0x804FA</span> 那个空 <span class="mono">ret</span></td></tr>
+<tr><td><span class="tag t-fix">改</span>「0x482 位 7 只能来自硬件」（V5 结论本身对）</td>
+    <td>补一条：A 段与 B 段<b>都没有</b>围绕 0x482 的握手代码，B 段引用 0x482 共 6 处、跑起来锁定 0 次。V4 的「双机握手」判断可以彻底放下</td></tr>
+<tr><td><span class="tag t-ok">留</span>「两段都停在 reti 弹 0」</td>
+    <td>维持。B 段 191,518 步 / 1,239 PC / 1 次 int（向量 0x40）；A 段 43,446 步 / 824 PC / 0 次 int</td></tr>
+</table>
+
+<h2>十二、下一步</h2>
+
+<ol>
+<li><b>找应用区入口</b>：在 <span class="mono">0x81300–0xF2FFF</span> 里找「只被数据表引用、不被代码 call」的函数，
+    这类通常是任务入口或回调；再对照 <span class="mono">0xFE17C</span> 表里那 3 项的内容，看能否落到具体地址。</li>
+<li><b>确认 <span class="mono">0x804FA</span> 是不是弱符号</b>：如果 REALOS 库里有同名强符号，它会出现在
+    <span class="mono">0xF8000</span> 段；找到就能证明「这一版固件故意把它留空」。</li>
+<li><b>给 <span class="mono">0x3F01C</span> 找一个真实回调</b>：从 <span class="mono">0xABCCA / 0xABFE8 / 0xAC9BC</span>
+    这三处写它的代码反推应该填什么函数，然后手工预置、注入中断，看应用区能跑多远。</li>
+<li><b>vec 0x3F 单独建模</b>：它是唯一清 I 位、允许嵌套的入口，还带一个 <span class="mono">0x459F0</span> 队列，
+    很像系统时基或 NMI。搞清它的触发条件，可能是让 A 段「活起来」的钥匙。</li>
+</ol>
+
+<h2>十三、本轮改动清单</h2>
+
+<table>
+<tr><th>文件</th><th>改动</th></tr>
+<tr><td class="m">frbox_selftest.py</td><td>新增第 10 组「A 段中断通路 48 向量」13 条断言，总计 <b>105/105</b>；向量循环用快照复用，不必为每个向量重建机器</td></tr>
+<tr><td class="m">exp_init12.py</td><td>新增：12 条初始化 call 逐条追踪（目标/返回/指令数/写入范围/int 次数）</td></tr>
+<tr><td class="m">exp_calltree.py</td><td>新增：启动全程调用树 + 函数榜 + 关键地址写者</td></tr>
+<tr><td class="m">exp_airq.py</td><td>新增：单向量中断注入与 PC 轨迹</td></tr>
+<tr><td class="m">exp_allisr.py</td><td>新增：48 向量全量注入</td></tr>
+</table>
+
+<p class="kv">回归基线（全部不变）：<span class="mono">frbox_selftest</span> 105/105、
+<span class="mono">fr_selftest</span> 全过、编码空间 64,682 可解码 / 122 助记符 / 854 未定义、
+<span class="mono">exp_order</span> 552/608/596/664、A 段 43,446 步 / 824 PC、B 段 191,518 步 / 1,239 PC。</p>
+
+</div>
+</body>
+</html>
