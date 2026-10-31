@@ -7,18 +7,20 @@
   3. 语义：读那几个 PC 附近的代码，看清 0x08 / 0x80 的来历
 """
 import sys, collections
+
+
+
+from fr_emu import TABLE
+from frbox.machine import create
+from frbox.trace import Trace
+
 import os
-
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
-from fr_emu import TABLE
-from frbox.machine import create
-from frbox.trace import Trace
 
 MASK = 0x482
 
