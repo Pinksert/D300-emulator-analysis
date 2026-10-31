@@ -3,14 +3,16 @@
 统计「16 位 / 32 位首字 / 48 位首字 / 未定义」与「能执行 / 抛未实现」。
 这是模拟器完整度的客观分数，不靠感觉。"""
 import sys, collections
+
 import os
-sys.stdout.reconfigure(encoding="utf-8")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
+
+sys.stdout.reconfigure(encoding="utf-8")
 from fr_emu import Fr, Mem, TABLE, Unimpl
 
 BASE = 0x00080000
