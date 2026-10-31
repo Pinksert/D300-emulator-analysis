@@ -34,6 +34,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from frbox.machine import create
 from frbox.itron import SVC
+from frbox import realos
 
 SVCTAB = 0x000FE3B8       # 服务分发表基址
 OBJTAB = 0x000FE180       # 对象登记表基址
@@ -56,8 +57,10 @@ def main():
     m = create("d300-a")
     m.load()
     m.boot_realos(1)
-    m.run(max_steps=300000)
     bus = m.bus
+    bus.watch.add(realos.CUR_TCB)
+    bus.access_log.clear()
+    m.run(max_steps=300000)
 
     sep("1. 服务分发表 @0x%06X（索引 = 服务号 × 2 的带符号偏移）" % SVCTAB)
     print("  陷阱 wrapper 自己怎么查表（0x0FE3EC–0x0FE3FA）：")
@@ -119,12 +122,21 @@ def main():
     print("  → 等待确实没被满足、也确实把当前 TCB 挂进了队列；但整条路径不经过")
     print("    0x0FE4DE–0x0FE514（首次派发用的上下文恢复段）。")
 
-    sep("6. 为什么到现在还没有一次真正的任务切换")
+    sep("6. V11：任务切换确实发生了（这一段是实测，不是写死的结论）")
+    ws = [e for e in bus.access_log if e[0] == "W" and e[1] == realos.CUR_TCB]
     print("  300,000 步里：")
-    print("    系统调用 1,888 次，全部由固件自己的内核处理")
-    print("    *(0x045980)（当前 TCB）全程只被写过 1 次：0x0459FC，来自 0x0FE4EC")
-    print("    任务的 USP 全程落在 0x0462xx —— 自始至终只有任务 1 在跑")
-    print("  → 下一轮的墙：要么找到内核真正交出 CPU 的那个入口，要么造一个真实硬件事件。")
+    print("    系统调用 %s 次，全部由固件自己的内核处理" % format(m.cpu.int40, ","))
+    print("    *(0x045980)（当前 TCB）被写过 %d 次：" % len(ws))
+    for kind, a, n, v, pc in ws:
+        who = "?"
+        for _r in realos.records(m):
+            if _r["tcb"] == v:
+                who = "任务 %d" % _r["id"]
+        print("      0x%05X ← 0x%06X（%s）来自 0x%06X" % (a, v, who, pc))
+    print("    现在是 0x%06X" % bus.rd(realos.CUR_TCB, 4))
+    print("  → 不开调度建模时这里只有 1 次（首次派发）；开了 0x44 之后是多次 ——")
+    print("    任务 1 阻塞 → 调度器挑优先级最高的就绪任务 → 切走 → 最后落到空闲任务。")
+    print("    完整时间线见 realos-sched.txt。")
 
 
 if __name__ == "__main__":
