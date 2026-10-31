@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 258 条断言
+python frbox_selftest.py                      # 282 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -71,7 +71,7 @@ emu/
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    258 条断言
+├── frbox_selftest.py    282 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
 └── probe/               17 个取证脚本（见 probe/README.md）
 ```
@@ -359,9 +359,69 @@ self.ps = (self.ps & ~0xFF) | ccr
 把 `p_flgptn / flgid / waiptn / wfmode` 依次放进 `r4 / r5 / r6 / r7`；`clr_flg` 的调用点
 `0x08C82A` 把 `flgid / 位模式` 放进 `r4 / r5`。返回值一律在 `r12`。
 
-**边界**：`results/frbox/realos-run.txt` 里那 300,000 步，1,888 次陷阱全部由固件内核处理，
-`*(0x45980)`（当前 TCB）却全程只被写过 1 次 —— **至今没有发生过一次真正的任务切换**。
-原因见 `KNOWN_ISSUES.md` 第 39 条。
+**边界（V10 时的说法，V11 已作废）**：`*(0x45980)` 全程只被写过 1 次 ——
+「至今没有发生过一次真正的任务切换」。原因见 `KNOWN_ISSUES.md` 第 39 条（现已标 `[FIXED]`）。
+
+---
+
+### 7.7 原生调度：任务真的换起来了（V11）
+
+第 39 条在 V11 被推翻。真因不在内核，是仿真台缺了三样东西：
+
+**① ILM 的优先级约定一直搞反了。** 正确是「级别号越小优先级越高，受理条件 `lvl < ILM`」：
+
+```python
+# 修复前：号越大越优先，受理条件 lvl > ILM
+if lvl <= self.ilm: return False
+# 修复后
+if lvl >= self.ilm: return False
+```
+
+反证：任务上下文 PS 的 ILM 是 `0x1F`，而固件写进 48 个 ICR 的级别全在 `0x12–0x1F`。
+按旧约定任务运行时一条中断都进不来。反过来则处处自洽 —— `vec 0x3F`（调度器）的 ICR=0x1E
+是所有启用向量里最低的（调度器本就该最低），内核 `stilm #0x1E` 恰好只挡它一级，
+派发因此被自然地推迟到 `reti` 回到任务上下文之后。
+
+**② 直接页 `0x44` 是「请求调度」寄存器。** 内核每次要换任务就写 1 进去
+（`0x0FECEC ldi:8 #1,r13` / `0x0FECF0 dmovb @0x44`，普通内存写不是 `int`），
+30 万步写了 1,016 次，**固件里没有任何一处读它** —— 只写不读，只可能是硬件。
+建模：写非零字节 → 挂一条 `vec 0x3F`，级别取固件自己写进 ICR 的值。
+
+**③ `0x3F4` / `0x3FC` 是硬件优先级编码器。** 调度器 `0x0FE830` 写就绪位图进 `0x3F4`、
+从 `0x3FC` 读回、乘 8 当就绪队列数组的下标。所以读回值必须等于「最高优先级号」：
+
+```
+结果 = 前导零个数 = 32 - bit_length(位图)
+实测：0x50800000 → 1 ／ 0x80000000 → 0 ／ 0x00000001 → 31 ／ 0 → 32
+```
+
+三样齐了之后，100 万步里 `*(0x45980)` 换了 6 次（首次由 `0x0FE4EC`，其余由 `0x0FE8BE`）：
+
+```
+43,429 任务 1 → 43,516 任务 5 → 43,806 任务 1 → 44,614 任务 5
+→ 45,125 任务 1 → 45,341 空闲任务，最后停在 0x000FE510（空闲任务的 bra -1）
+调度请求 7 次 / 编码查询 7 次 / 位图为 0 的次数 0 / 中途没有停机
+```
+
+内核的调度数据结构（`probe/exp_realos_sched.py`）：
+
+| 地址 | 内容 |
+|---|---|
+| `0x00045980` | 当前 TCB（调度器 `0x0FE798` 处读它） |
+| `0x00045984` | 就绪位图，置位规律 `bit(31 − 优先级)` |
+| `0x00045988` | 就绪队列数组，13 条 × 8 字节（next, prev），空队列自指 |
+| `0x000459F0` | 派发请求字节，调度器用 `xchb` 原子读走并清零 |
+| `0x0003F4 / 0x0003FC` | 优先级编码器（写位图 / 读优先级号） |
+| 直接页 `0x44` | 请求调度（只写） |
+
+⚠️ **A / B 两个模式必须分开报**：A = `enable_xfer()` + `realos.prepare()`，
+任务 1 一路跑到底，30 万步 1,888 次服务、`*(0x45980)` 只写 1 次；
+B = `boot_realos()`（= A + `enable_dispatch()`），只有 14 次服务、写 6 次。
+CLI 的 `--realos` 走 B，裸跑默认 A（保住 V2–V10 的基线）。
+
+⚠️ **别读成「相机跑起来了」**：13 个任务只有 3 个上场（1 / 5 / 空闲），
+7 次调度全部来自内核自身的服务调用，没有一次是外设中断引发的。
+见 `KNOWN_ISSUES.md` 第 41–44 条。
 
 ---
 
@@ -534,7 +594,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 258 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 17 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 |
+| `frbox_selftest.py` | 282 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -542,7 +602,7 @@ machines   help   quit
 `results/frbox/` 下是同一次运行的真实输出：`selftest.txt`、`cpu-selftest.txt`、`boot.txt`、
 `session.txt`、`isr-injection.txt`、`isr-fire.txt`、`autospin-run.txt`、`autospin-session.txt`、
 `irq-session.txt`、`boot-seq.txt`、`boot-session.txt`、`sp-rp.txt`、`sp-rp-sweep.txt`、
-`svc-layers.txt`、`coverage.txt`、`realos-chain.txt`、`realos-tcb.txt`、`realos-run.txt`、`realos-objects.txt`。
+`svc-layers.txt`、`coverage.txt`、`realos-chain.txt`、`realos-tcb.txt`、`realos-run.txt`、`realos-objects.txt`、`realos-sched.txt`。
 
 ---
 
@@ -550,10 +610,14 @@ machines   help   quit
 
 不是"再跑跑就好"的清单，是**当前能力的边界**：
 
-1. **没有调度器，任务上下文是硬造的。** 三处忙等放行后，任务 1 在 `0x080504` 的 `ret`
-   上掉出界：`0x080502` 的 `ld @r15+,rp` 从栈里弹出来的 RP 是 0。要让任务真的"活着"，
-   缺的不是硬件，而是 REALOS 给它铺的那层初始栈帧（以及就绪队列里的一条记录）。
-   这条**不是模拟器的缺口，是任务启动方式的缺口**。
+1. ~~**没有调度器，任务上下文是硬造的。**~~ **V10 已推翻**：内核一直在固件里，
+   之前进不去只是因为 `andccr`/`orccr` 改 S 位时不换 `r15`。修掉之后固件自己的 REALOS
+   原生跑起来（43,428 步到派发点 `0x0FE4E6`），**V11 更进一步：任务真的换起来了**
+   （100 万步 6 次切换）。现在的边界不是「有没有调度器」，而是：
+   **13 个任务里只有 3 个上场**，其余 10 个的上下文要靠 `sta_tsk` 去建，
+   而触发 `sta_tsk` 的硬件事件（按键 / 拨盘 / 存储卡 / 时钟）一个都没有。
+   旧现象里「任务 1 在 `0x080504` 的 `ret` 上掉出界、RP 弹出 0」那段仍然成立，
+   但那是 `boot_task`（手工跳）这条老路的记录，不是原生路径。
 2. **自旋消除器有误伤可能。** 判据是「0x100 窗口内 3,000 步没离开」，一个真的长延时循环
    也会被当成忙等而放行一个不相关的位。所以它默认关着，只在明确知道前面有硬件等待时开。
 3. **三处外设窗口语义未解**：`0x50000000` / `0x68000000` / `0x4000D000`，都有上万次
