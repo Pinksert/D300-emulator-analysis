@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V9 · 任务表与启动序列</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V9：任务表解出来了，启动链跑完了一次</h1>
+<div class="sub">D300 固件 A 段 · REALOS 8 个任务的入口与栈顶 · 会阻塞的 μITRON 半主机 · 13 个握手事件 · <span class="mono">sys_ext_tsk</span> 正常退出</div>
+
+<div class="kpis">
+  <div class="kpi"><b>8</b><span>任务表里的任务</span></div>
+  <div class="kpi"><b>13</b><span>启动握手事件</span></div>
+  <div class="kpi"><b>56</b><span>服务调用（真内核）</span></div>
+  <div class="kpi"><b>212/212</b><span>自检通过</span></div>
+</div>
+
+<h2>一、这一版最重要的三件事</h2>
+
+<div class="card">
+<p>V8 的结尾留了一句话：「缺的不是硬件，是调度器给任务铺的那层栈帧」。这一版把这句话否掉了 ——
+真正的原因只有一个，而且比想象的简单得多。</p>
+<ul>
+<li><b>栈顶其实不影响结局。</b>此前用的 <span class="mono">0x0004616C</span> 确实错了（它是<strong>表头</strong>那一项，
+任务 1 真正的栈顶是 <span class="mono">0x000462EC</span>），但把栈顶从 0x45000 一路换到系统栈 0x7F000，
+跑出来的步数和结束地址<b>一个字节都不差</b>。原因是任务的压栈/弹栈是平衡的。</li>
+<li><b>RP 从来没设过 —— 这才是唯一成因。</b>任务的收尾是 <span class="mono">ld @r15+,rp; ret</span>，
+返回地址就是进函数时压进去的那个 RP。不设的话，它沿用引导阶段最后一次 <span class="mono">call</span> 留下的
+<span class="mono">0x00080500</span>，于是任务「返回」到一段不相干的代码里，看起来像「掉到地址 0」。</li>
+<li><b>「跑得越久」不代表「跑得越对」。</b>把 <span class="mono">wai_flg</span> 当成立即返回的空实现，
+任务会一路往下冲、从来不等，56 次调用里没有一次是真的；挂上会阻塞的内核后，
+它在 <b>9,841</b> 步就停在了第一个握手上 —— 比「跑完」早得多，但那次才是真的。</li>
+</ul>
+</div>
+
+<h2>二、任务表：8 个任务，一条 0x1C 字节</h2>
+
+<p>入口在 <span class="mono">0x000FE000</span>。头 16 字节之后，每 <span class="mono">0x1C</span> 字节一条记录，
+共 <b>8</b> 条。</p>
+
+<h3>2.1 表头</h3>
+
+<table>
+<tr><th>偏移</th><th>值</th><th>读法</th></tr>
+<tr><td class="m">+0x00</td><td class="m">0x00000008</td><td>任务数 = 8</td></tr>
+<tr><td class="m">+0x04</td><td class="m">0x0004616C</td><td><b>不是任务栈顶</b>，是个基准值（此前一直被误当任务 1 的 SP）</td></tr>
+<tr><td class="m">+0x08</td><td class="m">0xFFFFFFFF</td><td>结束/无效标记</td></tr>
+<tr><td class="m">+0x0C</td><td class="m">0x000C001C</td><td>两条 16 位：<span class="mono">12</span> / <span class="mono">0x1C</span>（后者正好是记录步长）</td></tr>
+</table>
+
+<h3>2.2 记录（每 0x1C 字节）</h3>
+
+<table>
+<tr><th>偏移</th><th>含义</th><th>据什么定的</th></tr>
+<tr><td class="m">+0x00</td><td>TCB 指针</td><td>相邻两条恒差 <span class="mono">0x2C</span>，即 TCB 大小</td></tr>
+<tr><td class="m">+0x04</td><td>任务号 &lt;&lt; 16 | 属性</td><td>8 条依次是 <span class="mono">0x00010004 … 0x00080004</span></td></tr>
+<tr><td class="m">+0x08</td><td>保留（全 0）</td><td>8 条一致</td></tr>
+<tr><td class="m">+0x0C</td><td>状态</td><td>只有任务 1 和任务 5 是 <span class="mono">0x80000000</span></td></tr>
+<tr><td class="m">+0x10</td><td>入口地址</td><td>8 条全部落在应用区，且首条都是合法的函数序言</td></tr>
+<tr><td class="m">+0x14</td><td>栈顶</td><td>8 条落在 <span class="mono">0x462EC–0x4699C</span>，间距 0x118 / 0xD4 / 0x128 / 0xB4 / 0x11C / 0x12C / 0xA0</td></tr>
+<tr><td class="m">+0x18</td><td>保留（全 0）</td><td>8 条一致</td></tr>
+</table>
+
+<h3>2.3 八条记录</h3>
+
+<table>
+<tr><th>#</th><th>TCB</th><th>号</th><th>属性</th><th>状态</th><th>入口</th><th>入口首条</th><th>栈顶</th></tr>
+<tr class="hi"><td class="m">1</td><td class="m">0x0459FC</td><td class="m">1</td><td class="m">0x04</td><td class="m">0x80000000</td><td class="m">0x08133A</td><td class="m">stm1</td><td class="m">0x0462EC</td></tr>
+<tr><td class="m">2</td><td class="m">0x045A28</td><td class="m">2</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x089632</td><td class="m">stm1</td><td class="m">0x046404</td></tr>
+<tr><td class="m">3</td><td class="m">0x045A54</td><td class="m">3</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x08B264</td><td class="m">st</td><td class="m">0x0464D8</td></tr>
+<tr><td class="m">4</td><td class="m">0x045A80</td><td class="m">4</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x08C486</td><td class="m">stm1</td><td class="m">0x046600</td></tr>
+<tr class="hi"><td class="m">5</td><td class="m">0x045AAC</td><td class="m">5</td><td class="m">0x02</td><td class="m">0x80000000</td><td class="m">0x0A62FE</td><td class="m">stm1</td><td class="m">0x0466B4</td></tr>
+<tr><td class="m">6</td><td class="m">0x045AD8</td><td class="m">6</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x0A6A30</td><td class="m">stm1</td><td class="m">0x0467D0</td></tr>
+<tr><td class="m">7</td><td class="m">0x045B04</td><td class="m">7</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x0A9A4E</td><td class="m">st</td><td class="m">0x0468FC</td></tr>
+<tr><td class="m">8</td><td class="m">0x045B30</td><td class="m">8</td><td class="m">0x04</td><td class="m">0</td><td class="m">0x0ACC32</td><td class="m">stm1</td><td class="m">0x04699C</td></tr>
+</table>
+
+<p>高亮的两条是复位时就已经 <span class="mono">0x80000000</span> 的 —— 任务 1 和任务 5。
+任务 5 的属性是 <span class="mono">0x02</span> 而其余是 <span class="mono">0x04</span>，可能表示优先级或「常驻/一次性」的差别，<b>未定</b>。</p>
+
+<div class="warnbox"><b>口径修正：</b>V7/V8 里所有「任务 1 的栈顶 = 0x4616C」都要改成
+<b>0x462EC</b>；<span class="mono">0x4616C</span> 是表头 +4 的那个基准值。
+但要注意：<b>把栈顶写对并不解决「掉到地址 0」</b> —— 原因不在栈顶，见下节。</div>
+
+<h2>三、真正的原因是 RP —— 栈顶其实不影响</h2>
+
+<h3>3.1 任务函数长什么样</h3>
+
+<pre>0x08133A  stm1 r12,r13       ; 存 r12/r13
+0x08133C  st   rp, @-r15     ; 存 RP —— 注意 0x1781 / 反过来的 0x0781 就是 ld @r15+,rp
+0x08133E  enter #2           ; 开 2 个字局部变量
+   ...
+0x0813F8  leave
+0x0813FA  ld   @r15+,rp      ; 取回 RP
+0x0813FC  ldm1 r12,r13
+0x0813FE  ret                ; 跳到 RP</pre>
+
+<p>关键在于这个压栈/弹栈是<b>平衡</b>的：进函数时压进去的那个 RP，就是出函数时弹出来的那个。
+所以任务「返回」到哪里，<b>只由进函数时的 RP 决定，与栈顶初值无关</b> ——
+栈顶只决定那 4 个字节压在哪个地址。
+<code>boot_task</code> 只设了 PC / SP / r4，RP 没管。</p>
+
+<h3>3.2 五种栈顶 × 两种 RP 的实测</h3>
+
+<table>
+<tr><th>栈顶</th><th>RP</th><th>结果</th></tr>
+<tr class="hi"><td class="m">0x462EC（任务表真值）</td><td class="m">0x81338</td><td>入口后 32,726 步 → 固件自带的 <span class="mono">bra -1</span> 停机占位</td></tr>
+<tr class="hi"><td class="m">0x4616C（表头字段）</td><td class="m">0x81338</td><td><b>一模一样</b>：32,726 步 → 停机占位</td></tr>
+<tr><td class="m">0x46000 / 0x45000（往下挪）</td><td class="m">0x81338</td><td><b>还是一模一样</b>：32,726 步 → 停机占位</td></tr>
+<tr><td class="m">0x7F000（系统栈，明显错）</td><td class="m">0x81338</td><td><b>仍然一模一样</b>：32,726 步 → 停机占位</td></tr>
+<tr><td class="m">0x462EC（对）</td><td>不设（沿用残值 <span class="mono">0x80500</span>）</td><td>跑满 200 万步（实测 2,000,480）停在 <span class="mono">0x0FE404</span>，看着最「成功」</td></tr>
+<tr><td class="m">0x4616C（错）</td><td>不设（沿用残值 <span class="mono">0x80500</span>）</td><td>累计 39,391 步 → PC=0，报「取指落在不可执行区」（V8 看到的那个现象）</td></tr>
+</table>
+
+<p>两半的结论很干净：</p>
+<ul>
+<li><b>RP 给对，栈顶怎么给都能跑完</b>，连给到系统栈 0x7F000 都是同一个 32,726 步。
+因为压栈/弹栈平衡，栈顶只影响那 4 个字节的落点，不影响返回值。</li>
+<li><b>RP 不给，栈顶给对也跑不完</b> —— 返回地址是引导阶段最后一次 <code>call</code> 留下的
+<span class="mono">0x80500</span>，一路弹栈弹到别处。栈顶不同只决定「弹到哪儿」：
+给表头字段弹到地址 0，给真值则绕回 <span class="mono">0x080500</span> 那条残余链。</li>
+</ul>
+
+<div class="fixbox"><b>这一版的纠正：</b>V8 说「掉到地址 0 是因为缺一层调度器铺的栈帧」。
+<b>不对。</b>唯一的成因是 <code>boot_task</code> 从没设过 RP，于是沿用了引导阶段最后一次
+<code>call</code> 留下的 <span class="mono">0x080500</span>。改一个参数就能让它正常返回，
+<b>不需要造任何假调度器</b>。<br>
+顺带纠正本文档自己的初稿：曾把「栈顶取错」也列成成因之一，实测证明它不影响结局。</div>
+
+<h2>四、μITRON 半主机：让 <span class="mono">wai_flg</span> 真的会停</h2>
+
+<h3>4.1 为什么非做不可</h3>
+
+<p>frbox 原来把 <span class="mono">int #0x40</span> 全部当成立即返回的空实现。这对
+<span class="mono">sys_get_ver</span> 这类查询没问题，对 <span class="mono">sys_wai_flg</span> 就致命：
+等待立刻「成功」，任务于是不停地
+<span class="mono">wai_flg → clr_flg → sta_tsk</span>。</p>
+
+<p>结果就是：任务不会停，但也从来没「跑对」过 —— 它一路往下冲，
+把本该等外部事件的地方全部当成「已经就绪」。
+<strong>「没停机」不等于「跑对了」。</strong>这条判据是这一版最重要的收获。</p>
+
+<h3>4.2 做法</h3>
+
+<div class="card">
+<ul>
+<li>建 17 个事件标志对象（数量取自固件自己的标志表 <span class="mono">0x551B0</span> 的 17 项）；</li>
+<li><span class="mono">set_flg</span> / <span class="mono">clr_flg</span> 按 μITRON 语义真改位模式；</li>
+<li><span class="mono">wai_flg</span> 按 <span class="mono">wfmode</span> 判：位 <span class="mono">0x02</span> = 或等待（任一位命中），
+否则与等待（全部命中）；满足才返回，不满足就<strong>把机器置成「阻塞」</strong>，
+记下标志号、等待位、等待模式、PC；</li>
+<li><span class="mono">sys_slp_tsk</span> / <span class="mono">sys_dly_tsk</span> / <span class="mono">sys_ext_tsk</span> 同样按「停下来」处理；</li>
+<li>外部事件用 <span class="mono">flag set &lt;id&gt;=&lt;bits&gt;</span> 注入，<span class="mono">resume</span> 把 CPU 恢复到那条
+<span class="mono">int</span> 指令<strong>重新执行一遍</strong> —— 这次条件满足，服务正常返回。</li>
+</ul>
+</div>
+
+<div class="note">「重新执行那条 int」而不是「直接往下走」，是为了让 <span class="mono">r12</span>（错误码）和
+<span class="mono">r13</span>（返回的标志位模式）由同一条代码路径产生，避免出现「状态对了但寄存器没填」的半吊子结果。</div>
+
+<h3>4.3 参数顺序的坑</h3>
+
+<table>
+<tr><th>服务</th><th>标志号</th><th>位模式</th><th>模式</th><th>输出</th></tr>
+<tr><td class="m">sys_wai_flg</td><td class="m">R5</td><td class="m">R6 waiptn</td><td class="m">R7 wfmode</td><td class="m">R13 flagptn / R12 err</td></tr>
+<tr><td class="m">sys_set_flg</td><td class="m">R4</td><td class="m">R5</td><td>-</td><td class="m">R12 err</td></tr>
+<tr><td class="m">sys_clr_flg</td><td class="m">R4</td><td class="m">R5</td><td>-</td><td class="m">R12 err</td></tr>
+</table>
+
+<p>两套顺序不一样。混用会读到一个假标志号，表现为「等的东西和实际固件等的不是同一个」，
+而且不会有任何报错 —— 这一版第一次跑就踩到了。</p>
+
+<h2>五、跑出了什么：13 个握手事件</h2>
+
+<p>真内核 + 自动送事件（<span class="mono">--autoevent</span>：等不到就把事件补上并记录），
+任务 1 在入口后 <b>25,857</b> 步内走完整条启动链，最后自己调 <span class="mono">sys_ext_tsk</span> 退出。</p>
+
+<table>
+<tr><th>#</th><th>累计步数</th><th>等待点 PC</th><th>标志</th><th>等待位</th><th>模式</th><th>送来之前的值</th></tr>
+<tr><td class="m">1</td><td class="m">9,840</td><td class="m">0x081490</td><td class="m">3</td><td class="m">0x2000</td><td class="m">2</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">2</td><td class="m">17,319</td><td class="m">0x08C808</td><td class="m">1</td><td class="m">0x8000</td><td class="m">2</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">3</td><td class="m">29,362</td><td class="m">0x08157C</td><td class="m">9</td><td class="m">0x400</td><td class="m">2</td><td class="m">0x00040104</td></tr>
+<tr><td class="m">4</td><td class="m">32,806</td><td class="m">0x0815C6</td><td class="m">9</td><td class="m">0xE000</td><td class="m">2</td><td class="m">0x00000100</td></tr>
+<tr><td class="m">5</td><td class="m">32,855</td><td class="m">0x081622</td><td class="m">4</td><td class="m">0x2000</td><td class="m">2</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">6</td><td class="m">33,127</td><td class="m">0x081654</td><td class="m">9</td><td class="m">0x1000</td><td class="m">2</td><td class="m">0x0000E100</td></tr>
+<tr><td class="m">7</td><td class="m">34,320</td><td class="m">0x081700</td><td class="m">9</td><td class="m">0x800</td><td class="m">2</td><td class="m">0x00000100</td></tr>
+<tr><td class="m">8</td><td class="m">34,409</td><td class="m">0x081720</td><td class="m">4</td><td class="m">0x800</td><td class="m">2</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">9</td><td class="m">34,417</td><td class="m">0x081732</td><td class="m">9</td><td class="m">0x200</td><td class="m">2</td><td class="m">0x00000900</td></tr>
+<tr><td class="m">10</td><td class="m">35,310</td><td class="m">0x081910</td><td class="m">9</td><td class="m">0x10000</td><td class="m">2</td><td class="m">0x00000100</td></tr>
+<tr><td class="m">11</td><td class="m">35,323</td><td class="m">0x081930</td><td class="m">6</td><td class="m">0x1000</td><td class="m">3</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">12</td><td class="m">35,336</td><td class="m">0x08194C</td><td class="m">6</td><td class="m">0x100</td><td class="m">2</td><td class="m">0x00000000</td></tr>
+<tr><td class="m">13</td><td class="m">35,344</td><td class="m">0x08195E</td><td class="m">1</td><td class="m">0x4000</td><td class="m">2</td><td class="m">0x00008200</td></tr>
+</table>
+
+<p>读法：</p>
+<ul>
+<li><b>第一个等待在第 9,840 步</b>，等 <span class="mono">flag 3</span> 的 <span class="mono">0x2000</span>。
+这不是硬件没就绪 —— 它等的是「别的任务/中断把这件事做完了」。</li>
+<li><b>第 11 条模式是 3</b>（<span class="mono">0x02 | 0x01</span>），即「或等待 + 命中后自动清位」，13 条里只有这一条带自动清。</li>
+<li><b>第 2 条的等待点在 <span class="mono">0x08C808</span></b>，不在任务 1 自己的代码区
+（任务 1 从 <span class="mono">0x08133A</span> 起）—— 说明这段是任务 4（入口 <span class="mono">0x08C486</span>）的代码，
+是 <b>调用链穿过去的</b>。</li>
+</ul>
+
+<h2>六、服务调用：换了 μITRON 那一层，路径就变了</h2>
+
+<p>四种挂法，同一快照、同一 200 万步上限，只换 <span class="mono">int #0x40</span> 那一层。
+「次数」按<b>执行到的 <span class="mono">int #0x40</span> 指令条数</b>数，不用钩子计数 ——
+因为不挂钩子时它真的会走 EIT 进向量表，挂上钩子就被截住当服务返回，两者不是同一条路。</p>
+
+<table>
+<tr><th>挂法</th><th><span class="mono">int #0x40</span></th><th>累计步数</th><th>停在哪</th><th>这个数说明了什么</th></tr>
+<tr><td>不挂钩子（走真向量表）</td><td class="m">56</td><td class="m">42,442</td><td class="m">0x081338</td><td>调用全被当普通中断吞掉，等于没有 REALOS</td></tr>
+<tr><td><span class="mono">--itron</span> 一律立即返回</td><td class="m">56</td><td class="m">38,639</td><td class="m">0x081338</td><td>任务一路往下跑，<b>从来没等过任何事件</b></td></tr>
+<tr class="hi"><td><span class="mono">--itron-block</span> 真阻塞</td><td class="m">9</td><td class="m">9,841</td><td class="m">0x081492</td><td>停在第一个 <span class="mono">wai_flg</span>，步数少一个数量级但那次是真的</td></tr>
+<tr class="hi"><td><span class="mono">--itron-block --autoevent</span></td><td class="m">56</td><td class="m">35,573</td><td class="m">0x0813F8</td><td>补上 13 个事件走完整条链，<span class="mono">sys_ext_tsk</span> 退出</td></tr>
+</table>
+
+<p><b>关键读法：前两种也各有 56 次调用，和第四种一样多。</b>所以「调用次数」根本不是判据 ——
+判据是<b>有没有真的在某一步停下来等</b>。第三行只执行了 9 条 <span class="mono">int</span> 就停住，
+那 9 条里有 8 条是立即满足的查询，第 9 条是真的等。</p>
+
+<p>56 次的构成：</p>
+
+<table>
+<tr><th>服务</th><th>次数</th><th>在这条链上的作用</th></tr>
+<tr><td class="m">sys_wai_flg</td><td class="m">19</td><td>等事件（13 次自动补，6 次立即满足）</td></tr>
+<tr><td class="m">sys_clr_flg</td><td class="m">14</td><td>清事件</td></tr>
+<tr><td class="m">sys_set_flg</td><td class="m">10</td><td>置事件（自己和别人的）</td></tr>
+<tr><td class="m">sys_sta_tsk</td><td class="m">10</td><td>启动其他任务</td></tr>
+<tr><td class="m">sys_snd_msg</td><td class="m">1</td><td>往邮箱发消息</td></tr>
+<tr><td class="m">sys_ter_tsk</td><td class="m">1</td><td>终止别的任务</td></tr>
+<tr><td class="m">sys_ext_tsk</td><td class="m">1</td><td><b>任务自己退出</b></td></tr>
+</table>
+
+<h2>七、10 次 sta_tsk 的细节</h2>
+
+<table>
+<tr><th>累计步数</th><th>服务</th><th>tsk_id</th><th>tsk_param</th><th>对应入口</th></tr>
+<tr><td class="m">17,275</td><td class="m">sta_tsk</td><td class="m">9</td><td class="m">0x1</td><td>表里没有 9</td></tr>
+<tr><td class="m">17,300</td><td class="m">sta_tsk</td><td class="m">4</td><td class="m">0x8082</td><td class="m">0x08C486</td></tr>
+<tr><td class="m">32,747</td><td class="m">sta_tsk</td><td class="m">10</td><td class="m">0x5</td><td>表里没有 10</td></tr>
+<tr><td class="m">33,477</td><td class="m">sta_tsk</td><td class="m">4</td><td class="m">0x8085</td><td class="m">0x08C486</td></tr>
+<tr><td class="m">33,957</td><td class="m">sta_tsk</td><td class="m">6</td><td class="m">0x2</td><td class="m">0x0A6A30</td></tr>
+<tr><td class="m">35,144</td><td class="m">ter_tsk</td><td class="m">10</td><td class="m">0x5</td><td>—</td></tr>
+<tr><td class="m">35,329</td><td class="m">sta_tsk</td><td class="m">7</td><td class="m">0x11</td><td class="m">0x0A9A4E</td></tr>
+<tr><td class="m">35,425</td><td class="m">sta_tsk</td><td class="m">4</td><td class="m">0xFE01</td><td class="m">0x08C486</td></tr>
+<tr><td class="m">35,485</td><td class="m">sta_tsk</td><td class="m">10</td><td class="m">0x0</td><td>表里没有 10</td></tr>
+<tr><td class="m">35,490</td><td class="m">sta_tsk</td><td class="m">9</td><td class="m">0x101</td><td>表里没有 9</td></tr>
+<tr><td class="m">35,500</td><td class="m">sta_tsk</td><td class="m">4</td><td class="m">0xFF01</td><td class="m">0x08C486</td></tr>
+</table>
+
+<p>两条观察：</p>
+<ul>
+<li><b>任务 4（<span class="mono">0x08C486</span>）被启动了 4 次，每次参数不同</b>（<span class="mono">0x8082</span> / <span class="mono">0x8085</span> / <span class="mono">0xFE01</span> / <span class="mono">0xFF01</span>）。
+像是「同一个工作函数，按事件码分派」。参数里的低字节像事件编号。</li>
+<li><b><span class="mono">tsk_id</span> 出现了 9 和 10</b>，而任务表只有 8 条。
+要么任务表不止这 8 条（头部那个 8 不是总数），要么这两个 id 在 REALOS 里另有含义。 <span class="tag t-wn">未定</span></li>
+</ul>
+
+<h2>八、结束：<span class="mono">sys_ext_tsk</span></h2>
+
+<pre>0x0813EE  add    #1, r9
+0x0813F0  bandl  #0x80, r9        ; 取状态位
+0x0813F2  ldi:8  r12, 0xEB         ; 0xEB = -21 = sys_ext_tsk
+0x0813F4  extsb  r12
+0x0813F6  int    #0x40             ; ← 任务自己退出
+0x0813F8  leave</pre>
+
+<p>所以任务 1 是<b>一次性初始化任务</b>：把该起的东西起起来、该置的标志置上，然后退出。
+它不是常驻循环，也不是「卡住了」。</p>
+
+<div class="card">
+<p><b>这就是 V6 起一直在问的那个问题的答案。</b>从 V6 起我们一直在说「内核对象建好了，缺的是启动调度器那一行」。
+现在可以说得更准确：</p>
+<ul>
+<li>启动链是完整的、可执行的 —— 只要给它一个能落地的 RP，再让 <span class="mono">wai_flg</span> 真的会等；</li>
+<li>缺的那一行仍然缺（<span class="mono">0x804FA</span> 的孤立 <span class="mono">ret</span> 还在），
+所以真机上这段跑不起来的原因不在这一段代码，而在<b>没人调用它</b>；</li>
+<li>一旦调用，它需要的事件来自别处（其他任务或中断）—— 仿真台现在可以代替那个「别处」。</li>
+</ul>
+</div>
+
+<h2>九、接口</h2>
+
+<h3>9.1 命令行</h3>
+
+<pre># 任务表
+python -m frbox -M d300-a -c "tasks"
+
+# 真内核：停在第 1 个握手
+python -m frbox -M d300-a --itron-block --autospin \
+       --task 0x8133A::0:0x80506 --task-from-table --rp 0x81338 \
+       -c "c 200000;info"
+
+# 内核 + 自动送事件：跑完整条启动链
+python -m frbox -M d300-a --itron-block --autoevent --autospin \
+       --task 0x8133A::0:0x80506 --task-from-table --rp 0x81338 \
+       -c "c 200000;info;svc"
+
+# 手动送一个事件再继续
+python -m frbox -M d300-a --itron-block --autospin \
+       --task 0x8133A::0:0x80506 --task-from-table --rp 0x81338 \
+       -c "c 200000;flag set 3=0x2000;resume 200000;info"</pre>
+
+<h3>9.2 monitor</h3>
+
+<table>
+<tr><th>命令</th><th>作用</th></tr>
+<tr><td class="m">tasks</td><td>8 条任务的 TCB / 号 / 状态 / 入口 / 栈顶</td></tr>
+<tr><td class="m">svc [N]</td><td>服务调用直方图（带服务名）</td></tr>
+<tr><td class="m">flag [list | set ID=BITS | clr ID]</td><td>看 / 注入 / 清事件标志</td></tr>
+<tr><td class="m">resume [MAX]</td><td>从被阻塞的那条 <span class="mono">int</span> 指令重新执行并继续</td></tr>
+</table>
+
+<h3>9.3 Python API</h3>
+
+<pre>m = create("d300-a", autospin=True)
+m.load()
+m.attach_kernel(auto_event=False)            # 或 auto_event=True
+m.boot_task(0x8133A, from_table=True, rp=0x81338, stop_pc=0x80506)
+m.run(max_steps=200000)
+
+m.task_table()      # [{'tcb','id','attr','state','active','entry','sp'} ...]
+m.blocked           # {'svc','flag','pattern','mode','current','pc','step'}
+m.exited            # 任务自己调 sys_ext_tsk 时的同结构记录
+m.kernel.events     # 自动送出的事件序列
+m.kernel.task_ops   # sta_tsk / ter_tsk 记录
+m.flag_set(3, 0x2000)
+m.resume()</pre>
+
+<h2>十、自检</h2>
+
+<p>从 160 条加到 <b>212</b> 条，新增两组：</p>
+
+<table>
+<tr><th>组</th><th>条数</th><th>验什么</th></tr>
+<tr><td>14 REALOS 任务表</td><td class="m">19</td><td>表头计数、8 条记录、TCB 步长 0x2C、记录步长 0x1C、入口/栈顶取值、激活位、属性差异、表头那个 0x4616C 不是任何任务的栈顶、<span class="mono">from_table</span> 自动取栈顶，以及<b>「栈顶换成系统栈 0x7F000 结果不变」</b>这条因果断言</td></tr>
+<tr><td>15 μITRON 半主机</td><td class="m">33</td><td>初始标志全 0、阻塞在 flag 3/0x2000、模式判定、<span class="mono">flag set</span>+<span class="mono">resume</span> 后换到下一个等待、自动送 13 个事件、56 次调用、10 次 sta_tsk、<span class="mono">ext_tsk</span> 退出、以及「不挂内核时 32,726 步返回」这条反向对照</td></tr>
+</table>
+
+<p class="kv">反向对照那条是故意留的：不挂内核也能「跑完」，步数还不一样。
+如果只测「挂内核的结果」，就没法证明挂内核这件事改变了什么。</p>
+
+<h2>十一、还没解决的</h2>
+
+<table>
+<tr><th>#</th><th>问题</th><th>性质</th></tr>
+<tr><td class="m">1</td><td><span class="mono">tsk_id</span> 9 / 10 在任务表里找不到</td><td>要么表不止 8 条，要么另有含义</td></tr>
+<tr><td class="m">2</td><td>任务 5（属性 <span class="mono">0x02</span>）复位时就是激活态，但从未被观察到运行</td><td>需要一个调度器才能验</td></tr>
+<tr><td class="m">3</td><td>没有调度器：阻塞之后只能「补事件+重跑那条 int」，不能切到另一个任务</td><td>下一步的大工程</td></tr>
+<tr><td class="m">4</td><td>自旋消除器靠「停够久」判忙等，长延时循环会被误伤</td><td>已知边界，默认关闭</td></tr>
+<tr><td class="m">5</td><td>三处外设窗口语义未解、854 个未定义编码、没有 gdbstub</td><td>同 V8</td></tr>
+</table>
+
+<h2>十二、一句话总结</h2>
+
+<div class="card">
+<p>V8 说「缺的是调度器铺的那层栈帧」。V9 证否：<b>栈顶错了不影响</b>（五种取值跑出同一结果），
+<b>唯一的成因是 RP 从来没设</b> —— 补上一个参数，任务 1 就能正常返回到固件自带的停机占位。<br>
+再把 <span class="mono">wai_flg</span> 从「立刻成功」改成「真的会等」，任务 1 在 <b>9,841</b> 步停在了
+第一个握手上 —— 早了一个数量级，但那才是真的。<br>
+喂进 13 个事件之后它走完了：<b>56</b> 次服务调用、<b>10</b> 次 <span class="mono">sta_tsk</span>、
+<b>35,573</b> 步，然后 <span class="mono">sys_ext_tsk</span> 退出。
+<b>任务 1 是一次性初始化任务</b>，不返回、不循环。</p>
+</div>
+
+<p class="kv" style="margin-top:34px">数据来源：<span class="mono">results/frbox/</span> 下的
+<span class="mono">boot-seq.txt</span>（启动序列）、<span class="mono">sp-rp.txt</span> 与
+<span class="mono">sp-rp-sweep.txt</span>（栈顶 × RP）、<span class="mono">svc-layers.txt</span>
+（四种挂法）、<span class="mono">boot-session.txt</span>（monitor 实录）、
+<span class="mono">selftest.txt</span>。这五份都由 <span class="mono">emu/probe/</span> 下的脚本生成，
+不含手抄数字；本页每个数字都能在仓库形态下重跑复现。</p>
+
+</div>
+</body>
+</html>
