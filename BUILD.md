@@ -34,7 +34,7 @@ export FRBOX_FW_DIR=/path/to/D300Update      # Windows: set FRBOX_FW_DIR=...
 ```bash
 cd emu
 python fr_selftest.py        # CPU 核心 54 条
-python frbox_selftest.py     # 整机 120 条
+python frbox_selftest.py     # 整机 160 条
 ```
 
 两套都应该是全绿。**自检不过时，取证脚本的结论没有意义** —— 这是这个项目自己踩过的坑。
