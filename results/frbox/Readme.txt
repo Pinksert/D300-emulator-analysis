@@ -5,8 +5,12 @@ frbox 线的原始输出
 
 文件                    生成命令
 ----------------------  ---------------------------------------------------------------
-selftest.txt            cd emu && python frbox_selftest.py              （212 条断言）
-cpu-selftest.txt        cd emu && python fr_selftest.py                 （54 条 CPU 断言）
+selftest.txt            cd emu && python frbox_selftest.py              （258 条断言）
+cpu-selftest.txt        cd emu && python fr_selftest.py                 （63 条 CPU 断言）
+realos-chain.txt        cd emu && python probe/exp_realos_chain.py      （启动链 + 13 条记录 + 初始上下文）
+realos-tcb.txt          cd emu && python probe/exp_realos_tcb.py        （TCB 布局 + 队列归属）
+realos-run.txt          cd emu && python probe/exp_realos_run.py        （任务 1 跑 30 万步 + 服务分布）
+realos-objects.txt      cd emu && python probe/exp_realos_flgcb.py      （服务分发表 / 对象登记表 / 标志控制块）
 boot.txt                cd emu && python frbox_boot.py --max 300000
 coverage.txt            cd emu && python fr_cover.py                    （65536 个编码逐个喂）
 isr-injection.txt       cd emu && python probe/exp_allisr.py            （48 个向量全量注入）
@@ -61,12 +65,35 @@ boot.txt 里 A 段有两种跑法（时钟自己锁 8 tick / 立刻锁定），�
 autospin-run.txt 里"没有一条硬件中断被受理"是刻意的判据：ICU 的累计请求是 0，
 56 次都是 int #0x40 的 μITRON 陷阱。别把这两个数混着读。
 
-任务表（0x000FE000）
---------------------
-0x000FE000 起 16 字节是头部，8 条记录各 0x1C 字节从 0x000FE010 开始。
+任务表（0x000FE000）★ V10 更正：13 条不是 8 条
+----------------------------------------------
+0x000FE000 起 16 字节是头部，*(0xFE000) = 8 是用户任务数，不是记录总数。
+记录实际 13 条，从 0x000FE010 起每 0x1C 字节一条，一路排到 0x000FE160：
+id 1-12 加一条 id 0 的空闲任务（入口 0x000FE510 是一条 bra -1）。
 字段顺序：TCB 指针 / (任务号<<16 | 属性) / 保留 / 状态 / 入口 / 栈顶 / 保留。
-复位后任务 1 和任务 5 状态为 0x80000000（激活），其余 6 条为 0。
-任务 1 入口 0x0008133A、栈顶 0x000462EC；前 2 字节 0x00081338 是 `bra -1` 停机占位。
 
-注意：`sys_sta_tsk` 传进来的 tsk_id 出现过 9 和 10，而表里只有 8 条 —— 这一处未定，
-别把"启动了 10 次"读成"启动了 10 个任务"（KNOWN_ISSUES 第 34 条）。
+V9 留下的「tsk_id 9/10 在表里找不到」就此结案：任务 9 入口 0x000AD74E、
+任务 10 入口 0x000BFAE6，都在表里。三条交叉验证见 realos-tcb.txt：
+TCB+0x0C 高 16 位 == 表里的属性、TCB+0x18 == 表里的栈顶、TCB+0x24 == 自己的表记录地址，
+13 条全部核对得上。
+
+任务 1 入口 0x0008133A、栈顶 0x000462EC —— 现在不再是「从表里读出来的」，
+而是固件内核亲手写在任务栈顶的事实：[0x08133A, 0x001F0030, 0x000FE250]。
+
+V10 起的两件大事（详见 realos-*.txt）
+-----------------------------------
+一、固件自带的 REALOS 能原生跑起来。V2-V9 一直说「内核进不去」，真因只有一个 CPU 缺陷：
+   andccr / orccr 改 CCR 的 S 位时不换 R15（self.s 被直接赋值，绕过了 ps 的 setter）。
+   修掉以后复位链一路跑到固件自己的调度器：43,428 步到派发点 0x000FE4E6，
+   派发点后面那二十几条 (0x0FE4DE-0x0FE514) 就是上下文恢复，靠翻 S 位在 SSP/USP 之间搬指针。
+   此后不需要自己写调度器；花了八个版本做的 μITRON 半主机只剩对照用途。
+
+二、realos-run.txt 里那段 300,000 步：1,888 次陷阱全部由固件内核处理
+   （clr_flg 754 / wai_flg 751 / sta_tsk 376 / set_flg 6 / snd_msg 1），
+   服务分发表 @0x0FE3B8、对象登记表 @0x0FE180、标志控制块 @0x045C38（见 realos-objects.txt）。
+
+注意：至今没有发生过一次真正的任务切换。*(0x45980)（当前 TCB）全程只被写过 1 次，
+任务 1 的 USP 全程落在 0x0462xx。三条路都不成立（详见 KNOWN_ISSUES 第 39 条）：
+硬件中断被 ILM 挡在门外；把 wai_flg 换成 slp_tsk / wai_sem / rcv_msg / dly_tsk
+一律立刻返回 E_OK；把 clr_flg 改成 set_flg 只会改变任务 1 自己的走向。
+别把这轮的结果读成「多任务跑通了」。
