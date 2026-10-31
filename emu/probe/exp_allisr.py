@@ -12,14 +12,15 @@
 """
 import sys, os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.stdout.reconfigure(encoding="utf-8")
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.stdout.reconfigure(encoding="utf-8")
 
 from frbox.machine import create
 
