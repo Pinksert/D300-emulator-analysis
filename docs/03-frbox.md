@@ -1,4 +1,4 @@
-# frbox 0.7.0 —— D300 的全系统模拟器
+# frbox 0.9.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`19`。想直接跑，跳到第二节。
@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 120 条断言
+python frbox_selftest.py                      # 212 条断言
 python fr_selftest.py                         # 54 条 CPU 断言
 ```
 
@@ -71,7 +71,7 @@ emu/
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    120 条断言
+├── frbox_selftest.py    212 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
 └── probe/               17 个取证脚本（见 probe/README.md）
 ```
@@ -200,7 +200,7 @@ A 段复位第二跳的初始化里，向 `0x482` 写 `0x08`（启动位），�
 ### 7.2 于是有了 `boot_task`：跳过调度器，手工构造任务上下文
 
 ```bash
-python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;info"
+python -m frbox -M d300-a -c "boottask 0x8133A::0:0x80506 table rp=0x81338;info"
 ```
 
 语义是：先跑到 `0x80506`（BSS 清零完成），然后把 PC 设成任务 1 的入口 `0x8133A`、
@@ -212,6 +212,104 @@ python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;info"
 
 回调槽的地址公式是 `0x3F01C + (vec - 0x10) * 4`，任务 1 真注册了 5 个：
 `vec 0x13 / 0x19 / 0x1B / 0x24 / 0x3C`。
+
+### 7.3 自旋消除器：把「等硬件就绪」放行
+
+应用区代码里有三处同构忙等（置启动位 → 轮询就绪位）：
+
+```
+ldi:20 #0x0AF, r12      borl  #2, @r12      btsth #7, @r12      beq -4
+```
+
+前两处地址是 `ldi:20` 直接写死的，静态扫一遍就能认；**第三处不行**：
+
+```
+0x0CE132  borl  #2, r8      ; r8 = 基址 | 2，运行时才知道是多少
+0x0CE134  btsth #4, @r8     ; 等 bit6
+0x0CE136  beq   -2
+```
+
+所以 `frbox/autospin.py` 改成**运行期解密**：发现某个 0x100 窗口里连续 3,000 步没离开，
+就单步 96 步把循环体收下来，在循环体里找 `btsth/btstl`，读它的 `u4` 掩码和**它用的那个
+寄存器当前的值** —— 后者就是要等的寄存器地址；校验该位确实是 0（不是卡点就换下一个候选），
+再置 1（`< 0x1000` 走直接页影子，否则直接写内存）。每处最多放行 8 次。
+
+```bash
+python -m frbox -M d300-a --task 0x8133A:0x462EC:0:0x80506 --rp 0x81338 --autospin \
+       -c "c 40000;info;autospin"
+```
+
+实测三处全中（`results/frbox/autospin-session.txt`）：
+
+| # | 轮询指令 | 等待 | 旧→新 | 发生在 |
+|---|---|---|---|---|
+| 1 | `0x0DCD30` | 直接页 `0x0AF` bit7 | `0x02→0x82` | 14,776 步 |
+| 2 | `0x09C97A` | 直接页 `0x174` bit6 | `0x02→0x42` | 17,931 步 |
+| 3 | `0x0CE134` | 直接页 `0x524` bit6（地址是算出来的） | `0x02→0x42` | 33,771 步 |
+
+放行之后任务 1 执行到 **4,473 个不同 PC**（V7 手工抠掉三处卡点时是 500 个；V8 当时用的是
+错栈顶，量到 4,512）、56 次
+`int #0x40`、6 个回调槽。
+
+### 7.4 故障判定：PC 掉出可执行区就停
+
+放行之后程序一路跑到 `0x080504` 的 `ret`，然后 PC=0。V8 当时把原因归成「缺少调度器铺的
+栈帧」——**这个判断是错的**。0.9.0 用变量隔离验了一遍，成因只有一条：
+
+**`boot_task` 从来没设过 RP。** 任务的收尾是 `ld @r15+,rp; ret`，返回地址就是进函数时
+压进栈的那个 RP。`boot_task` 只设了 PC / SP / r4，`dr[1]` 沿用了引导阶段最后一次 `call`
+留下的 `0x00080500`，于是任务「返回」到 main 的尾巴上，一路弹栈弹到别处。
+
+**顺带否掉一个很像的嫌疑**：栈顶取错（用表头字段 `0x4616C` 而不是真值 `0x462EC`）
+**对结局没有影响**。RP 给对之后，栈顶从 `0x45000`、`0x46000`、`0x4616C`、`0x462EC`
+一路换到系统栈 `0x7F000`，五种取值跑出来都是入口后 **32,726 步**、停在 **`0x081338`**，
+一个字节不差 —— 因为任务的压栈/弹栈是平衡的，栈顶只决定那 4 个字节落在哪里。
+
+RP 补成固件自带的停机占位（`boot_task(..., from_table=True, rp=0x81338)`），任务 1 跑
+**42,442 步**（含 9,716 步铺垫）回到 `bra -1`，路径干净。**不需要先造一个假的调度器。**
+
+### 7.5 REALOS 任务表
+
+入口 `0x000FE000`：16 字节表头 + 8 条 `0x1C` 字节记录。
+
+表头：`+0x00` 任务数（8）、`+0x04` 基准 SP `0x0004616C`（**不是任务栈顶**）、
+`+0x08` `0xFFFFFFFF`、`+0x0C` `0x000C001C`。
+
+| 偏移 | 含义 |
+|---|---|
+| `+0x00` | TCB 指针（相邻两条差 `0x2C`，即 TCB 大小） |
+| `+0x04` | 任务号 `<< 16` \| 属性（`0x0004`，任务 5 是 `0x0002`） |
+| `+0x08` | 保留 |
+| `+0x0C` | 状态：`0x80000000` = 已激活，`0` = 未启动 |
+| `+0x10` | 入口地址 |
+| `+0x14` | 栈顶 |
+| `+0x18` | 保留 |
+
+八条记录（复位态）：
+
+| # | 号 | 状态 | 入口 | 栈顶 |
+|---|---|---|---|---|
+| 1 | 1 | 已激活 | `0x08133A` | `0x0462EC` |
+| 2 | 2 | — | `0x089632` | `0x046404` |
+| 3 | 3 | — | `0x08B264` | `0x0464D8` |
+| 4 | 4 | — | `0x08C486` | `0x046600` |
+| 5 | 5 | 已激活 | `0x0A62FE` | `0x0466B4` |
+| 6 | 6 | — | `0x0A6A30` | `0x0467D0` |
+| 7 | 7 | — | `0x0A9A4E` | `0x0468FC` |
+| 8 | 8 | — | `0x0ACC32` | `0x04699C` |
+
+用 `machine.task_table()` 拿，`monitor` 里是 `tasks`。
+
+以前模拟器会闷头执行一串 0，现在 `machine.run()` 每步先看 PC 落在哪个区：
+
+```python
+def exec_region(self, pc):
+    r = self.bus.find(pc)
+    return None if (r is None or r.kind not in ("rom", "ram")) else r
+```
+
+落在 IO 或未映射区就记 `machine.fault = (pc, 原因)` 并停下，`info` 里会打出来。
+这条判据的价值是让"跑飞"变成一个明确的、可复现的停点，而不是一堆看不懂的 `ld 0x0000`。
 
 ---
 
@@ -270,6 +368,56 @@ A 段 176 槽：真实现 18 条，桩 158 条
 B 段 176 槽：真实现 56 条，桩 120 条
 ```
 
+### 9.1 两档实现：一律立即返回 vs 真的会停
+
+`attach_itron()` 走的是上面那条「查表 + 记日志 + 返回错误码」的路，**所有服务都立刻返回**。
+这对 `sys_get_ver` 这类查询没问题，对 `sys_wai_flg` 就致命：等待立刻「成功」，
+任务于是不停地在 `wai_flg → clr_flg → sta_tsk` 上打转。
+
+`attach_kernel()`（CLI `--itron-block`）是另一档：只实现「会让任务停下来」的那部分，
+其余仍然立刻返回。
+
+| 服务 | 号 | `attach_kernel` 的行为 |
+|---|---|---|
+| `sys_wai_flg` | −46 | 按 `wfmode` 判（`0x02` 或等待 / 否则与等待），不满足就阻塞 |
+| `sys_set_flg` | −48 | 真改位模式，并把新值写进 `r13` |
+| `sys_clr_flg` | −47 | 真改位模式（`bits == 0` 当清全部） |
+| `sys_sta_tsk` / `sys_ter_tsk` | −23 / −25 | 记进 `task_ops`，返回 `E_OK` |
+| `sys_slp_tsk` / `tslp_tsk` / `dly_tsk` / `ext_tsk` | −38 / −37 / −85 / −21 | 一律按「停下来」处理 |
+
+**参数顺序有两套**，混用不报错但会读错：
+
+| 服务 | 标志号 | 位模式 | 模式 | 输出 |
+|---|---|---|---|---|
+| `sys_wai_flg` | `R5` | `R6` waiptn | `R7` wfmode | `R13` flagptn / `R12` err |
+| `sys_set_flg` / `sys_clr_flg` | `R4` | `R5` | — | `R12` err |
+
+阻塞时机器进入 `blocked` 状态，`run()` 立刻停手，`info` 会打出：
+
+```
+阻塞      任务阻塞于 wai_flg(flag 3, 0x2000, mode=2)，当前值 0x0（或等待：任一位）   @ PC=0x00081490
+          用 flag set <id>=<bits> 注入外部事件，再 resume 继续
+```
+
+`resume()` 不是「直接往下走」，而是把 CPU 的 PC 和全部寄存器恢复到那条 `int` 指令之前
+**重跑一遍** —— 这样 `r12` / `r13` 由同一条代码路径产生，不会出现「状态对了但寄存器没填」。
+
+### 9.2 `--autoevent`：把事件补上并记下来
+
+`attach_kernel(auto_event=True)`（CLI `--autoevent`）在等不到时直接把等待位补上，
+并把这次补的事件记进 `kernel.events`。跑一遍就能得到**整条启动握手序列**：
+
+```
+ #  步数      PC       标志  等待位     模式  送来之前的值
+ 1  9,841     0x081490  3     0x2000     2     0x00000000
+ 2  17,320    0x08C808  1     0x8000     2     0x00000000
+ ...
+13  35,345    0x08195E  1     0x4000     2     0x00008200
+```
+
+这不是「假装跑通」：每个事件都是一次真实的 `wai_flg` 调用，步数和 PC 都能逐条回查。
+它回答的是「如果外部世界按这个顺序送事件，任务会怎么走」，而不是「任务自己能跑完」。
+
 ---
 
 ## 10. 快照
@@ -300,6 +448,7 @@ step [N]   cont [MAX]   reset   load [PATH]
 bp ADDR    bps    bpc ADDR
 irq list | raise VEC | rx B1 B2 ... | pend
 poke ADDR=VAL[:SIZE]   latch ADDR=VAL[:N]   spin [N]
+autospin [on|off|reset|status|threshold N]
 audit    dev    dump
 savevm PATH   loadvm PATH
 boottask ENTRY[:SP[:ARG[:STOPPC]]]
@@ -322,8 +471,9 @@ machines   help   quit
 | `-serial stdio` | `-serial stdio`（默认） |
 | `savevm` / `loadvm` | 同名命令 |
 
-另外三个是这个项目特有的：`--clk-lock N`（时钟就绪要几个 tick）、`--poke` / `--latch`
-（外设注入）、`--task ENTRY:SP:ARG:STOPPC`（手工启动任务）。
+另外四个是这个项目特有的：`--clk-lock N`（时钟就绪要几个 tick）、`--poke` / `--latch`
+（外设注入）、`--task ENTRY:SP:ARG:STOPPC`（手工启动任务）、`--autospin`
+（自动放行「等硬件就绪」的忙等，阈值用 `--autospin-threshold N` 调，默认 3,000 步）。
 
 ---
 
@@ -332,13 +482,15 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 54 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽 |
-| `frbox_selftest.py` | 120 | 总线 15 / 设备 20 / ICU+EIT 10 / 机器 13 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断通路 13 / 任务启动 15 |
+| `frbox_selftest.py` | 212 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 17 / 自旋消除 23 / 任务表 19 / μITRON 半主机 33 |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
 
 `results/frbox/` 下是同一次运行的真实输出：`selftest.txt`、`cpu-selftest.txt`、`boot.txt`、
-`session.txt`、`isr-injection.txt`、`coverage.txt`。
+`session.txt`、`isr-injection.txt`、`isr-fire.txt`、`autospin-run.txt`、`autospin-session.txt`、
+`irq-session.txt`、`boot-seq.txt`、`boot-session.txt`、`sp-rp.txt`、`sp-rp-sweep.txt`、
+`svc-layers.txt`、`coverage.txt`。
 
 ---
 
@@ -346,11 +498,16 @@ machines   help   quit
 
 不是"再跑跑就好"的清单，是**当前能力的边界**：
 
-1. **卡点 3 `0x0CE136` 是动态寻址**（`r8` 由算出来），自动消除器抓不到等待寄存器。
-2. **三处外设窗口语义未解**：`0x50000000` / `0x68000000` / `0x4000D000`，都有上万次
-   访问记录，但不知道是哪个控制器。
-3. **854 个未定义编码**归属未定：可能是 FR80/FR81 专有指令（已知 `srch0/srch1/srchc`
+1. **没有调度器，任务上下文是硬造的。** 三处忙等放行后，任务 1 在 `0x080504` 的 `ret`
+   上掉出界：`0x080502` 的 `ld @r15+,rp` 从栈里弹出来的 RP 是 0。要让任务真的"活着"，
+   缺的不是硬件，而是 REALOS 给它铺的那层初始栈帧（以及就绪队列里的一条记录）。
+   这条**不是模拟器的缺口，是任务启动方式的缺口**。
+2. **自旋消除器有误伤可能。** 判据是「0x100 窗口内 3,000 步没离开」，一个真的长延时循环
+   也会被当成忙等而放行一个不相关的位。所以它默认关着，只在明确知道前面有硬件等待时开。
+3. **三处外设窗口语义未解**：`0x50000000` / `0x68000000` / `0x4000D000`，都有上万次
+   访问记录，但不知道是哪个控制器。直接页 `0x524` 是第三个卡点等的那个，也不知名。
+4. **854 个未定义编码**归属未定：可能是 FR80/FR81 专有指令（已知 `srch0/srch1/srchc`
    三条就是 binutils 表里没有、靠 NikonEmulator 标注补的）。
-4. **没有 gdbstub**。想看汇编级单步只能靠 monitor 或 `-d in_asm`。
-5. **B 段没有帧缓冲，也没有字库**。就算把中断链路全接通，也不会"出画面" —— 真正的
+5. **没有 gdbstub**。想看汇编级单步只能靠 monitor 或 `-d in_asm`。
+6. **B 段没有帧缓冲，也没有字库**。就算把中断链路全接通，也不会"出画面" —— 真正的
    显示对象由外部芯片处理，固件只发事件标志。
