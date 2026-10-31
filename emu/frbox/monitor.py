@@ -14,6 +14,7 @@
     flag [list|set ID=BITS|clr ID]          事件标志（注入外部事件）
     resume             从被阻塞的 int 指令继续
     tasks               REALOS 任务表（入口 / 栈顶 / 是否激活）
+    realos [TASKID]     固件自带 REALOS：13 条记录 / 让内核原生调度某任务
     dev                dump                quit
 """
 import re
@@ -430,6 +431,65 @@ class Monitor:
             self.out("  %-3d %06X   %-5d  0x%08X  0x%06X   0x%06X   %s"
                      % (r["index"], r["tcb"], r["id"], r["state"],
                         r["entry"], r["sp"], "已激活" if r["active"] else "-"))
+        self.out("  想看上下文 / 让内核原生调度：realos（不带参数列表，realos 1 启动任务 1）")
+        return True
+
+    def cmd_realos(self, arg=""):
+        """realos [TASKID] —— 固件自带的 REALOS：看 13 条记录 / 让内核调度某个任务"""
+        from . import realos as R
+        m = self.m
+        a = arg.split()
+        if a and a[0] not in ("list", "ls", "info"):
+            tid = self._num(a[0])
+            if tid is None:
+                self.out("用法：realos [TASKID]   例如 realos 1")
+                return True
+            try:
+                info = m.boot_realos(tid)
+            except KeyError:
+                ids = ", ".join(str(r["id"]) for r in R.records(m))
+                self.out(f"任务表里没有 id={tid}；可用：{ids}")
+                return True
+            rec, ctx = info["record"], info["context"]
+            self.out(f"原生 REALOS 已就位：{info['steps']:,} 步跑到派发点 0x{R.DISPATCH_LD:06X}")
+            self.out(f"  派发任务 {tid}：TCB=0x{rec['tcb']:06X} 入口=0x{rec['entry']:06X} "
+                     f"栈顶=0x{rec['sp']:06X}")
+            self.out(f"  上下文 PC=0x{ctx['pc']:06X} PS=0x{ctx['ps']:08X}"
+                     f"{'（还没建）' if not ctx['pc'] else ''}")
+            self.out(f"  *(0x{R.CUR_TCB:06X}) 0x{info['before']:06X} → 0x{rec['tcb']:06X}"
+                     f"{'  改派生效' if info['switched'] else '  本来就是它'}")
+            self.out("  接着 cont N 跑；int #0x40 从这里开始由固件内核接管，不要再挂 --kernel")
+            return True
+        # ---- 列表：13 条记录 + 当前任务 + 各任务上下文
+        n_user = int.from_bytes(m.fetch_bytes(R.TASK_TABLE, 4), "big")
+        if not (0 < n_user <= 64):
+            self.out(f"*(0x{R.TASK_TABLE:06X}) = 0x{n_user:08X}，不像 REALOS 任务表头 —— "
+                     "这张表只在 A 段（IO 协处理器固件）里")
+            return True
+        rows = R.records(m)
+        if not rows:
+            self.out("读不到任务表（机器还没 load？）")
+            return True
+        cur = int.from_bytes(m.fetch_bytes(R.CUR_TCB, 4), "big")
+        idle = R.find(m, 0)
+        self.out(f"REALOS 任务表 @0x{R.TASK_TABLE:06X}：头部记 {n_user} 个用户任务，"
+                 f"实际 {len(rows)} 条记录 × 0x{R.TASK_REC:X} 字节")
+        self.out(f"  当前 TCB = 0x{cur:06X}"
+                 f"{'（空闲任务）' if idle and cur == idle['tcb'] else ''}"
+                 f"{'（内核还没写回，cont 之后才有）' if not cur else ''}")
+        self.out("  id  属性  TCB      入口       栈顶       状态     上下文 PC")
+        for r in rows:
+            c = R.context(m, r["sp"]) if r["sp"] else {"pc": 0}
+            tag = " ◀ 当前" if r["tcb"] == cur else ""
+            self.out("  %-3d 0x%02X  0x%06X 0x%06X  0x%06X  %-8s 0x%06X%s"
+                     % (r["id"], r["attr"], r["tcb"], r["entry"], r["sp"],
+                        "已激活" if r["active"] else "未启动", c["pc"], tag))
+        built = [r["id"] for r in rows if r["sp"] and R.context(m, r["sp"])["pc"]]
+        self.out(f"  已建上下文的：{('、'.join('任务 %d' % i for i in built)) or '无'}"
+                 f"（跑 realos 1 之后内核会先建任务 1 / 5 / 0）")
+        self.out(f"  启动阶段标记 *(0x003FBB0) = "
+                 f"{int.from_bytes(m.fetch_bytes(0x3FBB0, 4), 'big')}"
+                 f"（2 = 已进调度循环）")
         return True
 
     def cmd_flag(self, arg=""):
