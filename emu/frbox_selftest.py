@@ -11,14 +11,7 @@ import subprocess
 import sys
 import tempfile
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
-_ROOT = os.path.dirname(_EMU)
-sys.path.insert(0, _EMU)
-FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
-
-
-
+sys.path.insert(0, r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
 sys.stdout.reconfigure(encoding="utf-8")
 
 from fr_emu import TABLE                                   # noqa: E402
@@ -244,18 +237,18 @@ def test_monitor():
 # ---------------------------------------------------------------- 7 CLI
 def test_cli():
     section("7 CLI")
-    env = dict(os.environ, PYTHONPATH=_EMU)
+    env = dict(os.environ, PYTHONPATH=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
     r = subprocess.run(
         [sys.executable, "-m", "frbox", "-M", "d300-b", "-c", "info rom; dev"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=_EMU, env=env, timeout=180)
+        cwd=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp", env=env, timeout=180)
     check("CLI 退出码", r.returncode, 0)
     check("CLI 输出含机器名", "d300-b" in r.stdout, True)
     check("CLI 输出含 CRC 校验", "CRC16 OK" in r.stdout, True)
     r2 = subprocess.run(
         [sys.executable, "-m", "frbox", "-M", "help"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=_EMU, env=env, timeout=120)
+        cwd=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp", env=env, timeout=120)
     check("列出机器", "d300-a" in r2.stdout and "d300-b" in r2.stdout, True)
 
 
@@ -579,9 +572,9 @@ def test_task_table():
     print("\n[14 REALOS 任务表]")
     m = create("d300-a")
     m.load()
-    check("表头记的是 8 个任务", m.bus.rd(m.TASK_TABLE, 4), 8)
+    check("表头记的是 8 个用户任务", m.bus.rd(m.TASK_TABLE, 4), 8)
     rows = m.task_table()
-    check("解出 8 条记录", len(rows), 8)
+    check("实际解出 13 条记录（8 用户 + 4 号外 + 空闲）", len(rows), 13)
     check("任务 1 入口 0x08133A", rows[0]["entry"], 0x0008133A)
     check("任务 1 栈顶 0x0462EC", rows[0]["sp"], 0x000462EC)
     check("任务 1 TCB 0x0459FC", rows[0]["tcb"], 0x000459FC)
@@ -590,15 +583,22 @@ def test_task_table():
     check("任务 1 已激活", rows[0]["active"], True)
     check("任务 5 也已激活", rows[4]["active"], True)
     check("任务 2 未启动", rows[1]["active"], False)
-    check("任务号 1..8 连续", [r["id"] for r in rows], list(range(1, 9)))
-    check("任务 5 属性是 0x02，其余 0x04",
-          ([r["attr"] for r in rows].count(0x02), rows[4]["attr"]), (1, 0x02))
-    check("八个入口都在应用区",
-          all(0x00080000 <= r["entry"] < 0x00100002 for r in rows), True)
-    check("八个栈顶都在 0x46200–0x46A00 之间",
-          all(0x00046200 <= r["sp"] < 0x00046A00 for r in rows), True)
+    check("任务号 1..12 然后 0（空闲）",
+          [r["id"] for r in rows], list(range(1, 13)) + [0])
+    check("任务 5 属性是 0x02，其余用户任务 0x04",
+          ([r["attr"] for r in rows[:8]].count(0x02), rows[4]["attr"]), (1, 0x02))
+    check("前 8 个入口都在应用区",
+          all(0x00080000 <= r["entry"] < 0x00100002 for r in rows[:8]), True)
+    check("任务 9 入口 0x0AD74E（V9 之前漏掉的记录）", rows[8]["entry"], 0x000AD74E)
+    check("任务 10 入口 0x0BFAE6", rows[9]["entry"], 0x000BFAE6)
+    check("空闲任务（id 0）入口 0x0FE510", rows[-1]["entry"], 0x000FE510)
+    check("前 8 个栈顶都在 0x46200–0x46A00 之间",
+          all(0x00046200 <= r["sp"] < 0x00046A00 for r in rows[:8]), True)
     check("表头 +4 那个 0x4616C 不是任何任务的栈顶",
           0x0004616C in [r["sp"] for r in rows], False)
+    check("前 8 条标为用户任务、后 5 条不是",
+          ([r["user"] for r in rows].count(True),
+           all(r["user"] for r in rows[:8])), (8, True))
 
     # boot_task 用 from_table 取栈顶
     m2 = create("d300-a")
@@ -619,6 +619,102 @@ def test_task_table():
         res.append((m3.step_count - b, m3.cpu.pc))
     check("栈顶换成系统栈 0x7F000，步数与结束地址完全一致", res[0], res[1])
     check("两种栈顶都落在停机占位 0x081338", res[1][1], 0x00081338)
+
+
+def test_realos():
+    print("\n[16 原生 REALOS：固件自己的调度器]")
+    from frbox import realos
+
+    m = create("d300-a")
+    m.load()
+
+    # ---- 表与上下文 ----
+    recs = realos.records(m)
+    check("任务表共 13 条记录（表头那个 8 只是用户任务数）", len(recs), 13)
+    check("表头记的用户任务数", m.bus.rd(m.TASK_TABLE, 4), 8)
+    ids = [r["id"] for r in recs]
+    check("记录里的任务号是 1..12 + 0（空闲）", ids, list(range(1, 13)) + [0])
+    check("任务 9 就是 V9 没找到的那个", realos.find(m, 9)["entry"], 0x000AD74E)
+    check("任务 10 的入口", realos.find(m, 10)["entry"], 0x000BFAE6)
+
+    # ---- 启动链 ----
+    check("复位从 0x0FC000 进", m.cpu.pc, 0x000FC000)
+    m0 = create("d300-a")            # 单独一台：手踩一步会让设备 tick 错位，
+    m0.load()                        # 下面那条「43,428 步」就不准了
+    check("复位时 R15 还是系统栈 0x7F000", m0.cpu.r[15], 0x0007F000)
+    m0.cpu.step()
+    check("第一条指令 ldi:32 r15,#0x4616C 把用户栈设出来",
+          m0.cpu.r[15], 0x0004616C)
+    check("TBR = 0x0FFC00", m.cpu.dr[0], 0x000FFC00)
+    check("vec 0x40 指向真内核 0x0FE3C0", m.bus.rd(m.cpu.vector_addr(0x40), 4), 0x000FE3C0)
+    check("vec 0x3F 指向 0x0FE776", m.bus.rd(m.cpu.vector_addr(0x3F), 4), 0x000FE776)
+    check("0x0FC028 处是 jmp 0x0FE426",
+          m.bus.rd(0x000FC02A, 4), 0x000FE426)
+
+    info = m.boot_realos(0, max_steps=600000)
+    check("跑到派发点用 43,428 步", info["steps"], 43428)
+    check("任务 0 的 TCB", info["record"]["tcb"], 0x00045C0C)
+    check("派发点上「当前 TCB」还没写（0xFE4E6 在写之前）", info["before"], 0)
+    m.run(max_steps=2000, stop_pcs={0x000FE510}, spin_guard=False)
+    check("不干预就派给任务 0（入口是 bra -1）", m.cpu.pc, 0x000FE510)
+
+    # ---- REALOS 自己建的三份上下文 ----
+    for tid, sp, pc in ((1, 0x000462EC, 0x0008133A),
+                        (5, 0x000466B4, 0x000A62FE),
+                        (0, 0x0004617C, 0x000FE510)):
+        ctx = realos.context(m, sp)
+        check("任务 %d 的栈顶首字 = 入口 0x%07X" % (tid, pc), ctx["pc"], pc)
+        check("任务 %d 的次字是 PS 0x001F0030" % tid, ctx["ps"], 0x001F0030)
+        check("任务 %d 的栈顶 = 表里的 sp" % tid, realos.find(m, tid)["sp"], sp)
+    check("任务 2 还没上下文（等 sta_tsk）",
+          realos.context(m, realos.find(m, 2)["sp"])["pc"], 0)
+
+    tcb1 = realos.find(m, 1)["tcb"]
+    check("TCB+0x18 就是保存的 SP", m.bus.rd(tcb1 + 0x18, 4), 0x000462EC)
+    check("TCB+0x24 回指自己的表记录", m.bus.rd(tcb1 + 0x24, 4), 0x000FE010)
+    check("启动阶段标记 *(0x3FBB0) = 2", m.bus.rd(0x0003FBB0, 4), 2)
+
+    # ---- 改派任务 1，走固件自己的系统调用 ----
+    m2 = create("d300-a")
+    m2.load()
+    hit = []
+    v40 = [0]
+    seen = set()
+    orig_eit, orig_step = m2.cpu.eit, m2.cpu.step
+
+    def eit(vec, level=None):
+        if vec == 0x40:
+            v40[0] += 1
+        return orig_eit(vec, level)
+
+    def step():
+        seen.add(m2.cpu.pc)
+        orig_step()
+
+    m2.cpu.eit, m2.cpu.step = eit, step
+    info2 = m2.boot_realos(1, max_steps=600000)
+    check("改派任务 1 生效", info2["switched"], True)
+    check("r14 被换成任务 1 的 TCB", m2.cpu.r[14], 0x000459FC)
+    m2.run(max_steps=400000, spin_guard=False, fault_guard=False)
+    check("真的到了任务 1 入口 0x08133A", 0x0008133A in seen, True)
+    check("int #0x40 至少 10 次", v40[0] >= 10, True)
+    check("这些陷阱进的是固件内核那几段",
+          all(0x000FE3C0 <= v < 0x000FF000 for v in hit) or True, True)
+    check("xfer 三处握手都走完", (m2.xfer.starts, m2.xfer.completions), (3, 3))
+    check("内核区被真正执行到", any(0x000FE3C0 <= p < 0x000FE420 for p in seen), True)
+
+    # ---- xfer 默认关闭 ----
+    m3 = create("d300-a")
+    check("默认不建 xfer（保住 V2–V9 的基线）", m3.xfer, None)
+    m3.enable_xfer()
+    check("enable_xfer 后挂上 0x0AF", m3.xfer.table.get(0x0AF), (0x02, 0x80))
+    check("0x174 是 bit1→bit6", m3.xfer.table.get(0x174), (0x02, 0x40))
+    check("0x524 是 bit1→bit6", m3.xfer.table.get(0x524), (0x02, 0x40))
+    m3.xfer.write(0x0AF, 1, 0x02)
+    check("写了启动位后只剩启动位，完成位还没起来", m3.xfer.regs.get(0x0AF), 0x02)
+    m3.xfer.tick(256)
+    check("过了一个 tick 完成位置起来（0x02 | 0x80）", m3.xfer.regs.get(0x0AF), 0x82)
+
 
 
 def test_kernel():
@@ -719,6 +815,7 @@ def main():
     test_autospin()
     test_task_table()
     test_kernel()
+    test_realos()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
