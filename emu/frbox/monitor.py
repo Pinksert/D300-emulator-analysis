@@ -7,7 +7,13 @@
     step [N]           cont [MAX]         bp 0x40000        bps / bpc ADDR
     reset              load [PATH]        irq raise 0x1B    irq rx 41 42
     savevm PATH        loadvm PATH         info snap
-    boottask ENTRY[:SP[:ARG[:STOPPC]]]      手工启动任务（跳过 REALOS 调度器）
+    boottask ENTRY[:SP[:ARG[:STOPPC]]] [rp=ADDR] [table]
+                                            手工启动任务（跳过 REALOS 调度器）
+    autospin [on|off|reset|status]          自旋消除器（等硬件就绪位）
+    svc [N]            服务调用直方图（μITRON 半主机）
+    flag [list|set ID=BITS|clr ID]          事件标志（注入外部事件）
+    resume             从被阻塞的 int 指令继续
+    tasks               REALOS 任务表（入口 / 栈顶 / 是否激活）
     dev                dump                quit
 """
 import re
@@ -87,8 +93,12 @@ class Monitor:
             self.out("  中断线绑定（只有标注实测的才有硬件依据）：")
             for line, vec, lvl, note in m.icu.table():
                 self.out(f"    线 0x{line:02X} → 向量 0x{vec:02X} / level {lvl}   {note}")
-            self.out(f"    已受理中断 {len(m.cpu.irq_log)} 次，待决 "
-                     f"{len(m.cpu.irq_pending)} 条")
+            hw = [r for r in m.cpu.irq_log if r[0] != 0x40]
+            # int #0x40 有两种走法：被 μITRON 钩子截住（不产生 irq_log 记录）或
+            # 没人挂钩子时真进向量表。所以不能只看 irq_log，要用 CPU 侧的计数器。
+            traps = getattr(m.cpu, "int40", 0)
+            self.out(f"    已受理硬件中断 {len(hw)} 次，待决 {len(m.cpu.irq_pending)} 条；"
+                     f"μITRON 陷阱 int #0x40 {traps} 次")
         if what in ("rom", "firmware", "all"):
             self.out(m.info())
         if what not in ("registers", "reg", "all", "mtree", "devices", "dev",
@@ -208,6 +218,43 @@ class Monitor:
         m = self.m
         if not parts or parts[0] == "list":
             return self.cmd_info("irq")
+        if parts[0] == "table":
+            rows = m.irq_table()
+            real = [r for r in rows if r["kind"] == "stub"]
+            self.out(f"向量表：{len(rows)} 条  ICR 已配置 "
+                     f"{sum(1 for r in rows if r['level'])} 条  "
+                     f"真 stub {len(real)} 条  未用 "
+                     f"{sum(1 for r in rows if r['kind'] == 'unused')} 条")
+            self.out("  vec  ICR L    ISR       槽        回调")
+            for r in rows:
+                cb = " ".join(f"0x{c:08X}" for c in r["callbacks"]) or "-"
+                slot = ",".join(f"{s:05X}" for s in r["slots"]) or "-"
+                mark = {"unused": " 未用", "special": " 特殊"}.get(r["kind"], "")
+                self.out(f"  0x{r['vec']:02X}  {r['icr']:02X} {r['level']:02X}  "
+                          f"{f"0x{r['isr']:08X}"}  {slot:<9} {cb}{mark}")
+            return True
+        if parts[0] == "fire" and len(parts) >= 2:
+            vec = self._num(parts[1])
+            if vec is None:
+                self.out("用法：irq fire 0x13 [level]")
+                return True
+            lvl = self._num(parts[2]) if len(parts) > 2 else None
+            limit = self._num(parts[3]) if len(parts) > 3 else 20000
+            before = m.cpu.pc
+            # 只打印将要用的级别，真正的请求交给 irq_return 发一次；
+            # 早先这里先 raise_irq 再 irq_return，等于发了两遍，残留的那次
+            # 会在下一条注入时先被受理，把观测结果整个搞混（V8 修）。
+            want = (lvl & 0x1F) if lvl is not None else m.irq_level(vec)
+            self.out(f"向量 0x{vec:02X} 请求 level 0x{(want or 0x1F):02X}"
+                     f"（I={m.cpu.i} ILM=0x{m.cpu.ilm:02X}）")
+            r = m.irq_return(vec, max_steps=limit, home=before, level=lvl)
+            back = r["back"]
+            self.out(f"跑了 {r['steps']} 步，经过 {len(set(r['pcs']))} 个不同 PC，"
+                     f"PC=0x{m.cpu.pc:08X}"
+                     f"{' 已回原位' if back else ' 未回原位'}"
+                     f"，SP{'已' if r['sp_restored'] else '未'}复原"
+                     f"，待决 {len(m.cpu.irq_pending)}")
+            return True
         if parts[0] == "raise" and len(parts) >= 2:
             vec = self._num(parts[1])
             lvl = self._num(parts[2]) if len(parts) > 2 else 8
@@ -234,12 +281,29 @@ class Monitor:
 
     # ------------------------------------------------------------------ 其他
     def cmd_boottask(self, arg="", rest=""):
-        """boottask 0x8133A:0x4616C:0:0x80506 —— 手工启动任务"""
+        """boottask 0x8133A:0x462EC:0:0x80506 [rp=0x81338] [table] —— 手工启动任务"""
         spec = arg or rest
         if not spec:
-            self.out("用法：boottask ENTRY[:SP[:ARG[:STOPPC]]]\n"
-                     "  A 段任务 1：boottask 0x8133A:0x4616C:0:0x80506")
+            self.out("用法：boottask ENTRY[:SP[:ARG[:STOPPC]]] [rp=ADDR] [table]\n"
+                     " A 段任务 1：boottask 0x8133A:0x462EC:0:0x80506 rp=0x81338\n"
+                     "   rp=    任务的 ret 落地处（不设会沿用引导阶段的残值）\n"
+                     "   table  只给入口，栈顶从 REALOS 任务表取")
             return True
+        opts = {"rp": None, "from_table": False}
+        tokens = spec.split()
+        spec = tokens[0] if tokens else ""
+        for t in tokens[1:]:
+            if t == "table":
+                opts["from_table"] = True
+            elif t.startswith("rp="):
+                try:
+                    opts["rp"] = int(t[3:], 0)
+                except ValueError:
+                    self.out(f"rp= 后面要跟地址，收到 {t}")
+                    return True
+            else:
+                self.out(f"不认识的选项：{t}")
+                return True
         try:
             parts = spec.split(":")
             entry = int(parts[0], 0)
@@ -249,9 +313,14 @@ class Monitor:
         except ValueError:
             self.out(f"格式错误：{spec}")
             return True
-        e, s, aa = self.m.boot_task(entry, sp, a, stop_pc=stop)
+        e, s, aa = self.m.boot_task(entry, sp, a, stop_pc=stop,
+                                    rp=opts["rp"], from_table=opts["from_table"])
         self.out(f"已启动任务：入口 0x{e:06X}  SP=0x{s:08X}  r4=0x{aa:X}"
+                 f"{'  RP=0x%06X' % opts['rp'] if opts['rp'] is not None else ''}"
                  f"{'  （先跑到 0x%06X）' % stop if stop else ''}")
+        if opts["rp"] is None:
+            self.out("⚠️ 没给 rp=：任务的 ret 会跳到引导阶段留下的残值上。"
+                     "正常返回请加 rp=0x81338（固件自带的 bra -1 停机占位）")
         return True
 
     def cmd_poke(self, arg):
@@ -301,6 +370,112 @@ class Monitor:
             if v:
                 m.spin_limit = v
             self.out(f"阈值 = {m.spin_limit:,} 步")
+        return True
+
+    def cmd_autospin(self, arg=""):
+        m = self.m
+        a = arg.split()
+        if not a or a[0] in ("st", "status"):
+            self.out(f"自旋消除：{'开' if m.autospin_enabled else '关'}，"
+                     f"阈值 {m.spin_breaker.threshold:,} 步，探针 {m.spin_breaker.probe} 步")
+            self.out(m.spin_breaker.summary())
+            for i, e in enumerate(m.spin_breaker.rows(), 1):
+                self.out(f"  {i}. 轮询 0x{e['poll_pc']:06X}（自旋点 0x{e['spin_pc']:06X}）"
+                         f" {e['where']} 0x{e['addr']:03X} 位 0x{e['mask']:02X}"
+                         f"（0x{e['old']:02X}→0x{e['old'] | e['mask']:02X}）"
+                         f" 第 {e['nth']} 次 @ {e['step']:,} 步")
+            return True
+        if a[0] in ("on", "off"):
+            m.autospin_enabled = a[0] == "on"
+            self.out(f"自旋消除已{'开启' if m.autospin_enabled else '关闭'}")
+            return True
+        if a[0] == "reset":
+            m.spin_breaker.reset()
+            self.out("自旋消除记录已清空")
+            return True
+        if a[0] == "threshold" and len(a) > 1:
+            m.spin_breaker.threshold = self._num(a[1]) or m.spin_breaker.threshold
+            self.out(f"阈值 = {m.spin_breaker.threshold:,} 步")
+            return True
+        self.out("用法：autospin [on|off|reset|status|threshold N]")
+        return True
+
+    # ------------------------------------------------- μITRON 半主机
+    def cmd_svc(self, arg=""):
+        m = self.m
+        if m.kernel is None:
+            self.out("还没挂 μITRON 半主机（用 --kernel 启动，或 attach_kernel()）")
+            return True
+        n = self._num(arg) if arg else 12
+        rows = m.kernel.stats()
+        if not rows:
+            self.out("还没有服务调用")
+            return True
+        total = sum(v for _, v in rows)
+        self.out(f"μITRON 服务调用共 {total:,} 次，{len(rows)} 种：")
+        for name, c in rows[:n or 12]:
+            self.out(f"  {name:<20} {c:>8,}")
+        return True
+
+    def cmd_tasks(self, arg=""):
+        m = self.m
+        rows = m.task_table()
+        if not rows:
+            self.out("没有任务表")
+            return True
+        self.out("REALOS 任务表 @0x%06X（每条 0x%X 字节，共 %d 条）"
+                 % (m.TASK_REC0, m.TASK_REC, len(rows)))
+        self.out("  #   TCB     任务号  状态        入口       栈顶       是否已启动")
+        for r in rows:
+            self.out("  %-3d %06X   %-5d  0x%08X  0x%06X   0x%06X   %s"
+                     % (r["index"], r["tcb"], r["id"], r["state"],
+                        r["entry"], r["sp"], "已激活" if r["active"] else "-"))
+        return True
+
+    def cmd_flag(self, arg=""):
+        m = self.m
+        if m.kernel is None:
+            m.attach_kernel()
+        a = arg.split()
+        if not a or a[0] in ("list", "ls"):
+            for fid, pat in m.kernel.flag_table():
+                if pat:
+                    self.out("  flag %-3d = 0x%08X" % (fid, pat))
+            if not any(p for _, p in m.kernel.flag_table()):
+                self.out("  （17 个事件标志全为 0）")
+            return True
+        if a[0] in ("set", "raise") and len(a) > 1:
+            spec = a[1]
+            if "=" in spec:
+                k, v = spec.split("=", 1)
+                fid, bits = self._num(k), self._num(v)
+            else:
+                fid, bits = self._num(spec), 0xFFFFFFFF
+            v = m.flag_set(fid, bits)
+            self.out("flag %d 置 0x%X → 现在 0x%08X" % (fid, bits, v))
+            return True
+        if a[0] in ("clr", "clear") and len(a) > 1:
+            fid = self._num(a[1])
+            bits = self._num(a[2]) if len(a) > 2 else None
+            v = m.flag_clear(fid, bits)
+            self.out("flag %d 清 → 现在 0x%08X" % (fid, v))
+            return True
+        self.out("用法：flag [list | set ID=BITS | clr ID [BITS]]")
+        return True
+
+    def cmd_resume(self, arg=""):
+        m = self.m
+        if m.blocked is None:
+            self.out("当前没有阻塞的任务")
+            return True
+        rec = m.resume()
+        self.out("从 0x%06X 的 %s 重新执行" % (rec["pc"], rec["svc"]))
+        limit = self._num(arg) if arg else 200000
+        n = m.run(max_steps=limit)
+        self.out("跑了 %s 步，PC=0x%08X" % (format(n, ","), m.cpu.pc))
+        if m.blocked is not None:
+            from .itron import ItronKernel
+            self.out("仍然阻塞：" + ItronKernel.describe(m.blocked))
         return True
 
     def cmd_audit(self, arg=""):
