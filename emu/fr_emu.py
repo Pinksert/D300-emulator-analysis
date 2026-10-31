@@ -334,9 +334,18 @@ class Fr:
     def _accept_irq(self):
         if not self.irq_pending or not self.i:
             return False
-        self.irq_pending.sort(key=lambda x: -x[0])
+        # 级别号越小优先级越高：先受理号最小的。
+        # 受理条件 lvl < ILM（ILM 是"阈值"，不是"屏蔽到几级"）：
+        #   ILM=0x1F → 受理 0..30（除 0x1F 全部放行）
+        #   ILM=0    → 一条都不受理
+        # 这条约定是 V11 从固件自己的取值反推出来的，见 KNOWN_ISSUES 第 41 条：
+        # 任务上下文 PS 的 ILM=0x1F，而 48 个 ICR 的级别落在 0x12–0x1F；
+        # 若按"号大=优先、lvl>ILM 才受理"，任务运行时一条中断都进不来，固件等于全聋。
+        # 反过来看则处处自洽：调度器 vec 0x3F 的 ICR=0x1E 是所有启用向量里最低的
+        # （调度器本就该最低，好让外设 ISR 抢占它），内核 stilm #0x1E 恰好只挡它一个。
+        self.irq_pending.sort(key=lambda x: x[0])
         lvl, vec = self.irq_pending[0]
-        if lvl <= self.ilm:                      # 被 ILM 屏蔽
+        if lvl >= self.ilm:                      # 级别号不小于阈值 → 被 ILM 挡掉
             return False
         self.irq_pending.pop(0)
         if self.eit_hook is not None and self.eit_hook(self, vec):
