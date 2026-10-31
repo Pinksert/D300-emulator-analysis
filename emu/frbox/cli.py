@@ -46,6 +46,14 @@ def build_parser():
                    help="最多执行多少条指令（默认 1000000）")
     p.add_argument("--itron", action="store_true",
                    help="挂上表驱动 μITRON 层（INT #0x40 立即返回）")
+    p.add_argument("--itron-block", dest="itron_block", action="store_true",
+                   help="挂上会阻塞的 μITRON 半主机：wai_flg 等不到就真的停住")
+    p.add_argument("--autoevent", action="store_true",
+                   help="与 --itron-block 配合：等不到事件就自动补上并记录（列出握手序列）")
+    p.add_argument("--task-from-table", dest="task_from_table", action="store_true",
+                   help="--task 只给入口，栈顶从 REALOS 任务表里取")
+    p.add_argument("--rp", type=lambda x: int(x, 0), default=None, metavar="ADDR",
+                   help="任务初始 RP（任务的 ret 落地处）；推荐固件自带的 0x81338")
     p.add_argument("--poke", action="append", default=[], metavar="ADDR=VAL[:SIZE]",
                    help="复位后往某地址写值，模拟「外设就绪」，可重复；"
                         "例如 --poke 0x482=0x08")
@@ -61,8 +69,16 @@ def build_parser():
     p.add_argument("--task", dest="task", default=None,
                    metavar="ENTRY[:SP[:ARG[:STOPPC]]]",
                    help="手工启动任务，跳过 REALOS 调度器。A 段任务 1 入口 = 0x8133A；"
-                        "建议写成 --task 0x8133A:0x4616C:0:0x80506（先跑到 BSS 清零）")
-    p.add_argument("--version", action="version", version="frbox 0.7.0")
+                        "栈顶写 0x462EC（任务表记录里的值，不是表头的 0x4616C）。"
+                        "推荐 --task 0x8133A:0x462EC --rp 0x81338，"
+                        "或省掉栈顶改用 --task-from-table")
+    p.add_argument("--autospin", action="store_true",
+                   help="自动破解「等硬件就绪位」的忙等：运行期读轮询指令的寄存器，"
+                        "把该位置 1 后继续（等价于外设已就绪）")
+    p.add_argument("--autospin-threshold", dest="autospin_threshold", type=int,
+                   default=3000, metavar="N",
+                   help="同一 0x100 窗口内连续 N 步未离开就算自旋（默认 3000）")
+    p.add_argument("--version", action="version", version="frbox 0.9.0")
     return p
 
 
@@ -99,7 +115,8 @@ def main(argv=None):
                     return 2
 
     m = create(args.machine, trace=trace, serial_console=(args.serial == "stdio"),
-               clk_lock_ticks=args.clk_lock)
+               clk_lock_ticks=args.clk_lock, autospin=args.autospin,
+               autospin_threshold=args.autospin_threshold)
     try:
         m.load(args.kernel)
     except FileNotFoundError as e:
@@ -109,6 +126,8 @@ def main(argv=None):
         return 2
     if args.itron:
         m.attach_itron()
+    if args.itron_block or args.autoevent:
+        m.attach_kernel(auto_event=args.autoevent)
     if args.task:
         try:
             parts = [p for p in args.task.split(":")]
@@ -118,10 +137,12 @@ def main(argv=None):
             stop_pc = int(parts[3], 0) if len(parts) > 3 and parts[3] else None
         except ValueError:
             print(f"--task 格式错误：{args.task}"
-                  f"（应为 0x8133A:0x4616C:0:0x80506）", file=sys.stderr)
+                  f"（应为 0x8133A:0x462EC 或 0x8133A:0x462EC:0:0x80506）",
+                  file=sys.stderr)
             return 2
         e, s, a = m.boot_task(entry, sp, arg, stop_pc=stop_pc,
-                              max_steps=args.max_steps)
+                              max_steps=args.max_steps, rp=args.rp,
+                              from_table=args.task_from_table)
         print(f"已启动任务：入口 0x{e:06X}  SP=0x{s:08X}  r4=0x{a:X}"
               f"{'  （先跑到 0x%06X）' % stop_pc if stop_pc else ''}")
     for spec in args.poke:
