@@ -55,7 +55,7 @@
   OK    reti 恢复 S=1                                got=0x00000001 want=0x00000001
   OK    reti 后 R15 回到 USP                          got=0x00061000 want=0x00061000
   OK    reti 后 SSP 复原                              got=0x00060000 want=0x00060000
-  OK    level<=ILM 被屏蔽（没进 EIT）                     got=0x00000001 want=0x00000001
+  OK    level>=ILM 被屏蔽（没进 EIT）                     got=0x00000001 want=0x00000001
   OK    被屏蔽的请求仍在队列                                 got=0x00000001 want=0x00000001
   OK    I=0 时不受理                                   got=0x00000002 want=0x00000002
 [7] andccr / orccr 改 S 位时必须跟着换 R15（SSP ↔ USP）
