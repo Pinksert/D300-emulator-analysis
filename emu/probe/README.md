@@ -26,6 +26,14 @@
 | `exp_task2.py` | 直接跑任务 1（`0x8133A`），看第一个硬件等待 | V7 §3 |
 | `exp_task3.py` | 应用区长跑：能跑多远、覆盖率、最终卡点 | V7 §7 |
 | `exp_xver.py` | 1.02 / 1.03 / 1.10 / 1.11 四版从各自复位入口解析 call 链 | V7 §8（空桩四版一致） |
+| `exp_isrfire.py` | 以同一快照为基点，48 个向量逐个注入，判「回原位 + SP 复原 + 是否真进回调」 | V8 §3（5 个有真回调） |
+| `exp_autospin_run.py` | 开自旋消除器把任务 1 一路跑到底，数 PC/服务调用/回调槽 | V8 §2–4（4,473 PC；V8 当时用错栈顶量到 4,512） |
+| `exp_boot_seq.py` | 解 REALOS 任务表 → 旧半主机 / 真内核 / 真内核+补事件 三种跑法对照 → `sta_tsk` 明细 | V9 全篇（35,573 步 `ext_tsk` 退出） |
+| `exp_sp_rp.py` | 栈顶 × RP 四种组合，看「掉到地址 0」是哪个参数造成的 | V9 §3（唯一成因是 RP 没设） |
+| `exp_sp_depth.py` | RP 给对，栈顶从 0x45000 换到系统栈 0x7F000，验证栈顶不影响结局 | V9 §3.2（五种取值同一结果） |
+| `exp_oldpath.py` | 四种 μITRON 挂法对照，`int #0x40` 按 opcode 计数而不是靠钩子 | V9 §6（次数不是判据） |
+| `exp_boot_session.py` | 用 Monitor 脚本化跑一段启动会话，输出即 `results/frbox/boot-session.txt` | V9 §9（tasks / boottask / svc / flag / resume） |
+| `exp_monitor_session.py` | 同上，`session` / `autospin` / `irq` 三种会话，分别生成三份 `*-session.txt` | V2–V8 的 monitor 实录现在都可复现 |
 | `exp_111.py` | 1.10 vs 1.11 在同一段光圈驱动代码上的行为对照 | 早期报告（1.11 唯一改动 = 800mm f/5.6E） |
 | `exp_order.py` | 两版从函数真入口跑，记录按时间顺序的写入 | 同上 |
 | `exp_irq.py` | 用中断机制真跑 B 段 ISR（而非从函数入口硬跳） | V3 §5 |
