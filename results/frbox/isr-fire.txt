@@ -1,0 +1,114 @@
+== 基点 ==
+  任务入口 0x08133A  栈 0x0462EC
+  当前 PC 0x0DCD2C  步数 12216  I=1  ILM=0x10  SP=0x0462A4
+
+== 基点处已注册回调的向量：5 条 ==
+  vec 0x13  L1A  ISR 0x080A54  0x3F028→0x0ACBDA
+  vec 0x19  L1A  ISR 0x080B78  0x3F040→0x0ACAFE
+  vec 0x1B  L1A  ISR 0x080BD4  0x3F048→0x088A96
+  vec 0x24  L1A  ISR 0x080DB2  0x3F078→0x0AD28E
+  vec 0x3C  L16  ISR 0x0811D0  0x3F0D4→0x0E2D1C
+
+== 基点快照 529408 字节：C:\Users\admin\AppData\Local\Temp\frbox_isrfire.snap ==
+
+== 48 个向量逐一注入 ==
+  vec  L    ISR      类型  步数  不同PC 回原位 进回调 进应用区
+  0x10 1A  0x0809BE  stub     21     21 是    -         是
+  0x11 1A  0x0809F0  stub     21     21 是    -         是
+  0x12 1A  0x080A22  stub     21     21 是    -         是
+  0x13 1A  0x080A54  stub     78     69 是    0x0ACBDA  是
+  0x14 1F  0x080A86  stub     21     21 是    -         是
+  0x15 16  0x080AB8  stub     21     21 是    -         是
+  0x16 1A  0x080AEA  stub     21     21 是    -         是
+  0x17 1F  0x080B1C  stub     20     20 是    -         是
+  0x18 1A  0x080B4A  stub     20     20 是    -         是
+  0x19 1A  0x080B78  stub     88     88 是    0x0ACAFE  是
+  0x1A 12  0x080BA6  stub     20     20 是    -         是
+  0x1B 1A  0x080BD4  stub     44     44 是    0x088A96  是
+  0x1C 1A  0x080BFC  stub     18     18 是    -         是
+  0x1D 16  0x080C24  stub     20     20 是    -         是
+  0x1E 1A  0x080C52  stub     16     16 是    -         是
+  0x1F 1F  0x0FE250  unused 20000      3 否    -         是
+  0x20 1F  0x080C88  stub     20     20 是    -         是
+  0x21 1A  0x080CB6  stub     20     20 是    -         是
+  0x22 1A  0x080CE4  stub     24     24 是    -         是
+  0x23 1A  0x080D8A  stub     18     18 是    -         是
+  0x24 1A  0x080DB2  stub    179    179 是    0x0AD28E  是
+  0x25 1A  0x080DDA  stub     18     18 是    -         是
+  0x26 1A  0x080E02  stub     18     18 是    -         是
+  0x27 1F  0x0FE250  unused 20000      3 否    -         是
+  0x28 1F  0x080E2A  stub     20     20 是    -         是
+  0x29 1F  0x080E90  stub     20     20 是    -         是
+  0x2A 1F  0x080EF6  stub     20     20 是    -         是
+  0x2B 1A  0x080588  stub    300    300 是    -         是
+  0x2C 1F  0x0FE250  unused 20000      3 否    -         是
+  0x2D 1F  0x0FE250  unused 20000      3 否    -         是
+  0x2E 1F  0x0FE250  unused 20000      3 否    -         是
+  0x2F 1F  0x080F5C  stub     20     20 是    -         是
+  0x30 1A  0x080F8A  stub     20     20 是    -         是
+  0x31 1F  0x080FF0  stub     20     20 是    -         是
+  0x32 1F  0x08101E  stub     20     20 是    -         是
+  0x33 1F  0x08104C  stub     20     20 是    -         是
+  0x34 1F  0x08107A  stub     20     20 是    -         是
+  0x35 1A  0x0810A8  stub     20     20 是    -         是
+  0x36 1F  0x0810D6  stub     20     20 是    -         是
+  0x37 1F  0x0FE250  unused 20000      3 否    -         是
+  0x38 1F  0x0FE250  unused 20000      3 否    -         是
+  0x39 1F  0x0FE250  unused 20000      3 否    -         是
+  0x3A 1A  0x081104  stub     20     20 是    -         是
+  0x3B 18  0x08116A  stub     20     20 是    -         是
+  0x3C 16  0x0811D0  stub     20     20 是    -         是
+  0x3D 1A  0x081236  stub     20     20 是    -         是
+  0x3E 1A  0x08129C  stub     20     20 是    -         是
+  0x3F 1E  0x0FE776  special 20000  19999 否    -         否
+
+== 汇总 ==
+  向量总数            48
+  真 stub             39
+  未用（兜底桩）      8
+  特殊（vec 0x3F）    1
+  闭环且 SP 复原      39
+  → 真回调被调用      4  ['0x13', '0x19', '0x1b', '0x24']
+  → 走默认空 ret      35
+  未闭环 / SP 异常    9  ['0x1f', '0x27', '0x2c', '0x2d', '0x2e', '0x37', '0x38', '0x39', '0x3f']
+
+== 闭环样板：vec 0x13 的 20 步轨迹 ==
+   0  0x0DCD2C  ldi:20 op1=0x9, i20=0xaf, op2=0xb, ri=0x0
+   1  0x080A54  stm0 op1=0x8, op2=0xe, reglist-low-st=0xff
+   2  0x080A56  stm1 op1=0x8, op2=0xf, reglist-hi-st=0xc
+   3  0x080A58  st op1=0x1, op2=0x7, op3=0x8, rs2=0x4
+   4  0x080A5A  st op1=0x1, op2=0x7, op3=0x8, rs2=0x5
+   5  0x080A5C  st op1=0x1, op2=0x7, op3=0x8, rs2=0x1
+   6  0x080A5E  ldi:20 op1=0x9, i20=0x3f028, op2=0xb, ri=0x4
+   7  0x080A62  ldi:20 op1=0x9, i20=0x40, op2=0xb, ri=0x0
+   8  0x080A66  bandl op1=0x8, op2=0x0, u4=0x7, ri=0x0
+   9  0x080A68  ld op1=0x0, op2=0x4, rj=0x4, ri=0x0
+  10  0x080A6A  cmp op1=0xa, op2=0x8, u4=0x0, ri=0x0
+  11  0x080A6C  beq op1=0xe, cc=0x2, rel9=0x3
+  12  0x080A6E  ld op1=0x0, op2=0x4, rj=0x4, ri=0x0
+  13  0x080A70  call op1=0x9, op2=0x7, op3=0x1, ri=0x0
+  14  0x0ACBDA  st op1=0x1, op2=0x7, op3=0x0, ri=0x8
+  15  0x0ACBDC  st op1=0x1, op2=0x7, op3=0x8, rs2=0x1
+  16  0x0ACBDE  ldi:20 op1=0x9, i20=0x41a56, op2=0xb, ri=0x8
+  17  0x0ACBE2  ldi:20 op1=0x9, i20=0xad56c, op2=0xb, ri=0xc
+  18  0x0ACBE6  call:d op1=0x9, op2=0xf, op3=0x1, ri=0xc
+  19  0x0ACBE8  ldi:8 op1=0xc, i8=0x0, ri=0x4
+
+== 例外：vec 0x3C 是「状态位驱动的双分支」==
+  0x0811E6  btsth #4, @0xAD   ; 测 0xAD 位6
+  0x0811F8  ld   @0x3F0D0     ; 分支 A 的槽（实测为空，有空槽保护）
+  0x08120A  btsth #8, @0xAD   ; 测 0xAD 位7
+  0x08121C  ld   @0x3F0D4     ; 分支 B 的槽 = 0x0E2D1C
+
+  0xAD 取值   步数  回原位  走 A 支(0x3F0D0)  走 B 支(0xE2D1C)
+  0x00         20  是      否               否
+  0x40         23  是      否               否
+  0x50         30  是      是               否
+  0x80         23  是      否               否
+  0xA0         53  是      否               是
+  0xF0         63  是      是               是
+
+  只有 0xAD 位7+位5 同时置位（0xA0）才走 B 支去调 0x3F0D4 的回调；
+  位6+位4（0x50）走 A 支，而 A 支的槽 0x3F0D0 是空的 —— ISR 里自带空槽保护
+  （ld → cmp #0 → beq 跳过 call），所以不会跳到地址 0。
+
