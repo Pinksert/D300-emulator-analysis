@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.9.0** | NikonEmulator 驱动 |
+| | **frbox 0.10.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -31,9 +31,11 @@ python -m frbox -M d300-a -c "tasks"                    # REALOS 任务表（入
 python -m frbox -M d300-a --itron-block --autoevent --autospin \
        --task 0x8133A::0:0x80506 --task-from-table --rp 0x81338 \
        -c "c 200000;info;svc"                            # 任务 1 跑完整条启动链
+python -m frbox -M d300-a --realos 1 -c "c 300000;realos"
+                                                        # 走固件自己的内核（V10 起）
 
-python frbox_selftest.py     # 212/212
-python fr_selftest.py        # 54/54
+python frbox_selftest.py     # 258/258
+python fr_selftest.py        # 63/63
 ```
 
 固件从仓库 `data/` 读；要用别的目录就 `FRBOX_FW_DIR=/path/to/D300Update`。
@@ -81,7 +83,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.9.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.10.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -93,9 +95,9 @@ D300-emulator-analysis/
 │   ├── fr_selftest.py      54 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   212 条断言
+│   ├── frbox_selftest.py   258 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              17 个取证脚本（见 probe/README.md）
+│   └── probe/              21 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
@@ -126,7 +128,7 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 212 条（frbox）+ 54 条（CPU），全绿 |
+| 自检 | 258 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
 | 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
@@ -291,6 +293,7 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 | 19 | `19-frbox-v7-app-startup.html` | frbox V7：让 A 段应用区跑起来 |
 | 20 | `20-frbox-v8-autospin.html` | frbox V8：中断闭环与自旋消除器 |
 | 21 | `21-frbox-v9-task-table-boot.html` | frbox V9：任务表解密与 μITRON 半主机 |
+| 22 | `22-frbox-v10-native-realos.html` | frbox V10：固件自带的 REALOS 第一次真的跑起来了 |
 
 ---
 
