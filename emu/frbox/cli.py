@@ -82,7 +82,7 @@ def build_parser():
     p.add_argument("--autospin-threshold", dest="autospin_threshold", type=int,
                    default=3000, metavar="N",
                    help="同一 0x100 窗口内连续 N 步未离开就算自旋（默认 3000）")
-    p.add_argument("--version", action="version", version="frbox 0.10.0")
+    p.add_argument("--version", action="version", version="frbox 0.11.0")
     return p
 
 
