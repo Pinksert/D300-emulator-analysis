@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V11 · 固件自己的调度器第一次真的换起任务来</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  tr.good td{background:#eaf7ef}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .okbox{background:#eaf7ef;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V11：固件自己的调度器第一次真的换起任务来</h1>
+<div class="sub">把 ILM 的优先级约定改回来 · 补上直接页 0x44「请求调度」· 补上 0x3F4/0x3FC 优先级编码器 · 100 万步里 6 次任务切换，全部由固件内核自己完成</div>
+
+<div class="kpis">
+  <div class="kpi"><b>6</b><span>任务切换次数（V10 是 0）</span></div>
+  <div class="kpi"><b>43,429</b><span>首次切换的步数</span></div>
+  <div class="kpi"><b>7</b><span>调度请求 / 编码查询</span></div>
+  <div class="kpi"><b>282+63</b><span>自检通过</span></div>
+</div>
+
+<h2>一、V10 那句「至今没有发生过一次真正的任务切换」，作废</h2>
+
+<div class="card">
+<p>V10 结尾把这句话写进了结论，还专门列了三条「都不成立」的路：硬件中断被 ILM 挡在门外、
+把 <span class="mono">wai_flg</span> 换成别的阻塞服务一律立刻返回、把 <span class="mono">clr_flg</span> 改成
+<span class="mono">set_flg</span> 只改变任务 1 自己的走向。<b>三条路都试对了方向，唯独漏了一点：
+不是内核不想切，是内核请求调度的那个动作，被仿真台吞掉了。</b></p>
+
+<p>内核每次需要换任务时，会往直接页 <span class="mono">0x44</span> 写一个字节 1：</p>
+
+<pre>0x000FECEC  ldi:8  #1, r13
+0x000FECF0  dmovb  @0x44      ; R13 → @0x44（普通内存写，不是 int 指令）
+0x000FECF2  ld     @r15+, rp
+0x000FECF4  ret</pre>
+
+<p>跑 30 万步，它被写了 <b>1,016 次</b>；而固件里<b>从头到尾没有任何一处读它</b>。
+只写不读 —— 那它不是内存，是硬件寄存器。以前仿真台把它当普通内存，
+于是内核的每一声「该换任务了」都喊进了一个没人听的格子。</p>
+
+<div class="fixbox"><b>这一版补的三样东西</b>（前两样是新设备，第三样是改错）：
+① 直接页 <span class="mono">0x44</span>「请求调度」：写 1 → 向中断控制器挂 <span class="mono">vec 0x3F</span>；
+② <span class="mono">0x3F4/0x3FC</span> 硬件优先级编码器：写就绪位图进 0x3F4，从 0x3FC 读回最高优先级号；
+③ <b>ILM 的优先级约定一直搞反了</b>：正确是「级别号越小优先级越高，受理条件 <span class="mono">lvl &lt; ILM</span>」。
+三样缺任何一样，任务切换都不会发生。</div>
+
+<p>补完之后，同一份固件、同一条启动链、一个字节都没改：</p>
+
+<pre>  step    43,429  → 任务 1     TCB=0x0459FC  入口 0x08133A   由 0x0FE4EC 写入
+  step    43,516  → 任务 5     TCB=0x045AAC  入口 0x0A62FE   由 0x0FE8BE 写入
+  step    43,806  → 任务 1     TCB=0x0459FC  入口 0x08133A   由 0x0FE8BE 写入
+  step    44,614  → 任务 5     TCB=0x045AAC  入口 0x0A62FE   由 0x0FE8BE 写入
+  step    45,125  → 任务 1     TCB=0x0459FC  入口 0x08133A   由 0x0FE8BE 写入
+  step    45,341  → 空闲任务     TCB=0x045C0C  入口 0x0FE510   由 0x0FE8BE 写入</pre>
+
+<p>1,043,428 步跑完，最终停在 <span class="mono">0x0FE510</span>（空闲任务的 <span class="mono">bra -1</span>），
+<b>中途一次都没停机</b>。第一次是 <span class="mono">0x0FE4EC</span>（首次派发的上下文恢复段），
+后面五次全是 <span class="mono">0x0FE8BE</span> —— 那是调度器里真正做「换一个任务」的那条写。</p>
+</div>
+
+<h2>二、第一处错：ILM 的优先级约定反了</h2>
+
+<div class="card">
+<p>这一条最要命，也最难看出错。FR80 的 CCR 里有个 4 位 ILM（中断级别屏蔽），
+旧代码是这么写的：</p>
+
+<pre># 修复前：号越大越优先，受理条件 lvl &gt; ILM
+if lvl &lt;= self.ilm:  return False      # 被挡掉
+# 修复后：号越小越优先，受理条件 lvl &lt; ILM
+if lvl &gt;= self.ilm:  return False      # 被挡掉</pre>
+
+<p>反证硬得不能再硬：<b>任务上下文 PS 里的 ILM 是 0x1F</b>，而固件写进 48 个 ICR 的中断级别
+全部落在 <span class="mono">0x12–0x1F</span>。按旧约定，任务运行时一条中断都进不来 ——
+固件等于全聋，那它写这 48 个 ICR 干什么？</p>
+
+<p>反过来看则处处自洽，而且能解释一个以前解释不了的细节：</p>
+
+<table>
+<tr><th style="width:200px">量</th><th>值</th><th>在新约定下怎么读</th></tr>
+<tr class="good"><td class="m">vec 0x3F 的 ICR</td><td class="m">0x1E</td><td>所有启用向量里<b>级别号最大 = 优先级最低</b>。调度器本就该最低，好让所有外设 ISR 都能抢占它</td></tr>
+<tr class="good"><td class="m">串口 vec 0x1B 的 ICR</td><td class="m">0x1A</td><td>比调度器高两级 —— 串口中断能打断调度过程</td></tr>
+<tr class="good"><td class="m">内核临界区 <span class="mono">stilm #0x1E</span></td><td class="m">0x1E</td><td>恰好<b>只</b>把 0x1E 这一级（调度器自己）挡在门外，其余全放行</td></tr>
+<tr class="good"><td class="m">任务的 PS.ILM</td><td class="m">0x1F</td><td>放行 0x00–0x1E 全部 31 级</td></tr>
+</table>
+
+<p>于是派发的时机被固件安排得很自然：内核在临界区里请求调度 → 调度器被自己的 ILM 挡住 →
+<span class="mono">reti</span> 回到任务上下文（ILM 变回 0x1F）→ 派发立刻落地。
+<b>这不是我们设计的时序，是固件自己的 ILM 取值逼出来的。</b></p>
+
+<div class="warnbox"><b>还没定的一处</b>：新约定下 ICR 级别为 0x1F 的那 20 条向量（其中 13 条有真 ISR）
+永远不会被受理。要么 0x1F 在真机上是「禁用」值，要么比较其实是 <span class="mono">&lt;=</span>。
+当前取 <span class="mono">&lt;</span>，因为它是唯一让调度器工作的方向。记在
+<span class="mono">KNOWN_ISSUES</span> 第 41 条。</div>
+</div>
+
+<h2>三、第二处缺：直接页 0x44 = 「请求调度」</h2>
+
+<div class="card">
+<p>它是只写寄存器（读恒为 0），写非零字节就挂一条中断。请求哪条向量？三条证据互相咬合：</p>
+
+<ul>
+<li>内核区里唯一一个还没被解释的向量入口是 <span class="mono">vec 0x3F → 0x000FE776</span>，
+而它的头几条指令正是调度器该有的样子（见下）；</li>
+<li>它的 ICR 级别 0x1E 是所有启用向量里最低的 —— 调度器本就该最低；</li>
+<li>打开它之后，任务切换第一次真的发生了。</li>
+</ul>
+
+<pre>0x000FE776  andccr #0xEF        ; 先关中断：调度过程不许被外设 ISR 打断
+0x000FE778  orccr  #0x20        ; 切到系统栈
+0x000FE77A  stm1   r8-r14
+0x000FE77C  ldi:32 #0x459F0, r12
+0x000FE782  ldi:8  #0, r13
+0x000FE784  xchb   @r12, r13    ; 原子读走并清零「待派发」字节
+0x000FE786  cmp    #0, r13
+0x000FE788  beq    → 返回       ; 为空 → 不用调度
+            ...
+0x000FE798  ldi:32 #0x45980, r7 ; 当前 TCB
+0x000FE79E  ld     @r7, r14</pre>
+
+<p><span class="mono">xchb</span>（原子交换）是关键：调度请求是个字节标志，
+读走和清零必须一步完成，否则并发请求会丢。固件在这里用了原子指令，
+说明它确实把自己当成「会被异步打断的那一段」来写。</p>
+
+<div class="note">这是<b>推断出来的绑定</b>，不是手册确认的。寄存器名、以及「是不是还有别的触发源」都还没定
+（<span class="mono">KNOWN_ISSUES</span> 第 42 条）。但三条证据咬合，而且它是唯一让调度器动起来的建模方式。</div>
+</div>
+
+<h2>四、第三处缺：0x3F4/0x3FC 是硬件优先级编码器</h2>
+
+<div class="card">
+<p>调度器挑下一个任务时，要先把「就绪位图」变成「最高优先级的那个号」。固件是这么做的：</p>
+
+<pre>0x0FE830  ldi:32 #0x45984, r12
+0x0FE836  ld     @r12, r13        ; r13 = 就绪位图
+0x0FE838  ldi:20 #0x3F4,  r14
+0x0FE83C  st     r13, @(r14,0)    ; W 0x003F4 ← 位图（4 字节）
+0x0FE83E  ld     @(r14,8), r13    ; R 0x003FC → 结果（4 字节）
+0x0FE840  add    #4, r12          ; r12 = 0x45988 就绪队列数组
+0x0FE842  lsl    #3, r13          ; 结果 × 8 = 队列节点大小
+0x0FE844  ld     @(r12,r13), r13  ; 取该优先级的队首 TCB</pre>
+
+<p>写入口和读出口差 8 个字节、写完立刻读、读完乘 8 当数组下标 ——
+这是一个<b>纯组合逻辑的硬件查表器</b>。结果必须等于「最高优先级号」，
+否则下标必然越界：就绪队列数组只有 13 条（优先级 0–12），
+而位图的置位规律是 <span class="mono">bit(31 − 优先级)</span>。于是</p>
+
+<pre>结果 = 前导零个数 = 32 − bit_length(位图)</pre>
+
+<p>实测（把位图直接写进去读回）：</p>
+
+<table>
+<tr><th style="width:180px">写进 0x3F4 的位图</th><th style="width:140px">从 0x3FC 读回</th><th>含义</th></tr>
+<tr class="hi"><td class="m">0x50800000</td><td class="m">1</td><td>置位 bit30/28/23 = 优先级 1/3/8 → 最高是 <b>1</b>（任务 5）</td></tr>
+<tr><td class="m">0x80000000</td><td class="m">0</td><td>只有优先级 0 就绪</td></tr>
+<tr><td class="m">0x00000001</td><td class="m">31</td><td>只有优先级 31 —— 队列数组里没有，越界</td></tr>
+<tr><td class="m">0x00008000</td><td class="m">16</td><td>同上，越界（固件不会让它发生）</td></tr>
+<tr><td class="m">0x00000000</td><td class="m">32</td><td>空位图。100 万步里<b>一次都没出现过</b></td></tr>
+</table>
+
+<div class="note">语义是从「写什么、读什么、读完怎么用」三点唯一确定的，寄存器真名未知
+（<span class="mono">KNOWN_ISSUES</span> 第 43 条）。它和 0x44 是同一条推断链上的两环：
+少任何一环，调度器都会读到 0 号（空）优先级。</div>
+</div>
+
+<h2>五、内核的三张表，现在是能逐字段引用的事实</h2>
+
+<div class="card">
+<table>
+<tr><th style="width:200px">地址</th><th>内容</th><th>实测值</th></tr>
+<tr><td class="m">0x00045980</td><td>当前 TCB</td><td>调度器 0x0FE798 处读它；切换就看它</td></tr>
+<tr><td class="m">0x00045984</td><td>就绪位图</td><td class="m">0x50800000</td></tr>
+<tr><td class="m">0x00045988</td><td>就绪队列数组</td><td>13 条 × 8 字节（next, prev），空队列自指</td></tr>
+<tr><td class="m">0x000459F0</td><td>派发请求字节</td><td>调度器用 <span class="mono">xchb</span> 读走并清零</td></tr>
+<tr><td class="m">0x0003F4 / 0x0003FC</td><td>优先级编码器（写 / 读）</td><td>见上一节</td></tr>
+<tr><td class="m">直接页 0x44</td><td>请求调度（只写）</td><td>写 1 → 挂 vec 0x3F</td></tr>
+</table>
+
+<h3>就绪位图 0x50800000 拆开看</h3>
+<table>
+<tr><th style="width:110px">优先级</th><th style="width:150px">队首 TCB</th><th>是谁</th></tr>
+<tr class="good"><td class="m">1</td><td class="m">0x045AAC</td><td><b>任务 5</b>（入口 0x0A62FE）—— 最高优先级，所以先跑它</td></tr>
+<tr><td class="m">2</td><td class="m">0x045998</td><td>空（自环）</td></tr>
+<tr class="good"><td class="m">3</td><td class="m">0x0459FC</td><td><b>任务 1</b>（入口 0x08133A）</td></tr>
+<tr><td class="m">4–7</td><td class="m">0x0459A8…</td><td>空（自环）</td></tr>
+<tr class="good"><td class="m">8</td><td class="m">0x045C0C</td><td><b>空闲任务</b>（入口 0x0FE510 = <span class="mono">bra -1</span>）</td></tr>
+<tr><td class="m">9</td><td class="m">0x000000</td><td>—</td></tr>
+<tr><td class="m">10–12</td><td class="m">0x0459D8…</td><td>空（自环）</td></tr>
+</table>
+
+<p>13 条队列里只有 3 条有货，其余 10 条自环。<b>这正好对应「13 个任务里只有 3 个上场」</b>——
+剩下 10 个任务的上下文要靠 <span class="mono">sta_tsk</span> 去建，而这条路上我们还没有
+触发 <span class="mono">sta_tsk</span> 的硬件事件。</p>
+</div>
+
+<h2>六、100 万步的收支表</h2>
+
+<div class="card">
+<table>
+<tr><th style="width:280px">量</th><th style="width:150px">值</th><th>说明</th></tr>
+<tr><td>总步数</td><td class="m">1,043,428</td><td>100 万步上限 + 启动链</td></tr>
+<tr><td>最终 PC</td><td class="m">0x0FE510</td><td>空闲任务的 <span class="mono">bra -1</span></td></tr>
+<tr><td>硬件中断受理</td><td class="m">vec 0x3F × 7</td><td>只有调度器，别的向量一个都没被触发</td></tr>
+<tr><td>调度请求 / 编码查询</td><td class="m">7 / 7</td><td>一一对应，说明每次请求都真的走了调度器</td></tr>
+<tr><td>位图为 0 的次数</td><td class="m">0</td><td>调度器从没在「没人可跑」的时候被叫醒</td></tr>
+<tr class="hi"><td>各任务在应用区的步数</td><td class="m">空闲 998,087<br>任务 1 = 1,111<br>任务 5 = 801</td><td>真正在干活的只有前 46,000 步，之后全在空转</td></tr>
+<tr><td>服务调用</td><td class="m">14 次</td><td>clr_flg 5 / set_flg 3 / wai_flg 2 / rcv_msg 1 / snd_msg 1 / can_wup 1 / slp_tsk 1</td></tr>
+</table>
+
+<p><b>14 次服务调用里第一次出现了任务间通信</b>：<span class="mono">rcv_msg</span> /
+<span class="mono">snd_msg</span> / <span class="mono">can_wup</span> / <span class="mono">slp_tsk</span>
+各一次。这四个在 V10 那 1,888 次里一个都没有 —— 它们只在「真的要让出 CPU」的时候才会被调到。</p>
+</div>
+
+<h2>七、⚠️ A / B 两个模式必须分开报，数字不能混着比</h2>
+
+<div class="card">
+<p>这一版最容易踩的坑：<b>开不开 0x44，跑出来是两套完全不同的数字。</b>
+以前所有基线都是 A 模式跑出来的，V11 起新增 B 模式。两个都得留着，但必须标明是哪个。</p>
+
+<table>
+<tr><th style="width:150px">模式</th><th>怎么开</th><th>现象</th></tr>
+<tr class="good"><td><b>A</b>（V10 基线）</td><td><span class="mono">enable_xfer()</span> + <span class="mono">realos.prepare()</span></td>
+    <td>任务 1 一路跑到底，30 万步里 <b>1,888 次</b>服务调用（clr_flg 754 / wai_flg 751 / sta_tsk 376 / set_flg 6 / snd_msg 1），
+        <span class="mono">*(0x45980)</span> <b>只写 1 次</b></td></tr>
+<tr class="hi"><td><b>B</b>（V11 新增）</td><td><span class="mono">boot_realos()</span>（= A + <span class="mono">enable_dispatch()</span>）</td>
+    <td>任务 1 阻塞后被切走，30 万步里只有 <b>14 次</b>服务调用，
+        <span class="mono">*(0x45980)</span> <b>写 6 次</b></td></tr>
+</table>
+
+<p>B 模式下服务调用反而少了 99%，原因很直白：任务 1 早就阻塞了，
+剩下的 99 万步都在空闲任务的 <span class="mono">bra -1</span> 里打转。
+<b>如果拿 B 的 14 去否定 A 的 1,888，或者拿 A 的「只写 1 次」去否定 B 的切换，都会读反。</b></p>
+
+<div class="note">CLI 上 <span class="mono">--realos</span> 走的是 B（<span class="mono">boot_realos()</span> 里自动打开）；
+裸跑 <span class="mono">-M d300-a</span> 默认是 A，以保住 V2–V10 那些基线。
+自检第 16 组刻意只开 xfer，就是为了把 A 的「xfer 三处握手都走完 (3,3)」钉死。</div>
+</div>
+
+<h2>八、还差什么：别把「任务切换跑通了」读成「相机跑起来了」</h2>
+
+<div class="card">
+<ul>
+<li><b>13 个任务里只有 3 个上场</b>（任务 1 / 任务 5 / 空闲任务）。其余 10 个的上下文要靠
+<span class="mono">sta_tsk</span> 去建，而触发 <span class="mono">sta_tsk</span> 的硬件事件
+（按键 / 拨盘 / 存储卡 / 时钟）<b>一个都没有</b>。</li>
+<li><b>7 次调度全部来自内核自身的服务调用</b>，没有一次是外设中断引发的。
+所以现在证明的是「调度器能换任务」，不是「相机有任务在互相唤醒」。</li>
+<li><b>B 段（主控 UI）还是没跑</b>。这一整条线都在 A 段。</li>
+<li><b>xfer 三处握手（0x0AF / 0x174 / 0x524）仍是模型化假设</b>，不是从硬件手册读来的。</li>
+<li><b>854 个未定义编码</b>仍然未实现；gdbstub 还没做。</li>
+</ul>
+
+<div class="okbox"><b>现在可以报的</b>：固件自带的 REALOS 在 frbox 上换起了任务 ——
+调度器是固件自己的代码，就绪位图、就绪队列、优先级编码器、派发请求字节全部是固件自己的数据结构，
+我们只补了三样「固件以为存在、仿真台没有」的东西。<br>
+<b>还不能报的</b>：相机功能跑起来了。差的是硬件事件源，不是内核。</div>
+</div>
+
+<h2>九、怎么复现</h2>
+
+<pre># 自检：frbox 282 条（第 17 组是本版新增的调度专项），CPU 63 条
+cd emu &amp;&amp; python frbox_selftest.py      # 282/282
+cd emu &amp;&amp; python fr_selftest.py         # 63 条，第 6 组验 ILM 的新约定
+
+# 本版新增的取证脚本
+cd emu &amp;&amp; python probe/exp_realos_sched.py    # 三张表 + 编码器 + ILM 约定 + 切换时间线
+
+# 交互式
+python -m frbox -M d300-a --realos 1 -c "cont 1000000; realos"</pre>
+
+<div class="fixbox"><b>实现上踩到的两个坑</b>（都会让计数器翻倍或越界，写新设备时照抄即可）：
+① 直接页是<b>按字节</b>路由的，<span class="mono">dp.attach(lo, hi, dev, base)</span> 的
+<span class="mono">base</span> 要传 <b>0</b>（它是加在访问偏移上的常数），
+多字节寄存器还要自己拼装、等最后一个字节落地才结算，否则 4 字节写会被算成 4 次；
+② 别把 <span class="mono">int</span> 指令和内存写搞混 —— <span class="mono">0x44</span> 那条是
+<span class="mono">dmovb</span> 普通写（<span class="mono">int #0x40</span> 的编码是 <span class="mono">0x1F40</span>），
+所以钩子要挂在总线上，不能挂在陷阱分发上。</div>
+
+<div class="note"><b>版权说明：</b><span class="mono">fr30.cpu</span> 与 <span class="mono">fr30-opc.c</span> 来自 GNU binutils，随 GPL 一并收录，细节在 <span class="mono">emu/NOTICE.md</span>。
+固件本体是尼康的更新包，本仓库不重新分发商业固件以外的东西。</div>
+
+</div>
+</body>
+</html>
