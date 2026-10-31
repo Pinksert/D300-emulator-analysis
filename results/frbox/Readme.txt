@@ -5,12 +5,13 @@ frbox 线的原始输出
 
 文件                    生成命令
 ----------------------  ---------------------------------------------------------------
-selftest.txt            cd emu && python frbox_selftest.py              （258 条断言）
+selftest.txt            cd emu && python frbox_selftest.py              （282 条断言）
 cpu-selftest.txt        cd emu && python fr_selftest.py                 （63 条 CPU 断言）
 realos-chain.txt        cd emu && python probe/exp_realos_chain.py      （启动链 + 13 条记录 + 初始上下文）
 realos-tcb.txt          cd emu && python probe/exp_realos_tcb.py        （TCB 布局 + 队列归属）
-realos-run.txt          cd emu && python probe/exp_realos_run.py        （任务 1 跑 30 万步 + 服务分布）
+realos-run.txt          cd emu && python probe/exp_realos_run.py        （A/B 两模式：任务 1 跑 30 万步 + 服务分布 + 切换）
 realos-objects.txt      cd emu && python probe/exp_realos_flgcb.py      （服务分发表 / 对象登记表 / 标志控制块）
+realos-sched.txt        cd emu && python probe/exp_realos_sched.py      （就绪位图/队列 + 优先级编码器 + ILM 约定 + 切换时间线）
 boot.txt                cd emu && python frbox_boot.py --max 300000
 coverage.txt            cd emu && python fr_cover.py                    （65536 个编码逐个喂）
 isr-injection.txt       cd emu && python probe/exp_allisr.py            （48 个向量全量注入）
@@ -91,9 +92,32 @@ V10 起的两件大事（详见 realos-*.txt）
 二、realos-run.txt 里那段 300,000 步：1,888 次陷阱全部由固件内核处理
    （clr_flg 754 / wai_flg 751 / sta_tsk 376 / set_flg 6 / snd_msg 1），
    服务分发表 @0x0FE3B8、对象登记表 @0x0FE180、标志控制块 @0x045C38（见 realos-objects.txt）。
+   ⚠️ 这组数字是【A 模式】（只开 xfer、不开 0x44）的读数。
 
-注意：至今没有发生过一次真正的任务切换。*(0x45980)（当前 TCB）全程只被写过 1 次，
-任务 1 的 USP 全程落在 0x0462xx。三条路都不成立（详见 KNOWN_ISSUES 第 39 条）：
-硬件中断被 ILM 挡在门外；把 wai_flg 换成 slp_tsk / wai_sem / rcv_msg / dly_tsk
-一律立刻返回 E_OK；把 clr_flg 改成 set_flg 只会改变任务 1 自己的走向。
-别把这轮的结果读成「多任务跑通了」。
+V11 起的三件大事（详见 realos-sched.txt）
+----------------------------------------
+一、任务切换真的发生了 —— V10 那句「至今没有发生过一次真正的任务切换」作废。
+   真因不在内核，是仿真台少建了三样东西：
+     1. ILM 的优先级约定搞反了。正确的是「级别号越小优先级越高，受理条件 lvl < ILM」。
+        反证很硬：任务上下文 PS 的 ILM=0x1F，而 48 个 ICR 的级别落在 0x12-0x1F；
+        按旧约定任务运行时一条中断都进不来，固件等于全聋。
+     2. 直接页 0x44 是「请求调度」寄存器：内核写 1，固件里没有任何一处读它
+        （30 万步写 1016 次）→ 只写不读，只可能是硬件。写 1 = 挂 vec 0x3F。
+     3. 0x3F4/0x3FC 是硬件优先级编码器：写就绪位图进 0x3F4，从 0x3FC 读回
+        「最高优先级号」= 前导零个数（实测 0x50800000 → 1）。
+
+   100 万步的切换时间线（*(0x45980) 每次变化）：
+     43,429 任务 1 → 43,516 任务 5 → 43,806 任务 1 → 44,614 任务 5
+     → 45,125 任务 1 → 45,341 空闲任务，最后停在 0x000FE510（空闲任务的 bra -1）。
+   调度请求 7 次 / 优先级编码查询 7 次 / 位图为 0 的次数 0 / 中途没有停机。
+
+二、⚠️ A/B 两个模式必须分开报，数字不能混着比：
+     A = enable_xfer() + realos.prepare()       任务 1 一路跑到底，*(0x45980) 只写 1 次
+     B = boot_realos()（= A + enable_dispatch()）*(0x45980) 写 6 次，真切换
+   上面那组 1,888 次是 A；B 模式下 30 万步只有 14 次服务调用
+   （clr_flg 5 / set_flg 3 / wai_flg 2 / rcv_msg 1 / snd_msg 1 / can_wup 1 / slp_tsk 1），
+   因为任务 1 早就阻塞了，剩下的时间都在空闲任务的 bra -1 里打转。
+
+三、别把「任务切换跑通了」读成「相机跑起来了」。13 个任务里只有 3 个上场
+   （任务 1 / 任务 5 / 空闲任务）。其余 11 个的上下文要靠 sta_tsk 去建，
+   而触发 sta_tsk 的硬件事件（按键 / 拨盘 / 存储卡 / 时钟）我们还没有。
