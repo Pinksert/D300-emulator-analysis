@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V8 · 中断闭环与自旋消除</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V8：中断真的响了一次，忙等也不用再手抠</h1>
+<div class="sub">D300 固件 A 段 · 以同一快照为基点注入 48 个向量 · 五个真回调的闭环证据 · 自旋消除器把三处硬件等待全自动放行</div>
+
+<div class="kpis">
+  <div class="kpi"><b>39/48</b><span>闭环且 SP 复原</span></div>
+  <div class="kpi"><b>4</b><span>真回调被调用到</span></div>
+  <div class="kpi"><b>4,512</b><span>任务 1 走到的 PC</span></div>
+  <div class="kpi"><b>160/160</b><span>自检通过</span></div>
+</div>
+
+<h2>一、这一版解决的两件事</h2>
+
+<div class="card">
+<p>V7 留下了两个“看得见但摸不着”的东西：一是中断表里明明填了回调，却从没验证过回调<em>真的会被调用</em>；
+二是任务 1 卡在 <span class="mono">0x0DCD2C</span> 等一个硬件就绪位，只能靠手写 poke 绕过。
+这一版把两件事都做成了仿真台的正式能力。</p>
+<ul>
+<li><b>中断闭环成立</b>：以「任务 1 跑到第一个卡点」的同一份快照为基点，把 48 个向量逐个注入。
+<span class="mono">39</span> 个精确 <span class="mono">reti</span> 回到注入点且 <span class="mono">r15</span>/SSP 逐位复原，
+其中 <span class="mono">4</span> 个真的走进了应用区回调函数。</li>
+<li><b>忙等自动放行</b>：<span class="mono">--autospin</span> 在运行期读轮询指令实际使用的那个寄存器，
+把就绪位置 1 后继续。三处忙等<strong>全自动认出，包括第三处地址是算出来的那种</strong>。</li>
+<li><b>任务 1 跑通到出界</b>：三处放行后走到 <span class="mono">4,512</span> 个不同 PC、
+<span class="mono">56</span> 次 μITRON 服务调用、<span class="mono">6</span> 个回调槽。
+然后掉到地址 0 —— 这次能说清楚是为什么了（缺的是调度器栈帧，不是硬件）。</li>
+</ul>
+</div>
+
+<h2>二、闭环的判据是什么</h2>
+
+<p>「中断能进」和「中断能回来」是两件事，必须分开验。判据定成三条同时成立：</p>
+
+<table>
+<tr><th>判据</th><th>怎么测</th><th>为什么这条不可省</th></tr>
+<tr><td>回到注入时的 PC</td><td>注入前记 <span class="mono">home = cpu.pc</span>，跑到 <span class="mono">pc == home</span> 为止</td><td>只测“进过 ISR”会漏掉 <span class="mono">reti</span> 弹错地址的情况</td></tr>
+<tr><td><span class="mono">r15</span> 逐位复原</td><td>注入前记 <span class="mono">sp0</span>，回来后比对</td><td>EIT 压栈/弹栈对称性坏了，PC 可能对而 SP 漂移</td></tr>
+<tr><td>确实进了回调函数</td><td>看走过的 PC 集合里有没有槽里的那个地址</td><td>ISR 有空槽保护，槽空时会静默跳过 —— 看起来“闭环成功”，其实什么都没干</td></tr>
+</table>
+
+<div class="note">第三条是关键。<span class="mono">39</span> 个向量全部闭环成功，但只有 <span class="mono">4</span> 个真调到了回调，
+其余 <span class="mono">35</span> 个走的是默认空 <span class="mono">ret</span>。如果只看前两条，
+会得出“A 段中断系统全部打通”的错误结论。</div>
+
+<h2>三、48 个向量的完整结果</h2>
+
+<h3>3.1 分类</h3>
+
+<table>
+<tr><th>类别</th><th>数量</th><th>形态</th><th>行为</th></tr>
+<tr><td>真 stub</td><td class="m">39</td><td class="m">0x0809BE – 0x08129C，每条 0x26–0x30 字节</td><td>压栈 → 取槽 → <span class="mono">call @r0</span> → 弹栈 → <span class="mono">reti</span></td></tr>
+<tr><td>未用（兜底桩）</td><td class="m">8</td><td class="m">全部指向 0x0FE250 → 0x081338 的 bra -1</td><td>注入后不回来（本来就是停机占位）</td></tr>
+<tr><td>特殊</td><td class="m">1</td><td class="m">vec 0x3F → 0x0FE776</td><td>唯一带 <span class="mono">andccr #0xEF</span>（清 I 位）的向量</td></tr>
+</table>
+
+<h3>3.2 五个「有真回调」的向量</h3>
+
+<table>
+<tr><th>向量</th><th>ICR 级别</th><th>ISR</th><th>回调槽</th><th>槽里的值</th><th>步数</th></tr>
+<tr><td class="m">0x13</td><td class="m">0x1A</td><td class="m">0x080A54</td><td class="m">0x3F028</td><td class="m">0x0ACBDA</td><td class="m">78</td></tr>
+<tr><td class="m">0x19</td><td class="m">0x1A</td><td class="m">0x080B78</td><td class="m">0x3F040</td><td class="m">0x0ACAFE</td><td class="m">88</td></tr>
+<tr><td class="m">0x1B</td><td class="m">0x1A</td><td class="m">0x080BD4</td><td class="m">0x3F048</td><td class="m">0x088A96</td><td class="m">44</td></tr>
+<tr><td class="m">0x24</td><td class="m">0x1A</td><td class="m">0x080DB2</td><td class="m">0x3F078</td><td class="m">0x0AD28E</td><td class="m">179</td></tr>
+<tr><td class="m">0x3C</td><td class="m">0x16</td><td class="m">0x0811D0</td><td class="m">0x3F0D4</td><td class="m">0x0E2D1C</td><td class="m">20<span class="kv">（见 §5）</span></td></tr>
+</table>
+
+<p>四个 <span class="mono">0x1A</span> 级的向量步数在 44–179 之间，<strong>步数不一样</strong>正是它们真的干了活的旁证 ——
+纯 <span class="mono">ret</span> 的那些全部是 18–21 步，几乎是常数。</p>
+
+<h3>3.3 一个 ISR 的逐条轨迹</h3>
+
+<pre>  0  0x0DCD2C  ldi:20 op1=0x9, i20=0xaf        ← 注入点：轮询 0x0AF
+  1  0x080A54  stm0 op1=0x8, op2=0xe           ← EIT 已压 PS/PC，这里开始存通用寄存器
+  2  0x080A56  stm1 op1=0x8, op2=0xf
+  3  0x080A58  st     r4  → @r15
+  4  0x080A5A  st     r5  → @r15
+  5  0x080A5C  st     r1  → @r15
+  6  0x080A5E  ldi:20 r4 = 0x3F028              ← 回调槽地址直接写死在指令里
+  7  0x080A62  ldi:20 r0 = 0x40
+  8  0x080A66  bandl  @r4, r0                    ← 取槽的值（低 32 位）
+  9  0x080A68  ld     r0 = @r4
+ 10  0x080A6A  cmp    r0, #0                     ← 空槽保护
+ 11  0x080A6C  beq    +0x3                       ← 空则跳过 call
+ 12  0x080A6E  ld     r0 = @r4
+ 13  0x080A70  call   @r0                        ← 进回调
+ 14  0x0ACBDA  st     r8 → @r15                  ← 回调函数第一条
+ 15  0x0ACBDC  st     r1 → @r15
+ 16  0x0ACBDE  ldi:20 r8 = 0x41A56
+ 17  0x0ACBE2  ldi:20 r12 = 0xAD56C
+ 18  0x0ACBE6  call:d @r12                      ← 进服务分发器
+ 19  0x0ACBE8  ldi:8  r4 = 0</pre>
+
+<p><span class="tag t-ok">结论</span>A 段的中断分发骨架是完整的：<strong>EIT 入口 → 每向量一个 stub → 查表 → 空槽保护 → call 回调 → reti</strong>。
+这套东西不需要我们再补，固件自己写好了。</p>
+
+<h2>四、为什么只有 4 个回调被调到</h2>
+
+<p>不是分发坏了，是<strong>槽只在特定时刻才被填上</strong>。任务 1 跑到第一个卡点时写了 6 个槽，
+但那份快照对应的时刻，<span class="mono">0x3C</span> 那条还走不到它的回调分支（见下节），
+其余 8 个槽要等任务继续往下跑才会填。</p>
+
+<div class="warnbox"><b>口径提醒：</b>「39 个闭环」说的是<strong>中断通路</strong>通了；
+「4 个回调」说的是<strong>这一时刻</strong>有 4 个业务函数被调用。
+两个数不能合成一句「A 段中断系统完成度 39/48」之类的话。</div>
+
+<h2>五、vec 0x3C 是个特例：状态位驱动的双分支</h2>
+
+<p>这个 ISR 不查一个槽，而是<strong>按两个状态位分别查两个槽</strong>：</p>
+
+<pre>  0x0811E6  btsth #4, @0xAD     ; 测 0xAD 位6
+  0x0811F8  ld   @0x3F0D0        ; 分支 A 的槽（实测为空）
+  0x08120A  btsth #8, @0xAD     ; 测 0xAD 位7
+  0x08121C  ld   @0x3F0D4        ; 分支 B 的槽 = 0x0E2D1C</pre>
+
+<table>
+<tr><th><span class="mono">0xAD</span> 取值</th><th>步数</th><th>回原位</th><th>走 A 支（<span class="mono">0x3F0D0</span>）</th><th>走 B 支（<span class="mono">0xE2D1C</span>）</th></tr>
+<tr><td class="m">0x00</td><td class="m">20</td><td>是</td><td>否</td><td>否</td></tr>
+<tr><td class="m">0x40</td><td class="m">23</td><td>是</td><td>否</td><td>否</td></tr>
+<tr><td class="m">0x50</td><td class="m">30</td><td>是</td><td><b>是</b></td><td>否</td></tr>
+<tr><td class="m">0x80</td><td class="m">23</td><td>是</td><td>否</td><td>否</td></tr>
+<tr><td class="m">0xA0</td><td class="m">53</td><td>是</td><td>否</td><td><b>是</b></td></tr>
+<tr><td class="m">0xF0</td><td class="m">63</td><td>是</td><td><b>是</b></td><td><b>是</b></td></tr>
+</table>
+
+<p>三条读法：</p>
+<ul>
+<li>只有 <span class="mono">0xAD</span> 的位7 <b>和</b> 位5 同时置位（<span class="mono">0xA0</span>）才走 B 支去调 <span class="mono">0x3F0D4</span></li>
+<li>位6 + 位4（<span class="mono">0x50</span>）走 A 支，而 A 支的槽 <span class="mono">0x3F0D0</span> <b>是空的</b> —— ISR 里自带空槽保护（<span class="mono">ld → cmp #0 → beq</span>），所以不会跳到地址 0</li>
+<li>位6 和位7 都置位时两条支路都走，步数 63，是三者之和再减去共用序言/尾声</li>
+</ul>
+
+<div class="note">这就是“注入一律成功但回调有时没被调”的真正原因：<strong>业务分支由外设状态位决定，不是由向量编号决定</strong>。
+仿真台要复现真机的行为，就必须能控制这些状态位。</div>
+
+<h2>六、自旋消除器：不用再手抠地址</h2>
+
+<h3>6.1 为什么需要它</h3>
+
+<p>任务 1 跑到第一个硬件等待后就不动了。此前绕过它的办法是手工 <span class="mono">poke</span>：
+先看它轮询哪个地址、哪一位，再写进去。三处卡点意味着要手工做三遍，
+而且第三处的地址是寄存器算出来的，静态根本看不出来。</p>
+
+<h3>6.2 做法</h3>
+
+<div class="card">
+<p>判据：同一个 <span class="mono">0x100</span> 地址窗口内连续 <b>N</b> 步没离开，就算自旋（默认 N = 3,000）。</p>
+<p>自旋成立后，<strong>不是猜</strong>，而是按固定顺序反解：</p>
+<ol>
+<li>反汇编自旋窗口内的实际指令范围（注意范围要取 <span class="mono">lo..hi</span> 而不是固定 <span class="mono">0x30</span> 字节，否则会越过循环边界取到外面的常量）</li>
+<li>找 <span class="mono">btsth/btstl</span>，取它的 <span class="mono">u4</span> 立即数 —— 那是<b>掩码的半字节</b>，要 <span class="mono">u4 &lt;&lt; 4</span> 才是真掩码</li>
+<li>找窗口内第一条 <span class="mono">ldi</span>，拿它的目标寄存器 —— 那是被轮询的地址寄存器</li>
+<li>地址 &lt; <span class="mono">0x1000</span> 就走直接页影子存储，否则走内存</li>
+<li>把该位置 1（不是清零、不是取反），然后继续</li>
+</ol>
+</div>
+
+<h3>6.3 实测结果</h3>
+
+<pre>自旋消除器：3 处轮询 / 3 个不同就绪位 / 共注入 3 次
+  #  轮询指令   自旋点     方式   寄存器  等待位   旧→新      第几次  发生在
+  1  0x0DCD30  0x0DCD30  直接页    0x0AF   0x80     0x02→0x82  1      14,776 步
+  2  0x09C97A  0x09C97A  直接页    0x174   0x40     0x02→0x42  1      17,931 步
+  3  0x0CE134  0x0CE134  直接页    0x524   0x40     0x02→0x42  1      33,771 步</pre>
+
+<p>第三处是关键：<strong>它的地址 <span class="mono">0x524</span> 是 <span class="mono">r8</span> 算出来的</strong>，
+静态扫描扫不到，之前的自动消除器也抓不到。这一版改成“运行期读轮询指令实际用的寄存器”，才把它解出来。</p>
+
+<h2>七、三处放行之后跑出了什么</h2>
+
+<table>
+<tr><th>指标</th><th>值</th><th>说明</th></tr>
+<tr><td>实跑步数</td><td class="m">29,675</td><td>从任务入口 <span class="mono">0x08133A</span> 起算</td></tr>
+<tr><td>不同 PC 个数</td><td class="m">4,512</td><td>V7 只到 500，放行后涨了 9 倍</td></tr>
+<tr><td>其中应用区（<span class="mono">0x8xxxx</span>）</td><td class="m">4,512</td><td>全部落在应用区，没跑进内核区</td></tr>
+<tr><td>μITRON 服务调用</td><td class="m">56 次</td><td><span class="mono">int #0x40</span> 陷阱</td></tr>
+<tr><td>硬件中断</td><td class="m">0 次</td><td><b>刻意的判据</b>：证明三处等待是我们补的，不是设备给的</td></tr>
+<tr><td>回调槽被写</td><td class="m">6 个</td><td><span class="mono">0x3F028 0x3F040 0x3F048 0x3F078 0x3F0D4 0x3F0EB</span></td></tr>
+</table>
+
+<p>最热的三条指令：<span class="mono">0x0CE134</span> × 1,432、<span class="mono">0x0CE136</span> × 1,432、<span class="mono">0x0DCD2C</span> × 1,027 ——
+全是轮询循环本身，符合“三次忙等占了大头”的预期。</p>
+
+<h2>八、最后为什么掉到地址 0</h2>
+
+<p>停点是 <span class="mono">PC = 0x00000000</span>，故障判定报「取指落在不可执行区」。
+往回追两条指令：</p>
+
+<pre>  0x080502  ld  @r15+,rp     ; 从栈里弹出 RP，弹出来是 0
+  0x080504  ret              ; 跳到 RP = 0</pre>
+
+<p>这条 <span class="mono">ret</span> 用的 RP 是<strong>刚从栈里弹出来的</strong>，而那个位置从来没被写过，读到 0。
+所以这一帧的「保存的 RP」本来就是 0。</p>
+
+<div class="card">
+<p><b>这不是硬件没建模。</b><span class="mono">0x080522</span> 那段初始化（往直接页 <span class="mono">0x420–0x435</span> 写 8 个配置字节）是真执行完的。</p>
+<p><b>问题在 <span class="mono">boot_task</span> 造出来的上下文本身：</b>REALOS 启动一个任务时会先给它铺一层栈帧
+（保存的 RP、初始 PS、任务参数与退出例程地址），<span class="mono">boot_task</span> 只设了 PC/SP/r4，那层帧是空的。</p>
+</div>
+
+<p><span class="tag t-wn">边界</span>可以说「A 段应用区跑起来了」——4,512 个 PC、56 次服务调用、6 个回调槽都是真的。
+不能说「A 段任务能正常退出或循环」——还没到能验证那个的程度。</p>
+
+<h2>九、这一版新加的故障判定</h2>
+
+<p>以前跑飞之后会闷头执行一堆 0，看起来“还在跑”。现在多了一条硬判据：
+<strong>取指地址必须落在可执行区（ROM 或已映射的 RAM）</strong>，否则立刻停下并记下
+<span class="mono">(地址, 原因)</span>。这个判据直接抓出了 <span class="mono">0x080504</span> 那个 RP=0 的问题 ——
+在此之前它表现为“跑了很久但 PC 数不再增长”。</p>
+
+<pre>  故障：PC=0x00000000  取指落在不可执行区</pre>
+
+<h2>十、这一版修掉的一个真 bug</h2>
+
+<p>monitor 的 <span class="mono">irq fire</span> 曾经把中断请求发了两次（先 <span class="mono">raise_irq</span>，
+后面调 <span class="mono">irq_return</span> 时又发一次）。后果是：<strong>第一次注入留下的第二条请求会污染下一次注入</strong>，
+表现为「连续注入两条，第二条的观测数据不对」。</p>
+
+<p>修法是把采样和注入合成一个不可分的动作，由 <span class="mono">irq_return</span> 内部负责
+<span class="mono">home</span> / <span class="mono">sp0</span> 的采样，调用方不再自己发请求。</p>
+
+<h2>十一、接口长什么样</h2>
+
+<h3>11.1 命令行</h3>
+
+<pre>python -m frbox -M d300-a --task 0x8133A:0x4616C:0:0x80506 --autospin \
+       -c "c 40000;info;autospin"
+
+python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;c 2500;irq table"
+python -m frbox -M d300-a -c "boottask 0x8133A:0x4616C:0:0x80506;c 2500;irq fire 0x13"</pre>
+
+<h3>11.2 monitor 命令</h3>
+
+<table>
+<tr><th>命令</th><th>作用</th></tr>
+<tr><td class="m">irq table</td><td>48 个向量的结构化表：级别 / ISR / 槽地址 / 槽里的值 / 是否有真回调</td></tr>
+<tr><td class="m">irq fire VEC [LEVEL] [MAXSTEPS]</td><td>注入一条中断并跑到 <span class="mono">reti</span> 回原位，报告步数、不同 PC 数、SP 是否复原</td></tr>
+<tr><td class="m">autospin [on|off|reset|status|threshold N]</td><td>开关 / 清记录 / 看三处忙等的注入明细 / 调阈值</td></tr>
+</table>
+
+<h3>11.3 Python API</h3>
+
+<pre>m = create("d300-a", autospin=True)
+m.load()
+m.boot_task(0x8133A, sp=0x4616C, arg=0, stop_pc=0x80506)
+m.run(max_steps=60000)
+m.spin_breaker.rows()     # [{'poll_pc','spin_pc','where','addr','mask','old','nth','step'}, ...]
+m.irq_return(0x13)        # {'steps','pcs','back','sp_restored'}
+m.fault                   # None 或 (addr, '取指落在不可执行区')</pre>
+
+<h2>十二、自检</h2>
+
+<p>自检从 120 条加到 <b>160</b> 条，新增两组：</p>
+
+<table>
+<tr><th>组</th><th>条数</th><th>验什么</th></tr>
+<tr><td>12 中断闭环</td><td class="m">25</td><td>EIT 压栈顺序、<span class="mono">reti</span> 弹栈、五个真回调、空槽保护、<span class="mono">0x3C</span> 双分支、未用向量走兜底</td></tr>
+<tr><td>13 自旋消除器</td><td class="m">15</td><td>三处忙等全认出、掩码是 <span class="mono">u4&lt;&lt;4</span>、第三处地址是算出来的、每个卡点只放行一次、关掉就重新卡住、出界取指判定</td></tr>
+</table>
+
+<p class="kv">另外有一条自检是“反向”的：关掉 <span class="mono">--autospin</span> 之后，同样的跑法必须卡在第一处，
+且不能有故障记录。这条防的是“消除器改坏了时序，程序碰巧蒙对”。</p>
+
+<h2>十三、还没解决的</h2>
+
+<table>
+<tr><th>#</th><th>问题</th><th>性质</th></tr>
+<tr><td class="m">1</td><td>任务 1 缺 REALOS 首派栈帧，跑到 <span class="mono">0x080504</span> 的 <span class="mono">ret</span> 就掉到 0</td><td>能解，需要解出调度器铺帧的规则</td></tr>
+<tr><td class="m">2</td><td>自旋消除器靠“停够久”判忙等，真长延时循环会被误伤</td><td>已知边界，默认关闭 + 最多 8 次 + 逐条可回查</td></tr>
+<tr><td class="m">3</td><td>三处外设窗口语义未解（<span class="mono">0x50000000</span> / <span class="mono">0x68000000</span> / <span class="mono">0x4000D000</span>）</td><td>缺硬件资料</td></tr>
+<tr><td class="m">4</td><td>854 个未定义编码归属未定</td><td>可能是 FR80/FR81 专有指令</td></tr>
+<tr><td class="m">5</td><td>没有 gdbstub</td><td>纯工程量</td></tr>
+</table>
+
+<div class="note">第 1 条是下一步最值得做的：它一旦解决，任务 1 就能正常“退出”或“循环”，
+才有资格谈「让任务 2、3、4 也跑起来」。</div>
+
+<h2>十四、一句话总结</h2>
+
+<div class="card">
+<p>中断这件事，V7 只证明了<strong>表填对了</strong>；V8 证明了<strong>表被用上了</strong>——
+以同一快照为基点注入 48 个向量，39 个精确 <span class="mono">reti</span> 回原位、SP 逐位复原，
+4 个真的进了应用区回调。<br>
+忙等这件事，V7 靠手抠地址绕过；V8 换成运行期反解轮询寄存器，三处全自动认出，
+其中一处地址是算出来的。<br>
+放行之后任务 1 从 500 个 PC 涨到 <b>4,512</b> 个，然后停在
+<span class="mono">0x080504</span> 的 <span class="mono">ret</span> 上 —— 而这次能明确说出：
+缺的不是硬件，是调度器给任务铺的那层栈帧。</p>
+</div>
+
+<p class="kv" style="margin-top:34px">数据来源：<span class="mono">results/frbox/isr-fire.txt</span>、
+<span class="mono">autospin-run.txt</span>、<span class="mono">isr-injection.txt</span>、
+<span class="mono">selftest.txt</span>（均在仓库 <span class="mono">results/frbox/</span> 下）。
+本页所有数字都可在仓库形态下重跑复现。</p>
+
+</div>
+</body>
+</html>
