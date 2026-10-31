@@ -9,20 +9,22 @@ B 段实测（1.11）：TBR=0x000EFC00
   IRQ 0x20 (EXT9)       槽 0x000EFF7C → 0x0012FE54
 """
 import sys
+
 import os
-
-sys.stdout.reconfigure(encoding="utf-8")
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
+
+
+sys.stdout.reconfigure(encoding="utf-8")
+
 from fr_emu import Fr, Mem, TABLE, M32, Unimpl
 from fr_itron import ItronStub
 
-ROM = os.path.join(FW_DIR, "B3000111.bin")
+ROM = r"C:\Users\admin\WorkBuddy\D300固件\D300Update\B3000111.bin"
 ROM_BASE = 0x00040000
 TBR = 0x000EFC00
 SSP = 0x0003F000
