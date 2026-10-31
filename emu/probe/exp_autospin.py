@@ -18,15 +18,17 @@
   4. 记录 (PC, reg, bit)，继续；同一处连续注入 K 次仍过不去就放弃
 """
 import sys
+
 import os
-
-sys.stdout.reconfigure(encoding="utf-8")
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
+
+
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 import fr_emu
 from frbox.machine import create
