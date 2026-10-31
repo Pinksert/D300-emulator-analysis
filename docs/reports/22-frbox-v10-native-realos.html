@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V10 · 固件自带的 REALOS 第一次真的跑起来了</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .kv{color:var(--sub);font-size:13.5px}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V10：固件自己的 REALOS 第一次真的跑起来了</h1>
+<div class="sub">修掉 CPU 的一个换栈漏门 · 任务表其实是 13 条 · 任务 1 由固件内核原生调度 · 30 万步里 1,888 次系统调用全部是内核自己接的</div>
+
+<div class="kpis">
+  <div class="kpi"><b>43,428</b><span>复位到首次派发的步数</span></div>
+  <div class="kpi"><b>1,888</b><span>30 万步里的系统调用</span></div>
+  <div class="kpi"><b>13</b><span>任务表记录（不是 8）</span></div>
+  <div class="kpi"><b>258+63</b><span>自检通过</span></div>
+</div>
+
+<h2>一、上一版的结论被推翻了，而且是被一条 <span class="mono">orccr</span> 推翻的</h2>
+
+<div class="card">
+<p>V2 到 V9 一共攒下八个版本，结论一直是「A 段的 REALOS 内核进不去，只能自己做两件事：手工造任务上下文、
+用 μITRON 半主机假装内核」。<b>这句话是错的。</b>内核一直都在固件里，完整无缺，只是 CPU 少做了一步——
+<span class="mono">orccr</span> / <span class="mono">andccr</span> 改 CCR 的时候没有带着栈指针一起搬家。</p>
+
+<p>FR80 的 CCR 里有个 <b>S 位（bit5）</b>，它决定 <span class="mono">r15</span> 此刻指向的是 SSP 还是 USP。
+S 位一翻，<span class="mono">r15</span> 必须立刻换到另一根上，并把旧值存回原来那根。中断返回走的
+<span class="mono">reti</span> 一直做对了这件事（所以跑 ISR 从来没出过问题），<span class="mono">ldm/stm</span> 碰 /T 也做对了 ——
+唯独 <span class="mono">orccr</span> 和 <span class="mono">andccr</span> 这两条是例外，老代码是这么写的：</p>
+
+<pre># 修复前（fr_emu.py）
+ccr = (ccr &amp; v8) if mn == "andccr" else (ccr | v8)
+self.s = (ccr >> 5) &amp; 1          # ← 直接给 s 赋值，绕过了 ps 的 setter，r15 不换支
+# 修复后
+self.ps = (self.ps &amp; ~0xFF) | ccr  # ← 走 setter，setter 里那一段会把 r15 在 SSP/USP 之间换支</pre>
+
+<p>为什么这一条足以让整个内核瘫痪？因为 REALOS 恢复任务上下文的那二十几条指令，<b>就是靠翻 S 位在两个栈槽之间搬指针过日子的</b>：</p>
+
+<table>
+<tr><th style="width:120px">地址</th><th>指令</th><th>干了什么</th></tr>
+<tr><td class="m">0x0FE4DE</td><td class="m">ldi:32 r0,#0xFE160</td><td>取任务表第 13 条记录（空闲任务）</td></tr>
+<tr><td class="m">0x0FE4E4</td><td class="m">ld @r0,r14</td><td>r14 ← 空闲任务的 TCB</td></tr>
+<tr><td class="m">0x0FE4EC</td><td class="m">st r14,@r0</td><td>把当前 TCB 写回 <span class="mono">*(0x45980)</span></td></tr>
+<tr><td class="m">0x0FE4EE</td><td class="m">ld @(r14,0x18),r0</td><td>TCB+0x18 = 这个任务保存的 SP</td></tr>
+<tr class="hi"><td class="m">0x0FE4F2</td><td class="m">orccr #0x20</td><td class="hi">S 0→1，r15 换到 SSP 槽</td></tr>
+<tr><td class="m">0x0FE4F4–0x0FE4FC</td><td class="m">ld/st ×4</td><td>在两个栈槽之间搬运 SP</td></tr>
+<tr class="hi"><td class="m">0x0FE4F8</td><td class="m">andccr #0xDF</td><td>S 1→0，换回来</td></tr>
+<tr class="hi"><td class="m">0x0FE4FE</td><td class="m">orccr #0x20</td><td>再换一次</td></tr>
+<tr><td class="m">0x0FE506–0x0FE508</td><td class="m">ldm0 / ldm1</td><td>弹 r0–r7 / r8–r14</td></tr>
+<tr class="hi"><td class="m">0x0FE50A</td><td class="m">andccr #0xDF</td><td>S 1→0</td></tr>
+<tr class="hi"><td class="m">0x0FE50C</td><td class="m">reti</td><td>弹 PS / PC，正式落到任务里</td></tr>
+<tr><td class="m">0x0FE510</td><td class="m">bra -1</td><td>空闲任务的本体（原地自旋）</td></tr>
+</table>
+
+<p>S 位不换支时，<span class="mono">0x0FE4F4–0x0FE4FC</span> 那四条访存全部打在同一个地址上搬来搬去，
+最后 <span class="mono">reti</span> 弹出来的 PC 是错的 —— 表现出来就是「任务一起步就飞掉」。
+把这一行改对，复位链一路跑到 <span class="mono">0x0FE4DE</span>，剩下的事固件自己全包了。</p>
+</div>
+
+<div class="fixbox"><b>实测的 S 位切换现场</b>（<span class="mono">results/frbox/realos-run.txt</span> 第 2 节）：
+43,433 步 @0x0FE4F2 S 0→1（r15 0x04617C / SSP 0x04616C）→ 43,436 步 @0x0FE4F8 S 1→0
+→ 43,439 步 @0x0FE4FE S 0→1 → 43,445 步 @0x0FE50A S 1→0 → 43,446 步 @0x0FE50C S 0→1。
+<b>整个 boot 过程中 S 位只在这五处翻过</b>，五处全在这二十几条指令里。</div>
+
+<h2>二、任务表不是 8 条，是 13 条</h2>
+
+<div class="card">
+<p>V9 留下一个悬案：<span class="mono">sys_sta_tsk</span> 里出现过 <span class="mono">tsk_id</span> 9 和 10，
+可任务表按表头那个「8」去解，只解出 id 1–8。现在知道原因了 ——
+<b><span class="mono">*(0xFE000)</span> 那个 8 是「用户任务数」，不是记录总数</b>。记录从
+<span class="mono">0xFE010</span> 起每 <span class="mono">0x1C</span> 字节一条，一路排到
+<span class="mono">0xFE160</span>，一共 13 条：id 1–12 加一条 id 0 的空闲任务。</p>
+
+<table>
+<tr><th>id</th><th>属性</th><th>用户任务</th><th>TCB</th><th>入口</th><th>栈顶</th><th>刚复位时的状态</th></tr>
+<tr><td class="m">1</td><td class="m">0x04</td><td>是</td><td class="m">0x0459FC</td><td class="m">0x08133A</td><td class="m">0x0462EC</td><td>已激活</td></tr>
+<tr><td class="m">2</td><td class="m">0x04</td><td>是</td><td class="m">0x045A28</td><td class="m">0x089632</td><td class="m">0x046404</td><td>—</td></tr>
+<tr><td class="m">3</td><td class="m">0x04</td><td>是</td><td class="m">0x045A54</td><td class="m">0x08B264</td><td class="m">0x0464D8</td><td>—</td></tr>
+<tr><td class="m">4</td><td class="m">0x04</td><td>是</td><td class="m">0x045A80</td><td class="m">0x08C486</td><td class="m">0x046600</td><td>—</td></tr>
+<tr><td class="m">5</td><td class="m">0x02</td><td>是</td><td class="m">0x045AAC</td><td class="m">0x0A62FE</td><td class="m">0x0466B4</td><td>已激活</td></tr>
+<tr><td class="m">6</td><td class="m">0x04</td><td>是</td><td class="m">0x045AD8</td><td class="m">0x0A6A30</td><td class="m">0x0467D0</td><td>—</td></tr>
+<tr><td class="m">7</td><td class="m">0x04</td><td>是</td><td class="m">0x045B04</td><td class="m">0x0A9A4E</td><td class="m">0x0468FC</td><td>—</td></tr>
+<tr><td class="m">8</td><td class="m">0x04</td><td>是</td><td class="m">0x045B30</td><td class="m">0x0ACC32</td><td class="m">0x04699C</td><td>—</td></tr>
+<tr class="hi"><td class="m">9</td><td class="m">0x03</td><td>否</td><td class="m">0x045B5C</td><td class="m">0x0AD74E</td><td class="m">0x046B54</td><td>—（V9 里找不到它的那条）</td></tr>
+<tr class="hi"><td class="m">10</td><td class="m">0x06</td><td>否</td><td class="m">0x045B88</td><td class="m">0x0BFAE6</td><td class="m">0x046D78</td><td>—（同上）</td></tr>
+<tr><td class="m">11</td><td class="m">0x01</td><td>否</td><td class="m">0x045BB4</td><td class="m">0x0DB386</td><td class="m">0x046ED0</td><td>—</td></tr>
+<tr><td class="m">12</td><td class="m">0x03</td><td>否</td><td class="m">0x045BE0</td><td class="m">0x0E3094</td><td class="m">0x046FA8</td><td>—</td></tr>
+<tr class="hi"><td class="m">0</td><td class="m">0x09</td><td>否（空闲）</td><td class="m">0x045C0C</td><td class="m">0x0FE510</td><td class="m">0x04617C</td><td>已激活，本体是 <span class="mono">bra -1</span></td></tr>
+</table>
+
+<div class="note">这 13 条不是猜出来的：任务表和 TCB 是<b>互指的两套账</b>，TCB+0x24 恰好回指自己的那条表记录，
+13 条全部核对得上；TCB+0x0C 的高 16 位恰好等于表里的属性值。任一侧读错，另一侧立刻对不上。</div>
+</div>
+
+<h2>三、TCB 布局，以及「任务 1 入口 0x8133A」现在是固件写的事实</h2>
+
+<div class="card">
+<p>每个 TCB 0x2C 字节，13 个连号排开：</p>
+
+<table>
+<tr><th style="width:110px">偏移</th><th>内容</th><th>V10 新看出来的东西</th></tr>
+<tr><td class="m">+0x00 / +0x04</td><td>双向链表前驱 / 后继</td><td class="hi">两个都自指 = 不在任何队列里；指别人 = 挂在这个对象上等着</td></tr>
+<tr><td class="m">+0x0C</td><td>属性 &lt;&lt; 16 | 状态字</td><td>任务 1 跑起来后低半字是 0x0002</td></tr>
+<tr><td class="m">+0x18</td><td>保存的 SP</td><td>正在跑的时候就是它的活现场</td></tr>
+<tr><td class="m">+0x24</td><td>回指自己的任务表记录</td><td>13 条全对得上，这是两侧互校的关键</td></tr>
+</table>
+
+<p>内核在启动阶段亲手摆好了三份初始上下文，压在任务自己的栈顶上：</p>
+
+<pre>0x0462EC  任务 1   [0x08133A, 0x001F0030, 0x000FE250]
+0x0466B4  任务 5   [0x0A62FE, 0x001F0030, 0x000FE250]
+0x04617C  任务 0   [0x0FE510, 0x001F0030, 0x000FE250]</pre>
+
+<p>首字等于表里的 <span class="mono">entry</span>，TCB+0x18 等于表里的 <span class="mono">sp</span>，逐字一致。
+第三字统一是 <span class="mono">0x0FE250</span>，拆开看是：</p>
+
+<pre>0x000FE250: ldi:32 r13,#0x81338
+0x000FE256: jmp   @r13</pre>
+
+<p>也就是内核给任务准备的「返回落地处」——任务如果 <span class="mono">ret</span> 出去，
+会精准落到 <span class="mono">0x081338</span> 这条 <span class="mono">bra -1</span> 停机占位上。
+<b>以前「任务 1 入口 0x8133A、栈顶 0x462EC」是我们从表里读出来的推测，现在是固件自己写在内存里的事实。</b></p>
+</div>
+
+<h2>四、不借助任何外部内核：任务 1 由固件自己跑了 30 万步</h2>
+
+<div class="card">
+<p>做法只有一步：在派发点 <span class="mono">0x0FE4E6</span>（r14 刚从任务表取到 TCB、还没写回当前 TCB 变量）
+把 r14 换成任务 1 的 TCB，然后把 CPU 撒出去。<b>其余全是固件自己做的。</b></p>
+
+<pre>$ python -m frbox -M d300-a --realos 1 -c "cont 300000; realos"</pre>
+
+<table>
+<tr><th>服务号</th><th style="width:150px">服务</th><th style="width:90px">次数</th><th>说明</th></tr>
+<tr><td class="m">0xD1 (−47)</td><td><span class="mono">sys_clr_flg</span></td><td class="m">754</td><td>任务 1 每一轮循环开始先把标志清掉</td></tr>
+<tr><td class="m">0xD2 (−46)</td><td><span class="mono">sys_wai_flg</span></td><td class="m">751</td><td>等它 —— 每次都立刻满足，所以从不阻塞</td></tr>
+<tr><td class="m">0xE9 (−23)</td><td><span class="mono">sys_sta_tsk</span></td><td class="m">376</td><td>内核真的在起别的任务（见下）</td></tr>
+<tr><td class="m">0xD0 (−48)</td><td><span class="mono">sys_set_flg</span></td><td class="m">6</td><td>极少的置位</td></tr>
+<tr><td class="m">0xC1 (−63)</td><td><span class="mono">sys_snd_msg</span></td><td class="m">1</td><td>唯一一次发消息</td></tr>
+</table>
+
+<p>1,888 次陷阱<b>一次都没走 μITRON 半主机</b>：这一次 <span class="mono">svc_hook</span> 是空的，
+<span class="mono">int #0x40</span> 老老实实进 ROM 的向量表 <span class="mono">0x0FFEFC</span> →
+<span class="mono">0x0FE3C0</span>，由固件那套陷阱分发器处理。我们之前花了八个版本写的半主机，
+现在只剩下对照用途。</p>
+
+<h3>内核确实起了别的任务</h3>
+<p>376 次 <span class="mono">sta_tsk</span> 不是空转 —— 跑完之后 TCB 的链表是不撒谎的：</p>
+
+<table>
+<tr><th>任务</th><th>TCB+0x00/+0x04</th><th>挂在哪个对象上</th></tr>
+<tr><td class="m">1</td><td class="m">自指</td><td>不在队列里 <span class="tag t-ok">正在跑</span></td></tr>
+<tr><td class="m">4</td><td class="m">0x0459A0</td><td>等着</td></tr>
+<tr><td class="m">5</td><td class="m">0x045990</td><td>等着</td></tr>
+<tr><td class="m">9</td><td class="m">0x045998</td><td>等着</td></tr>
+<tr><td class="m">10</td><td class="m">0x0459B0</td><td>等着</td></tr>
+<tr><td class="m">0（空闲）</td><td class="m">0x0459C8</td><td>等着</td></tr>
+<tr><td>其余 2/3/6/7/8/11/12</td><td class="m">自指</td><td>还没被 sta_tsk</td></tr>
+</table>
+</div>
+
+<h2>五、还没做到的：任务切换</h2>
+
+<div class="card">
+<p>把「当前 TCB 到底被写过几次」这件事盯死，答案很干脆：</p>
+
+<pre>*(0x45980) 全程只被写了 1 次： 0x0459FC，来自 0x0FE4EC（首次派发）。</pre>
+
+<p>之后 30 万步一次都没改过。<b>也就是说至今没发生过一次真正的任务切换。</b>
+原因不是内核不行，是现实不允许：</p>
+<ul>
+<li>任务 1 是唯一能跑的任务。别的要么还没被起、要么挂在 <span class="mono">0x45990</span> 那一带的对象上等着。</li>
+<li>任务 1 自己也不闲着，它反复「<span class="mono">clr_flg</span> → 干活 → <span class="mono">wai_flg</span>」，
+每次等待都立刻满足，所以从不进入等待态 —— 内核没有任何理由把 CPU 让给别人。</li>
+<li>空闲任务的本体是 <span class="mono">bra -1</span>，就算切过去，从 PC 上也看不出痕迹，只能靠 TCB 变量判。</li>
+</ul>
+<p>所以下一轮的墙非常具体：<b>要有一个真实硬件事件把别的任务唤醒</b>。在此之前，
+任何「调度器跑起来了」的说法都是假的。</p>
+</div>
+
+<div class="warnbox"><b>顺带更正两处旧信息</b>（已同步进 <span class="mono">KNOWN_ISSUES.md</span>）：
+① 任务表是 13 条不是 8 条，「<span class="mono">tsk_id</span> 9/10 找不到」这个悬案就此结案；
+② <span class="mono">0x0AF/0x174/0x524</span> 三处「置启动位→轮询完成位」是<b>模型化的假设</b>，不是从硬件手册读来的。
+它们默认<b>关闭</b>（保住 V2–V9 那些基线），跑原生 REALOS 时才打开。</div>
+
+<h2>六、怎么复现</h2>
+
+<pre># 自检（V10 新增第 16 组，专门验原生 REALOS）
+cd emu &amp;&amp; python frbox_selftest.py      # 258/258
+cd emu &amp;&amp; python fr_selftest.py         # 63 条 CPU 断言，第 7 组就是那个换栈漏门
+
+# 三份取证输出
+python probe/exp_realos_chain.py        # 启动链 + 13 条记录 + 初始上下文
+python probe/exp_realos_tcb.py          # TCB 布局 + 队列归属
+python probe/exp_realos_run.py          # 任务 1 跑 30 万步 + 服务分布
+
+# 交互式：realos 是这一版新加的命令
+python -m frbox -M d300-a -c "realos; realos 1; cont 20000; realos"</pre>
+
+<p><span class="mono">realos</span> 不带参数是列表（13 条记录的 TCB / 入口 / 栈顶 / 上下文 PC，当前那条打 ◀），
+带任务号是把内核改派给那个任务。固件路径现在按顺序找
+<span class="mono">FRBOX_FW_DIR</span> → 仓库 <span class="mono">data/</span> → 仓库里的 <span class="mono">D300Update/</span>，
+clone 下来有 <span class="mono">data/</span> 就能直接跑。</p>
+
+<div class="note"><b>版权说明：</b><span class="mono">fr30.cpu</span> 与 <span class="mono">fr30-opc.c</span> 来自 GNU binutils，随 GPL 一并收录，细节在 <span class="mono">emu/NOTICE.md</span>。
+固件本体是尼康的更新包，本仓库不重新分发商业固件以外的东西。</div>
+
+</div>
+</body>
+</html>
