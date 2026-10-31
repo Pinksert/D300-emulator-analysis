@@ -12,15 +12,17 @@
 量四件事：能跑多少步 / PC 覆盖多少 / 触发几次 int#0x40 / 会不会自己调 sys_sta_tsk
 """
 import sys
+
 import os
-
-sys.stdout.reconfigure(encoding="utf-8")
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
+
+
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 import fr_emu
 from frbox.machine import create
