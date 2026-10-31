@@ -3,8 +3,7 @@
 回答「1.11 到底改了什么顺序」。
 """
 import sys
-sys.stdout.reconfigure(encoding="utf-8")
-from fr_run import Runner
+
 import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
@@ -13,7 +12,10 @@ sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
 
-FW = FW_DIR
+sys.stdout.reconfigure(encoding="utf-8")
+from fr_run import Runner
+
+FW = r"C:\Users\admin\WorkBuddy\D300固件\D300Update"
 BASE = 0x00080000
 ENTRY = 0x000DB8EA
 NAMES = {0x0003FAE9: "状态A高半字节", 0x0003FAF1: "状态B bit1", 0x0003F81C: "开关字节",
