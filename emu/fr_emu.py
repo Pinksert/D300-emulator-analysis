@@ -1,24 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-FR30/FR60/FR80 指令级解释器
-============================
-本文件是 CPU 核心，被两处复用：
-
-  · emu/frbox/  —— 全系统模拟器（总线 + 设备 + 中断控制器 + monitor），
-                   把 Fr 挂到一个 AddressSpace 上就行，核心代码一行不改；
-  · emu/probe/  —— 单函数实验台，把某个函数拿来单跑，配合 MMIO 打桩做可控实验。
+FR30/FR60/FR80 指令级解释器（函数级仿真台核心）
+================================================
+用途：不跑整机，只把 D300 A 固件里某个函数拿来单跑，配合 MMIO 打桩做可控实验。
 
 指令表来源：binutils 的 cpu/fr30.cpu + opcodes/fr30-opc.c（CGEN 生成物）
 语义依据：fr30.cpu 里的 (dni ...) / define-pmacro 定义
   · 目标操作数一律是「最后一个操作数」（如 `add Rj,Ri` = Ri ← Ri + Rj）
-  · 延迟分支：带 :d 的分支，其后一条指令必定先执行；`call` 返回地址进 RP 不压栈
+  · 延迟分支：带 :d 的分支，其后一条指令必定先执行
   · 位测试立即数是「掩码」不是位号：btstl #8 = bit3，btsth #4 = 0x40 = bit6
-  · `btsth #u4,@rN` 的立即数整体左移 4 位（半字节掩码），N 位按掩码结果的 bit7 置位
 
-EIT：PS 先压栈、PC 后压栈（都进系统栈 SSP），向量槽 = TBR + (255 - vec) * 4，
-     `reti` 从 SSP 依次弹 PC / PS。核对位：A 段槽 0x000FFFFC 读出 0x000FC000。
+地址空间（D300 A 段）：
+  ROM  = 0x00080000 .. +524290   （A3000110/111.bin，只读）
+  MMIO = 0x00000000 .. 0x00001000（默认读 0、写丢弃，全部记日志）
+  其余 = RAM（稀疏，初值 0）
 """
 import re, sys
+
 import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
@@ -26,8 +24,7 @@ _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
-
-HERE = _EMU          # 指令表源文件（fr30.cpu / fr30-opc.c）与本文件同目录
+HERE = _EMU
 M32 = 0xFFFFFFFF
 
 
@@ -222,6 +219,7 @@ class Fr:
         self.trace_on = False
         self.unimpl_seen = {}
         self.svc_hook = None                           # μITRON 服务调用钩子：hook(cpu, num, pc)
+        self.int40 = 0                                 # 执行到的 int #0x40 条数（含被钩子截住的）
         self.call_hook = None                          # 子程序调用钩子：hook(cpu, target, pc) -> True 表示打桩
 
     # ---- PS ----
@@ -840,6 +838,8 @@ class Fr:
         # ---------- 系统 / 协处理器 ----------
         if mn == "int":
             num = g("u8")
+            if num == 0x40:
+                self.int40 += 1                      # 先记数：不管走钩子还是走 EIT
             if self.svc_hook is not None:            # 打桩模式：直接当服务调用返回
                 self.svc_hook(self, num, pc)
                 return
