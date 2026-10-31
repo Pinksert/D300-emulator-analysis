@@ -34,8 +34,8 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 212 条断言
-python fr_selftest.py                         # 54 条 CPU 断言
+python frbox_selftest.py                      # 258 条断言
+python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
 固件默认从仓库 `data/` 读（`A3000111.bin` / `B3000111.bin`）。要用别的目录：
@@ -71,7 +71,7 @@ emu/
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    212 条断言
+├── frbox_selftest.py    258 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
 └── probe/               17 个取证脚本（见 probe/README.md）
 ```
@@ -311,6 +311,58 @@ def exec_region(self, pc):
 落在 IO 或未映射区就记 `machine.fault = (pc, 原因)` 并停下，`info` 里会打出来。
 这条判据的价值是让"跑飞"变成一个明确的、可复现的停点，而不是一堆看不懂的 `ld 0x0000`。
 
+### 7.6 原生 REALOS：不用我们的内核，用固件自己的（V10）
+
+**这一节推翻了 §7.2 的前提。** 前面八个版本都说「A 段的 REALOS 进不去，只能手工造任务上下文 +
+μITRON 半主机假装内核」。真实情况相反：内核一直在固件里，完整无缺，只是 CPU 少做了一步 ——
+`andccr` / `orccr` 改 CCR 的 S 位时不换 `r15`。
+
+FR80 的 CCR 里 S 位（bit 5）决定 `r15` 此刻指向 SSP 还是 USP。S 位一翻，`r15` 必须立刻
+换支并把旧值存回原来那根。`ps` 的 setter 做对了这件事，`reti` 也因此从来没出过问题；
+但 `andccr` / `orccr` 是直接给 `self.s` 赋值，绕过了 setter —— 于是
+REALOS 恢复任务上下文时读的还是旧栈，`reti` 弹出错的 PC：
+
+```python
+# 修复前
+self.s = (ccr >> 5) & 1
+
+# 修复后：走 setter，setter 里那一段会把 r15 在 SSP/USP 之间换支
+self.ps = (self.ps & ~0xFF) | ccr
+```
+
+修复之后，复位链一路跑到固件自己的调度器，**中间不需要我们做任何事**：
+
+```
+0x0FC000 复位（TBR=0xFFC00，r15 = SSP 0x7F000）
+  → 0xF8010 → 0x80044
+  → call 0x0FC020（立即 ret）/ call 0x0FC028（jmp 0x0FE426，REALOS 初始化 7,220 步）
+  → call 0x0804FC（BSS 清零 + 配直接页）→ 回来写 *(0x3FBB0) = 2
+  → bra 0x0FE4DE（首次派发）
+43,428 步到 0x0FE4E6；0x0FE4DE–0x0FE514 这二十几条就是上下文恢复。
+```
+
+要干预的话在 **`0x0FE4E6`**（`r14` 刚装好 TCB、当前 TCB 变量还没被写回）把 `r14`
+换成想要的那个任务的 TCB：`Machine.boot_realos(task_id)` / CLI 的 `--realos N`
+/ monitor 的 `realos N`。
+
+内核内部的结构 V11 已经挖到能逐字段引用（`probe/exp_realos_flgcb.py`）：
+
+| 东西 | 地址 | 步长 / 索引 |
+|---|---|---|
+| 服务分发表 | `0x0FE3B8` | 索引 = 服务号 ×2（带符号），条目是相对基址的 int16 |
+| 对象登记表 | `0x0FE180` | 0x10；第 N 个 = `0x0FE180 + (N-1)*0x10`；`+0x04` = 控制块指针 |
+| 标志控制块 | `0x045C38` | 0x10；`+0x00` 自指（空队列）、`+0x04` 等待队列头、`+0x08` 位模式、`+0x0C` 回指登记表 |
+| 任务表 | `0x0FE000` | 头部 0x10 + 记录 0x1C；**13 条**（id 1–12 + 空闲 0） |
+| 任务控制块 | `0x0459FC` 起 | 0x2C；`+0x18` 保存的 SP、`+0x24` 回指自己的表记录 |
+
+μITRON 的参数顺序是**从任务 1 的调用点指令**读出来的：`wai_flg` 的调用点 `0x08147E`
+把 `p_flgptn / flgid / waiptn / wfmode` 依次放进 `r4 / r5 / r6 / r7`；`clr_flg` 的调用点
+`0x08C82A` 把 `flgid / 位模式` 放进 `r4 / r5`。返回值一律在 `r12`。
+
+**边界**：`results/frbox/realos-run.txt` 里那 300,000 步，1,888 次陷阱全部由固件内核处理，
+`*(0x45980)`（当前 TCB）却全程只被写过 1 次 —— **至今没有发生过一次真正的任务切换**。
+原因见 `KNOWN_ISSUES.md` 第 39 条。
+
 ---
 
 ## 8. 中断
@@ -481,8 +533,8 @@ machines   help   quit
 
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
-| `fr_selftest.py` | 54 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽 |
-| `frbox_selftest.py` | 212 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 17 / 自旋消除 23 / 任务表 19 / μITRON 半主机 33 |
+| `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
+| `frbox_selftest.py` | 258 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 17 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -490,7 +542,7 @@ machines   help   quit
 `results/frbox/` 下是同一次运行的真实输出：`selftest.txt`、`cpu-selftest.txt`、`boot.txt`、
 `session.txt`、`isr-injection.txt`、`isr-fire.txt`、`autospin-run.txt`、`autospin-session.txt`、
 `irq-session.txt`、`boot-seq.txt`、`boot-session.txt`、`sp-rp.txt`、`sp-rp-sweep.txt`、
-`svc-layers.txt`、`coverage.txt`。
+`svc-layers.txt`、`coverage.txt`、`realos-chain.txt`、`realos-tcb.txt`、`realos-run.txt`、`realos-objects.txt`。
 
 ---
 
