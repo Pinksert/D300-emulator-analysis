@@ -42,6 +42,22 @@ class Icu(Device):
             self.bind(line, vec, lvl, note)
 
     # ---- 中断线 ----
+    def raise_vec(self, vec, level=0x1F):
+        """直接按向量请求（不经过线绑定表）。
+
+        级别应当来自固件写进 ICR 的值——A 段实测 48 个 ICR 全被写过，级别
+        0x12–0x1F；硬编码 8 会被 ILM=0x10 掩掉，等于什么都没发生。
+        """
+        lv = level & 0x1F
+        self.pending[vec] = lv
+        self.total_raised += 1
+        self.log.append((vec, vec, lv))
+        if self.trace is not None:
+            self.trace.log("int", f"icu: 向量 0x{vec:02X} 请求 (level 0x{lv:02X})")
+        if self.machine is not None:
+            self.machine.on_irq(vec, lv)
+        return True
+
     def raise_line(self, line, level=None):
         vec, lvl, note = self.bindings.get(line, (None, 0, ""))
         if vec is None:
