@@ -25,6 +25,8 @@ from .dev_clk import attach as attach_clk
 from .dev_serial import SerialIf
 from .dev_timer import ReloadTimer
 from .dev_xfer import attach as attach_xfer
+from .dev_dispatch import attach as attach_dispatch
+from .dev_prio import attach as attach_prio
 from .icu import Icu
 from .trace import Trace
 
@@ -94,7 +96,8 @@ class Machine:
     fallback_vec = None                  # 未使用向量的兜底目标
 
     def __init__(self, trace=None, serial_console=False, clk_lock_ticks=None,
-                 autospin=False, autospin_threshold=3000, xfer=False):
+                 autospin=False, autospin_threshold=3000, xfer=False,
+                 dispatch=False):
         self.trace = trace or Trace()
         self.serial_console = serial_console
         self.autospin_enabled = bool(autospin)
@@ -111,9 +114,21 @@ class Machine:
         # xfer=True：把这三处建模成「置启动位→轮询完成位」的寄存器，
         # 忙等会正常结束（原生 REALOS 跑任务时必需）。见 dev_xfer.py。
         self.xfer = attach_xfer(self) if xfer else None
+        # dispatch=False（默认）：写直接页 0x44 只是落到影子内存，调度请求没人受理 ——
+        # 这是 V2–V10 的前提，默认保留。
+        # dispatch=True：把 0x44 建模成「请求调度」寄存器，写 1 就挂一条 vec 0x3F 的
+        # 中断，固件自己的调度器才会被调用。见 dev_dispatch.py。
+        self.dispatch = attach_dispatch(self) if dispatch else None
+        # prio=False（默认）：0x3F4/0x3FC 走影子存储，调度器读回来的优先级恒为 0。
+        # prio=True：建模成硬件优先级编码器（见 dev_prio.py）。
+        self.prio = attach_prio(self) if dispatch else None
         self.devices = [self.dp, self.serial, self.timer]
         if self.xfer is not None:
             self.devices.append(self.xfer)
+        if self.dispatch is not None:
+            self.devices.append(self.dispatch)
+        if self.prio is not None:
+            self.devices.append(self.prio)
         self.itron = None
         self.cpu = None
         self.step_count = 0
@@ -436,6 +451,24 @@ class Machine:
         self.devices.append(self.xfer)
         return self.xfer
 
+    def enable_dispatch(self):
+        """打开直接页 0x44 的「请求调度」建模（见 dev_dispatch.py）。
+
+        默认关闭同样是保住旧基线：不开它时，内核把任务挂进等待队列之后
+        调度器永远不会被叫醒，任务就这么继续跑下去 —— V2–V10 观察到的
+        「没有任务切换」正是这个现象。
+        """
+        if self.dispatch is not None:
+            return self.dispatch
+        self.dispatch = attach_dispatch(self)
+        self.dispatch.trace = self.trace
+        self.devices.append(self.dispatch)
+        if self.prio is None:
+            self.prio = attach_prio(self)
+            self.prio.trace = self.trace
+            self.devices.append(self.prio)
+        return self.dispatch
+
     def boot_realos(self, task_id=1, max_steps=600000):
         """让固件自己的 REALOS 调度 `task_id` 号任务（V10）。
 
@@ -448,6 +481,7 @@ class Machine:
         """
         from .realos import prepare
         self.enable_xfer()
+        self.enable_dispatch()
         if self.kernel is not None or self.itron is not None:
             self.trace.log("exec", "boot_realos：已挂 μITRON 钩子，先摘掉再跑真内核")
             self.kernel = None
