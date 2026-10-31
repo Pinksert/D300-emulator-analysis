@@ -8,15 +8,17 @@
   · 统计：执行步数 / 不同 PC / EIT（μITRON 服务）次数 / 0x3F000 回调表是否被填
 """
 import sys
+
 import os
-
-sys.stdout.reconfigure(encoding="utf-8")
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
+
+
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 import fr_emu
 import fr_svc
