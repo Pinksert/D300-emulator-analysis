@@ -10,15 +10,7 @@
       LSL/LSR/ASR、@(disp,R14) 负偏移、XCHB、LDI:8 无符号、PS 位域布局。
 """
 import sys
-
-import os
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
-_ROOT = os.path.dirname(_EMU)
-sys.path.insert(0, _EMU)
-FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
-
-
+sys.path.insert(0, r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
 sys.stdout.reconfigure(encoding="utf-8")
 from fr_emu import Fr, Mem, TABLE, M32, sx
 
@@ -239,7 +231,42 @@ def test_eit():
     check("I=0 时不受理", len(cpu.irq_pending), 2)
 
 
-for fn in (test_div, test_flags, test_shift, test_disp, test_misc, test_eit):
+
+# ------------------------------------------------- 7. CCR 的 S 位与双栈换支
+def test_bank():
+    print("[7] andccr / orccr 改 S 位时必须跟着换 R15（SSP ↔ USP）")
+    seq = [encode("orccr", u8=0x20), encode("andccr", u8=0xDF),
+           encode("orccr", u8=0x20)]
+    c = Machine(seq)
+    c.cpu.dr[2] = 0x0007F000          # SSP
+    c.cpu.dr[3] = 0x0004A000          # USP
+    c.cpu.ps = 0x00100000             # S=0 → 用 SSP
+    c.cpu.r[15] = 0x0007F000
+    check("起始用 SSP，R15 = SSP", c.cpu.r[15], 0x0007F000)
+
+    c.cpu.step()                       # orccr #0x20 → S=1
+    check("orccr #20 把 S 置 1", c.cpu.s, 1)
+    check("R15 换到 USP", c.cpu.r[15], 0x0004A000)
+    check("旧 R15 存回 SSP", c.cpu.dr[2], 0x0007F000)
+
+    c.cpu.r[15] = 0x0004A010          # USP 往下用一点
+    c.cpu.step()                       # andccr #0xDF → S=0
+    check("andccr #DF 把 S 清 0", c.cpu.s, 0)
+    check("R15 换回 SSP", c.cpu.r[15], 0x0007F000)
+    check("用过的 USP 被存回去", c.cpu.dr[3], 0x0004A010)
+
+    c.cpu.step()
+    check("再切回 USP 时取的是存回去的值", c.cpu.r[15], 0x0004A010)
+
+    # ILM / T 位不能被 andccr/orccr 顺手改掉
+    c2 = Machine([encode("andccr", u8=0xFF)])
+    c2.cpu.ps = 0x001B0000
+    before_ilm = c2.cpu.ilm
+    c2.cpu.step()
+    check("andccr 不动 ILM", c2.cpu.ilm, before_ilm)
+
+
+for fn in (test_div, test_flags, test_shift, test_disp, test_misc, test_eit, test_bank):
     fn()
 print()
 print(f"通过 {len(FAIL) == 0 and '全部' or '部分'}；失败项 {FAIL if FAIL else '无'}")
