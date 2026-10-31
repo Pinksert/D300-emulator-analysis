@@ -7,16 +7,18 @@
   · 观测：调用序列、写进哪些 RAM 变量、写了什么值
 """
 import sys, os, json, collections
-sys.stdout.reconfigure(encoding="utf-8")
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
+sys.stdout.reconfigure(encoding="utf-8")
+
 from fr_emu import Fr, Mem, TABLE
 
-BASE = FW_DIR
+BASE = r"C:\Users\admin\WorkBuddy\D300固件\D300Update"
 ROM = 0x00080000
 START = 0x000DB8F0
 WIN = (0x000DB800, 0x000DC400)
