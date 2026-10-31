@@ -1,0 +1,101 @@
+
+=== frbox 0.9：REALOS 任务表 + μITRON 半主机（probe/exp_boot_session.py 生成） ===
+
+--- 1) 任务表 ---
+REALOS 任务表 @0x0FE010（每条 0x1C 字节，共 8 条）
+  #   TCB     任务号  状态        入口       栈顶       是否已启动
+  1   0459FC   1      0x80000000  0x08133A   0x0462EC   已激活
+  2   045A28   2      0x00000000  0x089632   0x046404   -
+  3   045A54   3      0x00000000  0x08B264   0x0464D8   -
+  4   045A80   4      0x00000000  0x08C486   0x046600   -
+  5   045AAC   5      0x80000000  0x0A62FE   0x0466B4   已激活
+  6   045AD8   6      0x00000000  0x0A6A30   0x0467D0   -
+  7   045B04   7      0x00000000  0x0A9A4E   0x0468FC   -
+  8   045B30   8      0x00000000  0x0ACC32   0x04699C   -
+
+--- 2) 真内核，不送事件：停在第 1 个握手 ---
+已启动任务：入口 0x08133A  SP=0x000462EC  r4=0x0  RP=0x081338  （先跑到 0x080506）
+命中断点 0x00081492
+执行至 0x00081492，累计 9,841 步
+  r0=00002000  r1=000417DC  r2=00040000  r3=00048000
+  r4=000462B8  r5=00000003  r6=00002000  r7=00000002
+  r8=0003F0EA  r9=000462B8  r10=0003F5D2  r11=000400BF
+  r12=FFFFFFD2  r13=0000000E  r14=000462BC  r15=000462B0
+  PC=00081492  PS=00100011 (N0 Z0 V0 C1 ILM16)
+  TBR=000FFC00 RP=0008147E MDH=00000000 MDL=00000000
+
+--- 3) 内核 + 自动送事件：跑完整条启动链 ---
+已启动任务：入口 0x08133A  SP=0x000462EC  r4=0x0  RP=0x081338  （先跑到 0x080506）
+命中断点 0x000813F8
+执行至 0x000813F8，累计 35,573 步
+  r0=00000011  r1=00000000  r2=FFFFFFF3  r3=00000000
+  r4=00000000  r5=FFFFFFFD  r6=0003F401  r7=00000002
+  r8=00000000  r9=0003F0EB  r10=000459C8  r11=00000007
+  r12=FFFFFFEB  r13=00010100  r14=000462DC  r15=000462D4
+  PC=000813F8  PS=00100610 (N0 Z0 V0 C0 ILM16)
+  TBR=000FFC00 RP=000813E0 MDH=00000000 MDL=00000000
+地址空间 d300-a（3 个区域）
+  0x00000000-0x00000FFF      4,096  io    direct-page                         dev=direct-page
+  0x00001000-0x0007FFFF    520,192  ram   ram                               
+  0x00080000-0x00100001    524,290  rom   rom                               
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=29 个地址/3722 次
+  serial: SSR=0x20  TX=1 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=144  计数=4  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x88  0x483=0x5A  0x484=0x36  锁定次数=1  已解锁=True  倒计时=-
+  中断线绑定（只有标注实测的才有硬件依据）：
+    线 0x1B → 向量 0x1B / level 8   串口，实测（ISR 0x0012FDB4）
+    线 0x20 → 向量 0x20 / level 8   EXT9，实测（ISR 0x0012FE54）
+    已受理硬件中断 0 次，待决 0 条；μITRON 陷阱 int #0x40 56 次
+机器      d300-a  —— D300 A 段（IO 协处理，512KB 固件）
+固件      C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp\gh_upload\D300-emulator-v2\data\A3000111.bin   CRC16 OK（文件 0x4F36 / 计算 0x4F36）
+复位入口  0x000FC000   （向量 0x00 槽 = TBR+0x3FC = 0x000FFFFC）
+当前 PC   0x000813F8   已执行 35,573 步
+TBR       0x000FFC00    SSP 0x0007F000   ILM 16   I=1
+自旋消除  自旋消除器：3 处轮询 / 3 个不同就绪位 / 共注入 3 次
+已退出    任务调用 sys_ext_tsk 正常结束（不再运行）   @ PC=0x000813F6
+μITRON 服务调用共 56 次，7 种：
+  sys_wai_flg                19
+  sys_clr_flg                14
+  sys_set_flg                10
+  sys_sta_tsk                10
+  sys_snd_msg                 1
+  sys_ter_tsk                 1
+  sys_ext_tsk                 1
+
+--- 4) 手动送事件 + resume ---
+已启动任务：入口 0x08133A  SP=0x000462EC  r4=0x0  RP=0x081338  （先跑到 0x080506）
+命中断点 0x00081492
+执行至 0x00081492，累计 9,841 步
+flag 3 置 0x2000 → 现在 0x00002000
+从 0x081490 的 sys_wai_flg 重新执行
+跑了 7,288 步，PC=0x0008C80A
+仍然阻塞：任务阻塞于 wai_flg(flag 1, 0x8000, mode=2)，当前值 0x0（或等待：任一位）
+  r0=00000003  r1=0000004E  r2=00000040  r3=00000001
+  r4=000462A4  r5=00000001  r6=00008000  r7=00000002
+  r8=0003F0EA  r9=000462B8  r10=0003F5D2  r11=000400BF
+  r12=FFFFFFD2  r13=0000000A  r14=000462A8  r15=000462A0
+  PC=0008C80A  PS=00100011 (N0 Z0 V0 C1 ILM16)
+  TBR=000FFC00 RP=00081554 MDH=00000000 MDL=000016DA
+地址空间 d300-a（3 个区域）
+  0x00000000-0x00000FFF      4,096  io    direct-page                         dev=direct-page
+  0x00001000-0x0007FFFF    520,192  ram   ram                               
+  0x00080000-0x00100001    524,290  rom   rom                               
+  direct-page: 0x10=rtc  0x60=serial  0x480=clock-reset  未建模读=22 个地址/2225 次
+  serial: SSR=0x20  TX=1 字节  RX=0 待取 / 累计 0  SCR=0x00
+  rtc: 重载=144  计数=4  CSR=0x0000  下溢=0
+  clock-reset: 0x482=0x88  0x483=0x5A  0x484=0x36  锁定次数=1  已解锁=True  倒计时=-
+  中断线绑定（只有标注实测的才有硬件依据）：
+    线 0x1B → 向量 0x1B / level 8   串口，实测（ISR 0x0012FDB4）
+    线 0x20 → 向量 0x20 / level 8   EXT9，实测（ISR 0x0012FE54）
+    已受理硬件中断 0 次，待决 0 条；μITRON 陷阱 int #0x40 16 次
+机器      d300-a  —— D300 A 段（IO 协处理，512KB 固件）
+固件      C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp\gh_upload\D300-emulator-v2\data\A3000111.bin   CRC16 OK（文件 0x4F36 / 计算 0x4F36）
+复位入口  0x000FC000   （向量 0x00 槽 = TBR+0x3FC = 0x000FFFFC）
+当前 PC   0x0008C80A   已执行 17,321 步
+TBR       0x000FFC00    SSP 0x0007F000   ILM 16   I=1
+自旋消除  自旋消除器：2 处轮询 / 2 个不同就绪位 / 共注入 2 次
+阻塞      任务阻塞于 wai_flg(flag 1, 0x8000, mode=2)，当前值 0x0（或等待：任一位）   @ PC=0x0008C808
+          用 flag set <id>=<bits> 注入外部事件，再 resume 继续
+
+注：第 4 段 resume 之后仍会停在下一个握手上 —— 这正是「没有调度器、
+    只能一条条补事件」的直接体现（KNOWN_ISSUES 第 35 条）。
