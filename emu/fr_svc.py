@@ -13,23 +13,22 @@
     call @r12
 所以条目是「相对表尾的有符号 16 位偏移」，服务号为负数，从 -1 递减。
 """
-import os
 import re
 import sys
 
+import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
+
+
 sys.stdout.reconfigure(encoding="utf-8")
 
 FW = FW_DIR
-# 服务号→名称 映射表来自 NikonEmulator 源码树，属于可选素材：
-# 存在就用（服务名会好看），不存在就只打编号。
-PROPS = (os.environ.get("REALOS_PROPS")
-         or os.path.join(FW_DIR, "realos-systemcalls.properties"))
+PROPS = os.environ.get("REALOS_PROPS", "")
 
 SEGS = {
     "A": dict(file="A3000111.bin", base=0x00080000, lo=0x00080000, hi=0x00100000,
