@@ -184,14 +184,15 @@ def test_eit():
     handlers = [encode("reti")]
     m.rom = m.rom[:off] + b"".join(w.to_bytes(2, "big") for w in handlers) + m.rom[off + 2:]
 
-    # 场景：S=1（用户态，用 USP），I=1，ILM=2
+    # 场景：S=1（用户态，用 USP），I=1，ILM=7（级别号越小优先级越高，
+    # 受理条件是 level < ILM，所以 level 5 放得进来）
     cpu.dr[0] = TBR
     cpu.dr[2] = 0x00060000                # SSP
     cpu.dr[3] = 0x00061000                # USP
     cpu.s = 1
     cpu.r[15] = 0x00061000
     cpu.i = 1
-    cpu.ilm = 2
+    cpu.ilm = 7
     cpu.pc = RET_SITE
     cpu.ps = cpu.ps                        # 触发一次同步
 
@@ -213,14 +214,14 @@ def test_eit():
     check("reti 后 R15 回到 USP", cpu.r[15], 0x00061000)
     check("reti 后 SSP 复原", cpu._get_sp(0), 0x00060000)
 
-    # ILM 屏蔽：level 2 <= ILM 2 → 不受理
+    # ILM 屏蔽：level 5 >= ILM 5 → 不受理（受理条件是 level < ILM）
     cpu.i = 1
-    cpu.ilm = 2
+    cpu.ilm = 5
     cpu.pc = 0x00090000
     n_eit = len(cpu.irq_log)
-    cpu.request_irq(VEC, level=2)
+    cpu.request_irq(VEC, level=5)
     cpu.step()
-    check("level<=ILM 被屏蔽（没进 EIT）", len(cpu.irq_log), n_eit)
+    check("level>=ILM 被屏蔽（没进 EIT）", len(cpu.irq_log), n_eit)
     check("被屏蔽的请求仍在队列", len(cpu.irq_pending), 1)
 
     # I=0 时不受理
