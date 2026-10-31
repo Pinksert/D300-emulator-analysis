@@ -9,14 +9,17 @@ import io
 import os
 import subprocess
 import sys
-
-sys.stdout.reconfigure(encoding="utf-8")
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
+
+
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 from fr_emu import TABLE                                   # noqa: E402
 from frbox.bus import AddressSpace                          # noqa: E402
@@ -25,6 +28,7 @@ from frbox.dev_timer import ReloadTimer                     # noqa: E402
 from frbox.device import DirectPage                         # noqa: E402
 from frbox.icu import Icu                                   # noqa: E402
 from frbox.machine import create, crc16_xmodem              # noqa: E402
+from frbox import snapshot                                  # noqa: E402
 from frbox.monitor import Monitor                           # noqa: E402
 
 OK = 0
@@ -475,6 +479,229 @@ def test_boot_task():
     check("task_table 非空", len(tt) > 0, True)
 
 
+def test_irqfire():
+    """中断闭环：向量表解析 + 注入 + ISR 里 call @r0 进应用区 + reti 回原位"""
+    section("12 中断闭环")
+    m = create("d300-a")
+    m.load()
+    m.boot_task(0x0008133A, sp=0x0004616C, arg=0, stop_pc=0x00080506)
+    m.run(max_steps=2500, spin_guard=False)
+
+    rows = m.irq_table()
+    check("向量表 48 行", len(rows), 48)
+    check("真 stub 39 条", sum(1 for r in rows if r["kind"] == "stub"), 39)
+    check("未用 8 条", sum(1 for r in rows if r["kind"] == "unused"), 8)
+    check("特殊 1 条（vec 0x3F）",
+          sum(1 for r in rows if r["kind"] == "special"), 1)
+    check("ICR 全部被固件写过", sum(1 for r in rows if r["level"]), 48)
+    lo, hi = m.slot_bank
+    check("槽地址都在 0x3F018–0x3F0E4",
+          all(lo <= s < hi for r in rows for s in r["slots"]), True)
+    check("vec 0x13 的 ICR 级别（实测 0x1A）", m.irq_level(0x13), 0x1A)
+
+    snap = os.path.join(tempfile.gettempdir(), "frbox_selftest.snap")
+    snapshot.save(m, snap)
+    home = m.cpu.pc
+
+    r = m.irq_return(0x13, max_steps=20000, home=home)
+    check("vec 0x13 闭环回原位", r["back"] is not None, True)
+    check("vec 0x13 的 SP 逐位复原", r["sp_restored"], True)
+    check("级别取自 ICR 而非硬编码 8", r["level"], 0x1A)
+    check("进了应用区执行", any(0x00080000 <= p < 0x000E0000 for p in r["pcs"]), True)
+    check("槽里的回调 0xACBDA 被执行", 0x000ACBDA in r["pcs"], True)
+    check("回调是一次性的（槽清 0）", m.bus.rd(0x3F028, 4), 0)
+    check("注入结束后没有残留待决请求", len(m.cpu.irq_pending), 0)
+
+    snapshot.load(m, snap)
+    r = m.irq_return(0x1F, max_steps=200)
+    check("未用向量 0x1F 不闭环", r["back"], None)
+    check("未用向量停在 0x81338 的 bra -1", m.cpu.pc, 0x00081338)
+
+    snapshot.load(m, snap)
+    check("特殊向量 0x3F 没有回调槽", m._stub_slots(m.vector(0x3F)), [])
+
+
+def test_autospin():
+    print("\n[13 自旋消除器（运行期解出就绪位）]")
+    m = create("d300-a", autospin=True)
+    check("autospin 开关被记下", m.autospin_enabled, True)
+    check("阈值默认 3000", m.spin_breaker.threshold, 3000)
+    check("初始没有注入记录", m.spin_breaker.hits, 0)
+    check("ROM 内可执行", m.exec_region(0x00090000).kind, "rom")
+    check("地址 0 不可取指", m.exec_region(0x0), None)
+    check("直接页不可取指", m.exec_region(0x00000040), None)
+
+    m.load()
+    m.boot_task(0x0008133A, 0x0004616C, 0, stop_pc=0x00080506)
+    c = m.cpu
+    seen = set()
+    orig = c.step
+
+    def counted():
+        seen.add(c.pc)
+        orig()
+
+    c.step = counted
+    m.run(max_steps=60000)
+    c.step = orig
+
+    rows = m.spin_breaker.rows()
+    check("三处忙等全被认出", len(rows), 3)
+    check("第一处等 0x0AF bit7", (rows[0]["addr"], rows[0]["mask"]), (0x0AF, 0x80))
+    check("第二处等 0x174 bit6", (rows[1]["addr"], rows[1]["mask"]), (0x174, 0x40))
+    check("第三处等 0x524 bit6（地址是算出来的）",
+          (rows[2]["addr"], rows[2]["mask"]), (0x524, 0x40))
+    check("三处都走直接页影子", [r["where"] for r in rows], ["直接页"] * 3)
+    check("0x0AF 是 0x02→0x82", (rows[0]["old"], rows[0]["old"] | rows[0]["mask"]),
+          (0x02, 0x82))
+    check("0x524 的 bit6 已置上", m.dp.shadow.get(0x524, 0) & 0x40, 0x40)
+    check("通过之后固件把 0x0AF 又清成 0x00", m.dp.shadow.get(0x0AF, 0), 0x00)
+    check("每个卡点只放行一次", [r["nth"] for r in rows], [1, 1, 1])
+    check("任务 1 执行到 4000 个以上不同 PC", len(seen) > 4000, True)
+    check("没有硬件中断被受理", m.icu.state().get("累计请求", 0), 0)
+    slots = sorted({a for a, *_ in m.bus.all_writes if 0x3F000 <= a <= 0x3F0FF})
+    check("写了 6 个回调槽", len(slots), 6)
+    check("第 6 个槽是 0x3F0EB", slots[-1], 0x3F0EB)
+    check("最后掉进出界取指", m.fault, (0x00000000, "取指落在不可执行区"))
+
+    m2 = create("d300-a")
+    m2.load()
+    m2.spin_limit = 5000
+    m2.boot_task(0x0008133A, 0x0004616C, 0, stop_pc=0x00080506)
+    m2.run(max_steps=60000)
+    check("不开自旋消除就在第一处卡住", m2.spin is not None, True)
+    check("卡住的位置在 0x0DCD2C 附近",
+          abs(m2.spin[0] - 0x0DCD2C) <= m2.spin_window, True)
+    check("不开自旋消除就不会有故障记录", m2.fault, None)
+
+
+def test_task_table():
+    print("\n[14 REALOS 任务表]")
+    m = create("d300-a")
+    m.load()
+    check("表头记的是 8 个任务", m.bus.rd(m.TASK_TABLE, 4), 8)
+    rows = m.task_table()
+    check("解出 8 条记录", len(rows), 8)
+    check("任务 1 入口 0x08133A", rows[0]["entry"], 0x0008133A)
+    check("任务 1 栈顶 0x0462EC", rows[0]["sp"], 0x000462EC)
+    check("任务 1 TCB 0x0459FC", rows[0]["tcb"], 0x000459FC)
+    check("TCB 相邻差 0x2C", rows[1]["tcb"] - rows[0]["tcb"], 0x2C)
+    check("记录步长 0x1C", rows[1]["addr"] - rows[0]["addr"], 0x1C)
+    check("任务 1 已激活", rows[0]["active"], True)
+    check("任务 5 也已激活", rows[4]["active"], True)
+    check("任务 2 未启动", rows[1]["active"], False)
+    check("任务号 1..8 连续", [r["id"] for r in rows], list(range(1, 9)))
+    check("任务 5 属性是 0x02，其余 0x04",
+          ([r["attr"] for r in rows].count(0x02), rows[4]["attr"]), (1, 0x02))
+    check("八个入口都在应用区",
+          all(0x00080000 <= r["entry"] < 0x00100002 for r in rows), True)
+    check("八个栈顶都在 0x46200–0x46A00 之间",
+          all(0x00046200 <= r["sp"] < 0x00046A00 for r in rows), True)
+    check("表头 +4 那个 0x4616C 不是任何任务的栈顶",
+          0x0004616C in [r["sp"] for r in rows], False)
+
+    # boot_task 用 from_table 取栈顶
+    m2 = create("d300-a")
+    m2.load()
+    m2.boot_task(0x0008133A, from_table=True, rp=0x00081338,
+                 stop_pc=0x00080506)
+    check("boot_task 自动取了 0x0462EC", m2.cpu.r[15], 0x000462EC)
+    check("boot_task 设了 RP", m2.cpu.dr[1], 0x00081338)
+
+    # 因果：栈顶不影响结局，RP 决定结局（V9 实测的关键一条）
+    res = []
+    for sp in (0x000462EC, 0x0007F000):
+        m3 = create("d300-a", autospin=True)
+        m3.load()
+        m3.boot_task(0x0008133A, sp, 0, stop_pc=0x00080506, rp=0x00081338)
+        b = m3.step_count
+        m3.run(max_steps=100000)
+        res.append((m3.step_count - b, m3.cpu.pc))
+    check("栈顶换成系统栈 0x7F000，步数与结束地址完全一致", res[0], res[1])
+    check("两种栈顶都落在停机占位 0x081338", res[1][1], 0x00081338)
+
+
+def test_kernel():
+    print("\n[15 μITRON 半主机（事件标志 + 阻塞）]")
+    m = create("d300-a", autospin=True)
+    m.load()
+    k = m.attach_kernel(auto_event=False)
+    check("内核已挂上", m.kernel is k, True)
+    check("初始 17 个标志全 0", [p for _, p in k.flag_table()], [0] * 17)
+
+    m.boot_task(0x0008133A, from_table=True, rp=0x00081338,
+                stop_pc=0x00080506)
+    base = m.step_count
+    m.run(max_steps=100000)
+    n = m.step_count - base
+    check("不送事件就停在第一个握手", m.blocked is not None, True)
+    check("停的是 wai_flg", m.blocked["svc"], "sys_wai_flg")
+    check("等的是 flag 3", m.blocked["flag"], 3)
+    check("等的是 0x2000", m.blocked["pattern"], 0x2000)
+    check("等待模式是或等待", m.blocked["mode"], 2)
+    check("任务入口后 125 步就阻塞（累计 9,841 步）", (n, base + n), (125, 9841))
+    check("没有报故障", m.fault, None)
+    check("info 里出现「阻塞」", "阻塞" in m.info(), True)
+    check("此时还没有任务退出", m.exited, None)
+
+    # 手动送事件 + resume
+    m.flag_set(3, 0x2000)
+    check("flag 3 已置 0x2000", k.flag_get(3) & 0x2000, 0x2000)
+    rec = m.resume()
+    check("resume 回到了那条 int", rec["pc"], 0x00081490)
+    check("resume 后不再阻塞", m.blocked, None)
+    n2 = m.run(max_steps=100000)
+    check("继续跑会遇到下一个等待", m.blocked is not None, True)
+    check("第二个等待换成了 flag 1", m.blocked["flag"], 1)
+
+    # 自动送事件跑到底
+    m3 = create("d300-a", autospin=True)
+    m3.load()
+    m3.attach_kernel(auto_event=True)
+    m3.boot_task(0x0008133A, from_table=True, rp=0x00081338,
+                 stop_pc=0x00080506)
+    base3 = m3.step_count
+    m3.run(max_steps=200000)
+    n3 = m3.step_count - base3
+    check("自动送事件的任务入口后 25,857 步（累计 35,573）",
+          (n3, base3 + n3), (25857, 35573))
+    check("一共送了 13 个事件", len(m3.kernel.events), 13)
+    check("第一个事件是 flag 3 / 0x2000",
+          (m3.kernel.events[0]["flag"], m3.kernel.events[0]["pattern"]),
+          (3, 0x2000))
+    check("最后一个事件是 flag 1 / 0x4000",
+          (m3.kernel.events[-1]["flag"], m3.kernel.events[-1]["pattern"]),
+          (1, 0x4000))
+    check("服务调用 56 次", sum(m3.kernel.calls.values()), 56)
+    check("sta_tsk 10 次", m3.kernel.calls.get("sys_sta_tsk", 0), 10)
+    check("最后自己调 ext_tsk 退出", m3.exited is not None, True)
+    check("退出点 PC=0x0813F6", m3.exited["pc"], 0x000813F6)
+    check("info 里写「已退出」", "已退出" in m3.info(), True)
+    check("退出后不再判故障", m3.fault, None)
+    check("信息里写明累计 35,573 步", "35,573" in m3.info(), True)
+
+    # sta_tsk 记录
+    ops = [o for o in m3.kernel.task_ops if o["svc"] == "sys_sta_tsk"]
+    check("记录到 10 条 sta_tsk", len(ops), 10)
+    check("第一个 sta_tsk 的 tsk_id 是 9", ops[0]["tsk_id"], 9)
+    check("有 4 次启动 tsk_id=4（同一个入口、不同参数）",
+          sum(1 for o in ops if o["tsk_id"] == 4), 4)
+    check("ter_tsk 记了 1 条",
+          sum(1 for o in m3.kernel.task_ops if o["svc"] == "sys_ter_tsk"), 1)
+
+    # 对照：旧办法（不挂内核）也能跑完，但路径不同
+    m4 = create("d300-a", autospin=True)
+    m4.load()
+    m4.boot_task(0x0008133A, from_table=True, rp=0x00081338,
+                 stop_pc=0x00080506)
+    base4 = m4.step_count
+    m4.run(max_steps=200000)
+    n4 = m4.step_count - base4
+    check("不挂内核时任务入口后 32,726 步返回（累计 42,442）",
+          (n4, base4 + n4), (32726, 42442))
+    check("返回落在停机占位 0x081338", m4.cpu.pc, 0x00081338)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -488,6 +715,10 @@ def main():
     test_snapshot()
     test_airq()
     test_boot_task()
+    test_irqfire()
+    test_autospin()
+    test_task_table()
+    test_kernel()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
