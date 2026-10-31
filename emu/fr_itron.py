@@ -13,17 +13,19 @@
   A 段 176 槽：真实现 18 条，桩 158 条
   B 段 176 槽：真实现 56 条，桩 120 条
 """
-import os
 import re
 import sys
 
+
+
+from fr_svc import SEGS, read_table, load_props
+
+import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
 _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
-
-from fr_svc import SEGS, read_table, load_props    # noqa: E402
 
 
 # μITRON 标准错误码（仅用于把桩返回的负数翻成名字，属推断）
