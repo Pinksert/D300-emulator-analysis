@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """FR 反汇编文本格式化（配合 fr_emu.TABLE 使用）"""
 import sys
+from fr_emu import TABLE, sx
+
 import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
@@ -8,7 +10,6 @@ _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
-from fr_emu import TABLE, sx
 
 SCALE = {"disp10": 4, "disp9": 2, "disp8": 1, "udisp6": 4, "u10": 4,
          "dir10": 4, "dir9": 2, "dir8": 1}
