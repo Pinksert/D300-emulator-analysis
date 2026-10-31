@@ -101,11 +101,18 @@ def main():
         print(f"  {tid:<3}  0x{r['sp']:06X}  0x{w[0]:06X}   0x{w[1]:08X}   0x{w[2]:06X}"
               f"   {'首字仍 == entry' if w[0] == r['entry'] else '（栈顶已是活的现场）'}")
 
-    sep("6. 任务 1 现在真的在跑")
+    sep("6. 跑完 30 万步之后，当前 TCB 是谁")
     cur = m.bus.rd(realos.CUR_TCB, 4)
     r1 = realos.find(m, 1)
-    print(f"  *(0x{realos.CUR_TCB:05X}) = 0x{cur:06X}"
-          f"{'  == 任务 1 的 TCB' if cur == r1['tcb'] else ''}")
+    who = "?"
+    for _r in realos.records(m):
+        if _r["tcb"] == cur:
+            who = "任务 %d" % _r["id"]
+    print(f"  *(0x{realos.CUR_TCB:05X}) = 0x{cur:06X}（{who}）"
+          f"{'  == 任务 1 的 TCB' if cur == r1['tcb'] else '  ≠ 任务 1'}")
+    print("  → 开着调度建模（直接页 0x44）跑，当前 TCB 早就不是任务 1 了：")
+    print("    任务 1 阻塞后调度器切给了优先级更高的任务，最后落到空闲任务。")
+    print("    这正是 V11 推翻「从来没有任务切换」的那条证据（见 realos-sched.txt）。")
     print(f"  任务 1 的 TCB+0x18 里存着当前 SP = 0x{m.bus.rd(r1['tcb'] + 0x18, 4):06X}")
     print(f"  （任务在跑的时候这个字段是它的现场；不在跑的时候是内核让出时的现场）")
 
