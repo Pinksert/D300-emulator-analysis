@@ -24,16 +24,35 @@ from .device import DirectPage
 from .dev_clk import attach as attach_clk
 from .dev_serial import SerialIf
 from .dev_timer import ReloadTimer
+from .dev_xfer import attach as attach_xfer
 from .icu import Icu
 from .trace import Trace
 
-# 固件目录：环境变量 → 仓库 data/ → 同级 D300Update/
-_PKG = os.path.dirname(os.path.abspath(__file__))     # emu/frbox
-_EMU = os.path.dirname(_PKG)                          # emu
-_ROOT = os.path.dirname(_EMU)                         # 仓库根
-FW_DIR = (os.environ.get("FRBOX_FW_DIR")
-          or (os.path.join(_ROOT, "data") if os.path.isdir(os.path.join(_ROOT, "data"))
-              else os.path.join(_ROOT, "D300Update")))
+def _fw_dir():
+    """固件目录：环境变量 FRBOX_FW_DIR → 仓库 data/ → 仓库同级 D300Update/。
+
+    这个顺序是刻意定的：仓库里带 `data/A3000111.bin` 时 clone 下来就能跑，
+    不用任何设置；想用别处的解包产物时再指 `FRBOX_FW_DIR`。
+    """
+    env = os.environ.get("FRBOX_FW_DIR")
+    if env and os.path.isdir(env):
+        return env
+    # 往上找三层就够了：无论 frbox 落在 emu/frbox 还是直接在工作区根下，
+    # 只要某一层同时没有 data/ 和 D300Update/，就继续往上一层。
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(5):
+        up2 = os.path.dirname(here)
+        if up2 == here:
+            break
+        for cand in (os.path.join(up2, "data"),           # 仓库自带的 data/
+                     os.path.join(up2, "D300Update")):    # 解包产物直接放仓库里
+            if os.path.isdir(cand):
+                return cand
+        here = up2
+    return os.path.join(up2, "data")
+
+
+FW_DIR = _fw_dir()
 
 MACHINES = {}
 
@@ -75,7 +94,7 @@ class Machine:
     fallback_vec = None                  # 未使用向量的兜底目标
 
     def __init__(self, trace=None, serial_console=False, clk_lock_ticks=None,
-                 autospin=False, autospin_threshold=3000):
+                 autospin=False, autospin_threshold=3000, xfer=False):
         self.trace = trace or Trace()
         self.serial_console = serial_console
         self.autospin_enabled = bool(autospin)
@@ -87,7 +106,14 @@ class Machine:
         self.serial = SerialIf(self, tx_sink=self._serial_tx)
         self.timer = ReloadTimer(self)
         self.icu = Icu(self)
+        # xfer=False（默认）：0x0AF/0x174/0x524 走影子存储，三处忙等会一直等 ——
+        # 这是 V2–V9 所有基线的前提，默认保留。
+        # xfer=True：把这三处建模成「置启动位→轮询完成位」的寄存器，
+        # 忙等会正常结束（原生 REALOS 跑任务时必需）。见 dev_xfer.py。
+        self.xfer = attach_xfer(self) if xfer else None
         self.devices = [self.dp, self.serial, self.timer]
+        if self.xfer is not None:
+            self.devices.append(self.xfer)
         self.itron = None
         self.cpu = None
         self.step_count = 0
@@ -397,6 +423,38 @@ class Machine:
                     d.tick(self.cycles_per_tick)
 
     # ------------------------------------------------------------ 任务启动
+    def enable_xfer(self):
+        """打开 0x0AF/0x174/0x524 的「启动位→完成位」建模（见 dev_xfer.py）。
+
+        默认关闭是为了保住 V2–V9 的基线：那三处忙等在真机上会结束，在我们原来的
+        模型里永远不会 —— 「卡住」本身就是那些实验要观察的现象。
+        """
+        if self.xfer is not None:
+            return self.xfer
+        self.xfer = attach_xfer(self)
+        self.xfer.trace = self.trace
+        self.devices.append(self.xfer)
+        return self.xfer
+
+    def boot_realos(self, task_id=1, max_steps=600000):
+        """让固件自己的 REALOS 调度 `task_id` 号任务（V10）。
+
+        与 `boot_task` 的区别是本质性的：`boot_task` 是**绕过调度器**手工造上下文，
+        这里是把固件从复位一路跑到它自己的派发点，只在派发那一条指令前改一个寄存器。
+        上下文、TCB、系统调用全部由固件完成。
+
+        前提：不要挂 `attach_kernel()` / `attach_itron()` —— 那两条会截住 `int #0x40`，
+        真内核就进不去了。
+        """
+        from .realos import prepare
+        self.enable_xfer()
+        if self.kernel is not None or self.itron is not None:
+            self.trace.log("exec", "boot_realos：已挂 μITRON 钩子，先摘掉再跑真内核")
+            self.kernel = None
+            self.itron = None
+            self.cpu.svc_hook = None
+        return prepare(self, task_id, max_steps=max_steps)
+
     def boot_task(self, entry, sp=None, arg=0, stop_pc=None, max_steps=400000,
                   rp=None, from_table=False):
         """手工启动一个任务：跳过 REALOS 调度器，直接构造初始上下文跳进去。
@@ -450,47 +508,35 @@ class Machine:
     TASK_COUNT = 8
 
     def task_table(self):
-        """解析 A 段任务表（0xFE000 头部 + 0xFE010 起 8 条 × 0x1C）
+        """解析 A 段任务表（0xFE000 头部 + 0xFE010 起 13 条 × 0x1C）
 
         头部：
-          +0x00 任务数（8）
+          +0x00 任务数（8）—— 这是**用户任务数**，不是记录总数
           +0x04 0x0004616C  ← 不是任何任务的栈顶，见 boot_task 的说明
           +0x08 0xFFFFFFFF
           +0x0C 0x000C001C
 
-        记录（每 0x1C 字节）：
+        记录（每 0x1C 字节，实际 13 条，见 realos.records()）：
           +0x00 TCB 指针（相邻两条差 0x2C，即 TCB 大小）
-          +0x04 任务号 << 16 | 属性（0x0004 / 0x0002）
+          +0x04 任务号 << 16 | 属性（0x01 / 0x02 / 0x03 / 0x04 / 0x06 / 0x09）
           +0x08 保留（全 0）
           +0x0C 状态：0x80000000 = 已激活，0 = 未启动
           +0x10 入口地址
           +0x14 栈顶
           +0x18 保留（全 0）
+
+        ⚠️ V9 及之前这里只解 8 条（信了表头那个数），于是任务 9–12 和空闲任务 0
+        全被漏掉 —— "tsk_id 9/10 在任务表里找不到" 那个悬案就是这么来的。V10 起
+        改由 `realos.records()` 统一解析，`index` 仍从 1 开始以保住既有输出格式。
         """
-        out = []
+        from .realos import records
         if not hasattr(self, "bus"):
-            return out
-        n = self.bus.rd(self.TASK_TABLE, 4)
-        if not (0 < n <= 64):
-            n = self.TASK_COUNT
-        for i in range(n):
-            base = self.TASK_REC0 + i * self.TASK_REC
-            tcb = self.bus.rd(base, 4)
-            idf = self.bus.rd(base + 0x04, 4)
-            state = self.bus.rd(base + 0x0C, 4)
-            entry = self.bus.rd(base + 0x10, 4)
-            sp = self.bus.rd(base + 0x14, 4)
-            out.append({
-                "index": i + 1,
-                "addr": base,
-                "tcb": tcb,
-                "id": (idf >> 16) & 0xFFFF,
-                "attr": idf & 0xFFFF,
-                "state": state,
-                "active": bool(state & 0x80000000),
-                "entry": entry,
-                "sp": sp,
-            })
+            return []
+        out = []
+        for r in records(self):
+            d = dict(r)
+            d["index"] = r["index"] + 1
+            out.append(d)
         return out
 
     # ------------------------------------------------------------------ 视图
