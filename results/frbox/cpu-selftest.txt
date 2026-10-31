@@ -58,5 +58,15 @@
   OK    level<=ILM 被屏蔽（没进 EIT）                     got=0x00000001 want=0x00000001
   OK    被屏蔽的请求仍在队列                                 got=0x00000001 want=0x00000001
   OK    I=0 时不受理                                   got=0x00000002 want=0x00000002
+[7] andccr / orccr 改 S 位时必须跟着换 R15（SSP ↔ USP）
+  OK    起始用 SSP，R15 = SSP                          got=0x0007F000 want=0x0007F000
+  OK    orccr #20 把 S 置 1                          got=0x00000001 want=0x00000001
+  OK    R15 换到 USP                                 got=0x0004A000 want=0x0004A000
+  OK    旧 R15 存回 SSP                               got=0x0007F000 want=0x0007F000
+  OK    andccr #DF 把 S 清 0                         got=0x00000000 want=0x00000000
+  OK    R15 换回 SSP                                 got=0x0007F000 want=0x0007F000
+  OK    用过的 USP 被存回去                               got=0x0004A010 want=0x0004A010
+  OK    再切回 USP 时取的是存回去的值                          got=0x0004A010 want=0x0004A010
+  OK    andccr 不动 ILM                              got=0x0000001B want=0x0000001B
 
 通过 全部；失败项 无
