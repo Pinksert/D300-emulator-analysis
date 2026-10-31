@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.10.0** | NikonEmulator 驱动 |
+| | **frbox 0.11.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -34,7 +34,7 @@ python -m frbox -M d300-a --itron-block --autoevent --autospin \
 python -m frbox -M d300-a --realos 1 -c "c 300000;realos"
                                                         # 走固件自己的内核（V10 起）
 
-python frbox_selftest.py     # 258/258
+python frbox_selftest.py     # 282/282
 python fr_selftest.py        # 63/63
 ```
 
@@ -70,6 +70,19 @@ python fr_selftest.py        # 63/63
    （`wai_flg(flag 3, 0x2000)`）。用 `--autoevent` 把事件补上，它走完整条启动链：
    **56** 次服务调用、**10** 次 `sta_tsk`、13 个握手事件，最后 `sys_ext_tsk` 退出。
    结论：**任务 1 是一次性初始化任务**，不返回、不循环。
+7. **V10：固件自带的 REALOS 能原生跑，不用我们自己写调度器。** 真因只有一个 CPU 缺陷 ——
+   `andccr`/`orccr` 改 CCR 的 S 位时不换 `r15`。修掉之后复位链一路跑到固件自己的派发点
+   `0x000FE4E6`（43,428 步），上下文恢复靠翻 S 位在 SSP/USP 之间搬指针。
+   任务表是 **13 条不是 8 条**（`*(0xFE000)=8` 是用户任务数）。
+8. **V11：任务切换真的发生了。** 补上三样仿真台缺的东西 —— ILM 约定改回「号越小越优先、
+   受理条件 `lvl < ILM`」、直接页 `0x44` 是「请求调度」寄存器（写 1 → 挂 `vec 0x3F`）、
+   `0x3F4/0x3FC` 是硬件优先级编码器。100 万步里 `*(0x45980)` 换了 **6 次**：
+   43,429 任务 1 → 43,516 任务 5 → 43,806 任务 1 → 44,614 任务 5 → 45,125 任务 1
+   → 45,341 空闲任务，最后停在 `0x000FE510`（空闲任务的 `bra -1`），中途没停机。
+   ⚠️ **A/B 两个模式的数字不能混着比**：A（只开 xfer）30 万步 1,888 次服务、`*(0x45980)`
+   只写 1 次；B（再开 0x44）只有 14 次服务、写 6 次。
+   ⚠️ 也**别读成「相机跑起来了」**：13 个任务只有 3 个上场，7 次调度全部来自内核自身的服务调用，
+   没有一次是外设中断引发的。
 
 > 老线（NikonEmulator）的三句话仍然成立，且是另一层结论：B 段显示管线能自动前进三级；
 > 但"绘制"只是 `set_flg(0x0A, 0x8000); RET`，不是画像素；剩下的坎是串行口波形，不是隐藏分支。
@@ -92,17 +105,17 @@ D300-emulator-analysis/
 │   ├── fr_dis.py           反汇编格式化
 │   ├── fr_cover.py         指令编码空间覆盖率
 │   ├── fr_run.py           函数级运行器
-│   ├── fr_selftest.py      54 条 CPU 断言
+│   ├── fr_selftest.py      63 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   258 条断言
+│   ├── frbox_selftest.py   282 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              21 个取证脚本（见 probe/README.md）
+│   └── probe/              30 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
 │   ├── 03-frbox.md         ★ 模拟器设计与命令参考
-│   └── reports/            19 份报告（HTML，按时间顺序编号）
+│   └── reports/            23 份报告（HTML，01–13 NikonEmulator 线，14–23 frbox 线）
 ├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
 │   └── upstream-changes.md 对上游的 5 处修改
@@ -128,18 +141,22 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 258 条（frbox）+ 63 条（CPU），全绿 |
+| 自检 | 282 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
 | 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
 | 48 向量注入 | 39 个精确 `reti` 回原位，`r15`/SSP 逐位复原 |
 | 任务 1 启动 | 1,981 步到第一个硬件等待 `0x0DCD2C`，500 个应用区 PC |
 | 任务 1 + 自旋消除 | 3 处忙等全放行 → 4,473 个 PC / 6 个回调槽（硬件事件仍为 0） |
-| REALOS 任务表 | `0x0FE000` 头 + 8 条 `0x1C` 字节记录，任务 1 入口 `0x08133A` / 栈顶 `0x0462EC` |
+| REALOS 任务表 | `0x0FE000` 头 + **13 条** `0x1C` 字节记录（不是 8 条），任务 1 入口 `0x08133A` / 栈顶 `0x0462EC` |
 | 任务 1 正常返回 | 42,442 步回到固件自带的 `bra -1` 停机占位（此前掉到地址 0；关键参数是 RP，不是栈顶） |
 | 任务 1 + 真内核 | 9,841 步阻塞于 `wai_flg(flag 3, 0x2000)` —— 等的是别的任务，不是硬件 |
 | 任务 1 跑完整条启动链 | 35,573 步 / 56 次服务 / 10 次 `sta_tsk` / 13 个握手事件 / `sys_ext_tsk` 退出 |
 | 快照体积 | B 段 191,517 步时 1,312,632 字节 |
+| REALOS 原生派发 | 复位 → 派发点 `0x0FE4E6` 43,428 步；30 万步 1,888 次陷阱全部由固件内核处理（A 模式） |
+| 任务切换（V11） | 100 万步 6 次：43,429 / 43,516 / 43,806 / 44,614 / 45,125 / 45,341，停 `0x0FE510` |
+| 调度请求 / 编码查询 | 7 / 7，位图为 0 的次数 0 |
+| 调度器 | `vec 0x3F → 0x000FE776`；就绪位图 `0x45984` / 就绪队列 `0x45988`（13×8B）/ 派发请求 `0x459F0` |
 
 ### 老线统计（NikonEmulator，仅供对照）
 
@@ -266,9 +283,9 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 
 ---
 
-## 报告索引（21 份）
+## 报告索引（23 份）
 
-01–13 是 NikonEmulator 线，14–21 是 frbox 线。
+01–13 是 NikonEmulator 线，14–23 是 frbox 线。
 
 | # | 文件 | 主题 |
 |---|---|---|
@@ -294,6 +311,7 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 | 20 | `20-frbox-v8-autospin.html` | frbox V8：中断闭环与自旋消除器 |
 | 21 | `21-frbox-v9-task-table-boot.html` | frbox V9：任务表解密与 μITRON 半主机 |
 | 22 | `22-frbox-v10-native-realos.html` | frbox V10：固件自带的 REALOS 第一次真的跑起来了 |
+| 23 | `23-frbox-v11-native-scheduler.html` | frbox V11：固件自己的调度器第一次真的换起任务来（ILM 约定 / 0x44 / 0x3F4–0x3FC） |
 
 ---
 
