@@ -130,11 +130,12 @@ def test_icu():
     m.cpu.step()
     check("I=0 时不进中断（只执行了一条）", len(m.cpu.irq_log), 0)
     check("中断仍在排队", len(m.cpu.irq_pending), 1)
-    m.cpu.ilm = 0x1F
+    # 级别号越小优先级越高，受理条件是 level < ILM
+    m.cpu.ilm = 0x09
     m.cpu.i = 1
     m.cpu.step()
-    check("ILM 屏蔽（level 9 <= 31）", len(m.cpu.irq_log), 0)
-    m.cpu.ilm = 0
+    check("ILM 挡住同级（level 9 >= 9）", len(m.cpu.irq_log), 0)
+    m.cpu.ilm = 0x0A
     m.cpu.step()
     check("放行后进入 EIT", len(m.cpu.irq_log), 1)
     check("EIT 目标 = 向量槽 0x20 的值",
@@ -496,6 +497,10 @@ def test_irqfire():
     snapshot.save(m, snap)
     home = m.cpu.pc
 
+    # 注入点的 ILM 是 0x10（启动初始化阶段，级别 0x12+ 全被挡住 —— 这正是
+    # 「开机初始化期间关中断」该有的样子）。要验证 ISR 本身，先把 ILM 抬到
+    # 任务上下文的 0x1F。级别仍然取自 ICR，不是硬编码。
+    m.cpu.ilm = 0x1F
     r = m.irq_return(0x13, max_steps=20000, home=home)
     check("vec 0x13 闭环回原位", r["back"] is not None, True)
     check("vec 0x13 的 SP 逐位复原", r["sp_restored"], True)
@@ -505,10 +510,19 @@ def test_irqfire():
     check("回调是一次性的（槽清 0）", m.bus.rd(0x3F028, 4), 0)
     check("注入结束后没有残留待决请求", len(m.cpu.irq_pending), 0)
 
+    # vec 0x1F 的 ICR 级别就是 0x1F：在「受理条件 level < ILM」下，级别 0x1F
+    # 永远不可能被受理 —— 这就是固件给这 20 条向量标「禁用」的方式。
     snapshot.load(m, snap)
-    r = m.irq_return(0x1F, max_steps=200)
-    check("未用向量 0x1F 不闭环", r["back"], None)
-    check("未用向量停在 0x81338 的 bra -1", m.cpu.pc, 0x00081338)
+    check("vec 0x1F 的 ICR 级别是 0x1F", m.irq_level(0x1F), 0x1F)
+    m.cpu.ilm = 0x1F
+    n0 = len(m.cpu.irq_log)
+    m.irq_return(0x1F, max_steps=200)
+    check("级别 0x1F 不被受理（等于 ILM，等于禁用）", len(m.cpu.irq_log), n0)
+    # 强行放行它，验证「未用向量落进停机占位」这条仍然成立
+    snapshot.load(m, snap)
+    m.cpu.ilm = 0x1F
+    m.irq_return(0x1F, max_steps=20000, level=0x1E)
+    check("放行的未用向量停在 0x81338 的 bra -1", m.cpu.pc, 0x00081338)
 
     snapshot.load(m, snap)
     check("特殊向量 0x3F 没有回调槽", m._stub_slots(m.vector(0x3F)), [])
@@ -692,7 +706,10 @@ def test_realos():
         orig_step()
 
     m2.cpu.eit, m2.cpu.step = eit, step
-    info2 = m2.boot_realos(1, max_steps=600000)
+    # 这里刻意只开 xfer、不开 0x44：任务 1 会一路跑到三处忙等（V10 的读数）。
+    # 开了 0x44 之后它会更早阻塞并让位给任务 5，那三处就跑不到了。
+    m2.enable_xfer()
+    info2 = realos.prepare(m2, 1, max_steps=600000)
     check("改派任务 1 生效", info2["switched"], True)
     check("r14 被换成任务 1 的 TCB", m2.cpu.r[14], 0x000459FC)
     m2.run(max_steps=400000, spin_guard=False, fault_guard=False)
@@ -714,6 +731,94 @@ def test_realos():
     check("写了启动位后只剩启动位，完成位还没起来", m3.xfer.regs.get(0x0AF), 0x02)
     m3.xfer.tick(256)
     check("过了一个 tick 完成位置起来（0x02 | 0x80）", m3.xfer.regs.get(0x0AF), 0x82)
+
+
+# ------------------------------------------------- 17 原生调度：真的换任务
+def test_sched():
+    print("\n[17 原生调度：0x44 请求 + 0x3F4 优先级编码 + 真的换任务]")
+    from frbox import realos
+
+    # ---- 默认仍然不建模（保住 V2–V10 的基线）----
+    m0 = create("d300-a")
+    check("默认不建 0x44 调度请求", m0.dispatch, None)
+    check("默认不建优先级编码器", m0.prio, None)
+    m0.enable_dispatch()
+    check("enable_dispatch 后两个都在", (m0.dispatch.name, m0.prio.name),
+          ("dispatch", "prio"))
+
+    # ---- 优先级编码器 ----
+    p = create("d300-a")
+    p.load()
+    pr = p.enable_dispatch() and p.prio
+    bus = p.bus
+    for v, want in ((0x50800000, 1), (0x80000000, 0), (0x00000001, 31),
+                    (0x00000000, 32), (0x00008000, 16)):
+        bus.wr(0x3F4, 4, v)
+        check("写位图 0x%08X → 最高优先级 %d" % (v, want),
+              bus.rd(0x3FC, 4), want)
+    check("查询累计 5 次", pr.lookups, 5)
+    check("位图为 0 只记 1 次", pr.empty, 1)
+
+    # ---- 写 0x44 会挂一条 vec 0x3F ----
+    bus.wr(0x44, 1, 0x01)
+    check("写 0x44 后队列里有 vec 0x3F",
+          [v for _, v in p.cpu.irq_pending], [0x3F])
+    check("调度请求计数", p.dispatch.requests, 1)
+
+    # ---- ILM 极性：号越小优先级越高，受理条件 level < ILM ----
+    q = create("d300-a")
+    q.load()
+    q.cpu.i = 1
+    q.cpu.ilm = 0x1F
+    q.cpu.request_irq(0x3F, 0x1E)
+    n0 = len(q.cpu.irq_log)
+    q.cpu.step()
+    check("ILM=0x1F 受理 level 0x1E（号更小 = 更优先）",
+          len(q.cpu.irq_log), n0 + 1)
+    q.cpu.i = 1
+    q.cpu.ilm = 0x1E
+    q.cpu.request_irq(0x3F, 0x1E)
+    n1 = len(q.cpu.irq_log)
+    q.cpu.step()
+    check("ILM=0x1E 挡住同级的 0x1E（派发推迟到 reti 之后）",
+          len(q.cpu.irq_log), n1)
+
+    # ---- 真跑一遍：任务 1 / 任务 5 / 空闲任务之间真的换 ----
+    m = create("d300-a")
+    m.load()
+    m.boot_realos(1)
+    name = {(r["tcb"]): r["id"] for r in realos.records(m)}
+    seen = []
+    cur = [None]
+    orig_wr = m.bus.wr
+
+    def wr(a, n, v, pc=0):
+        if a == 0x45980 and v != cur[0]:
+            cur[0] = v
+            seen.append(v)
+        return orig_wr(a, n, v, pc)
+    m.bus.wr = wr
+    hw = {}
+    orig_eit = m.cpu.eit
+
+    def eit(num, lvl=0):
+        if num != 0x40:
+            hw[num] = hw.get(num, 0) + 1
+        return orig_eit(num, lvl)
+    m.cpu.eit = eit
+    m.run(max_steps=200000, spin_guard=False, fault_guard=False)
+    m.bus.wr = orig_wr
+
+    ids = [name.get(t, -1) for t in seen]
+    check("首派是任务 1", ids[0] if ids else -1, 1)
+    check("切到过任务 5", 5 in ids, True)
+    check("切到过空闲任务（id 0）", 0 in ids, True)
+    check("切换次数 ≥ 4", len(seen) >= 4, True)
+    check("全程都是合法的 TCB", all(t in name for t in seen), True)
+    check("调度器 vec 0x3F 被受理 ≥ 5 次", hw.get(0x3F, 0) >= 5, True)
+    check("优先级编码从没读到空位图", m.prio.empty, 0)
+    check("最后停在空闲任务的 bra -1 上", m.cpu.pc, 0x000FE510)
+    check("中途没有停机", m.cpu.halted, False)
 
 
 
@@ -816,6 +921,7 @@ def main():
     test_task_table()
     test_kernel()
     test_realos()
+    test_sched()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
