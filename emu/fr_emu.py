@@ -17,14 +17,7 @@ FR30/FR60/FR80 指令级解释器（函数级仿真台核心）
 """
 import re, sys
 
-import os
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
-_ROOT = os.path.dirname(_EMU)
-sys.path.insert(0, _EMU)
-FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
-
-HERE = _EMU
+HERE = r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp"
 M32 = 0xFFFFFFFF
 
 
@@ -509,8 +502,10 @@ class Fr:
             ccr = ((self.s << 5) | (self.i << 4) | (self.n << 3) | (self.z << 2)
                    | (self.v << 1) | self.c)
             ccr = (ccr & v8) if mn == "andccr" else (ccr | v8)
-            self.c, self.v, self.z, self.n = ccr & 1, (ccr >> 1) & 1, (ccr >> 2) & 1, (ccr >> 3) & 1
-            self.i, self.s = (ccr >> 4) & 1, (ccr >> 5) & 1
+            # 必须走 ps 的 setter：S 位一变，R15 就要在 SSP/USP 之间换支。
+            # 直接给 self.s 赋值会绕过换栈，于是 REALOS 恢复任务上下文时
+            # 读的还是旧栈 —— 这是 V10 之前一直"任务起不来"的底层原因之一。
+            self.ps = (self.ps & ~0xFF) | ccr
             return
         if mn == "stilm":
             self.ilm = g("u8") & 0x1F
@@ -888,4 +883,4 @@ class Fr:
         return "\n".join(out)
 
 
-TABLE = InsnTable(os.path.join(HERE, "fr30.cpu"), os.path.join(HERE, "fr30-opc.c"))
+TABLE = InsnTable(HERE + r"\fr30.cpu", HERE + r"\fr30-opc.c")
