@@ -9,6 +9,10 @@
   · 死循环逃生：同一条指令连续执行超过 N 次即停
 """
 import sys
+
+from fr_emu import Fr, Mem, TABLE, M32, Unimpl
+from fr_itron import ItronStub
+
 import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _EMU = os.path.dirname(_HERE) if os.path.basename(_HERE) == "probe" else _HERE
@@ -16,8 +20,6 @@ _ROOT = os.path.dirname(_EMU)
 sys.path.insert(0, _EMU)
 FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 
-from fr_emu import Fr, Mem, TABLE, M32, Unimpl
-from fr_itron import ItronStub
 
 
 class Node:
@@ -140,7 +142,7 @@ def load_a(path, base=0x00080000):
 
 if __name__ == "__main__":
     import sys as _s
-    rom, base = load_a(os.path.join(FW_DIR, "A3000111.bin"))
+    rom, base = load_a(r"C:\Users\admin\WorkBuddy\D300固件\D300Update\A3000111.bin")
     r = Runner(rom, base, depth_limit=6)
     r.run(0x000DB8F0, max_steps=200000)
     print("步数", r.cpu.steps, "退出：", r.ret_reason)
