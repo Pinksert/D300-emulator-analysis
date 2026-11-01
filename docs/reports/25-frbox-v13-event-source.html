@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V13 · 不是等消息，是在等时间</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  tr.good td{background:#eaf7ef}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .okbox{background:#eaf7ef;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V13：不是等消息，是在等时间</h1>
+<div class="sub">先纠正 V12 的两处误判 · 把「等待原因位」逐项钉死 · 再补上真正缺的那件硬件：完成位与中断是<b>一对</b></div>
+
+<div class="kpis">
+  <div class="kpi"><b>36</b><span>服务调用（V11 是 14）</span></div>
+  <div class="kpi"><b>2</b><span>被固件自己拉起的新任务</span></div>
+  <div class="kpi"><b>244</b><span>事件触发（100 万步）</span></div>
+  <div class="kpi"><b>345+63</b><span>自检通过</span></div>
+</div>
+
+<div class="okbox">
+<b>一句话：</b>V12 以为任务 4/5 卡在「邮箱」上，其实任务 5 只是 <code>slp_tsk</code> 睡着了；
+真正缺的不是消息，而是<b>一次「完成位 + 中断」的硬件事件</b>。补上它之后，
+<b>不做任何 flag 注入</b>，任务 1 自己推完了三个等待点，并用 <code>sta_tsk</code> 把任务 9 和任务 4 拉了起来。
+</div>
+
+<div class="warnbox">
+<b>边界：</b>事件源是模型 —— 状态位（<code>0x80</code>/bit3）、向量（<code>0x23</code>）是从固件代码里读出来的
+「必要条件」，但「多久完成一次」是我们选的（1,024–16,384 周期结论一致，说明不敏感）。
+能报「补上这个事件源后固件自己把任务 9/4 拉起」；<b>不能报</b>「相机功能跑通了」。
+</div>
+
+<h2>一、先纠错：V12 说「任务 5 在等消息」，是错的</h2>
+
+<div class="card">
+<p>V12 把 TCB 的 <code>+0x00</code> 当成「等待对象」，于是把 <code>0x45990</code> 读成邮箱，
+又把状态位 <code>0x00010000</code> 读成「等消息」。V13 用「状态字 ↔ 该任务最后一句系统调用」
+逐项对照，两个都推翻了：</p>
+<table>
+  <tr><th>现场</th><th>状态字</th><th>最后一句调用</th><th>在 flag 队列里？</th><th>判定</th></tr>
+  <tr class="good"><td>任务 1 等 flg3/0x2000</td><td class="m">0x00100004</td><td class="m">wai_flg</td><td>是（flag3）</td><td>等事件标志</td></tr>
+  <tr class="hi"><td>任务 5 调完 slp_tsk</td><td class="m">0x00010004</td><td class="m">slp_tsk</td><td><b>否</b></td><td><b>休眠</b>，不是等消息</td></tr>
+  <tr><td>任务 5 等 0x45990 那次</td><td class="m">0x00400004</td><td class="m">rcv_msg</td><td>否</td><td>等消息（另一个位）</td></tr>
+  <tr><td>没启动的任务</td><td class="m">0x00000010</td><td>—</td><td>否</td><td>休眠/未启动</td></tr>
+</table>
+<p>那 <code>0x45990</code> 到底是什么？看它就明白了 —— 这是 0x45980 一带的原始内存：</p>
+<pre>0x45980: 00045C0C 00800000   ← 当前 TCB / 就绪位图（bit(31−8) → 优先级 8）
+0x45988: 00045988 00045988   ← 优先级 0 的就绪队列（空）
+0x45990: 00045990 00045990   ← 优先级 1 的就绪队列（空）
+...
+0x459C8: 00045C0C 00045C0C   ← 优先级 8 的就绪队列：挂着空闲任务的 TCB</pre>
+<p>所以 <code>0x45990 = 0x45988 + 1×8</code> 是<b>优先级 1 的就绪队列槽</b>。
+TCB 的 <code>+0x00/+0x04</code> 是链表的前后指针（prev/next），不是「等待对象」——
+任务在 flag 队列里时它恰好等于 flag 控制块，看起来像对象；但<b>休眠的任务会留着上一次所在就绪队列的地址</b>，
+于是被误读成邮箱。</p>
+<div class="fixbox">
+<b>修法：</b><code>realos.wait_of()</code> 改成「状态位判种类 + 扫 10 个 flag 队列反查是哪一个」，
+不再信 <code>TCB+0x00</code>。<code>blockers()</code> 现在只对 <code>kind=flag</code> 报 flag 号，
+<code>sleep</code>/<code>msg</code> 只报种类，不编对象地址。自检里三条断言跟着改了。
+</div>
+</div>
+
+<h2>二、等待原因位表（可以直接引用）</h2>
+
+<div class="card">
+<pre>TCB +0x08 状态字
+  低字节   0x00 = 运行/就绪
+           0x04 = 等待
+           0x10 = 休眠/未启动
+  高位     0x00100000 = 等事件标志（wai_flg）
+           0x00400000 = 等消息（rcv_msg）
+           0x00010000 = 休眠（slp_tsk）</pre>
+<p>三条判据都满足才写进表：① 该状态字能唯一对应一种等待；② 它的最后一句系统调用与这一位一一对应；
+③ 同一任务换一种等待方式时，这一位跟着换（任务 5 先 <code>rcv_msg</code>（0x00400004）后 <code>slp_tsk</code>（0x00010004），
+两个位都出现过）。出处 <code>results/frbox/wait-kind.txt</code>。</p>
+</div>
+
+<h2>三、真正缺的东西：中断和状态位是一对</h2>
+
+<div class="card">
+<p>任务 5 的循环（<code>0x0A67C2</code> 一带）：</p>
+<pre>0x0A67DC  把回调 0x0A6938 写进槽 0x3F074
+0x0A67E6  dmovb #2  → 0x8C        ; 配置
+0x0A67EE  borl #1 / #2 → @0x8F
+0x0A67F6  borh #1 → @0x82         ; 启动
+0x0A6810  int #0x40 (slp_tsk)     ; 睡，等中断</pre>
+<p>vec 0x23 的 ISR（<code>0x080D8A</code>）只有一句有用的：取槽 <code>0x3F074</code>，非零就 <code>call @r0</code>。
+而槽里那两个回调，第一件事完全不同：</p>
+<table>
+  <tr><th>回调</th><th>开头</th><th>行为</th></tr>
+  <tr><td class="m">0x0A6938</td><td>直接 <code>wup_tsk(5)</code></td><td>「有事，起来」——不看状态</td></tr>
+  <tr class="hi"><td class="m">0x0A687A</td><td><code>ldi 0x80 / btstl #8,@r0</code><br><code>beq</code> 跳去取数据那一支</td><td><b>先测 0x80 的 bit3</b>，置位了才 <code>wup_tsk(5)</code></td></tr>
+</table>
+<p>这就是 V12 只能叫醒一次的原因：中断来了，但状态位没置 —— 回调走「没数据」那一支，
+任务被叫醒又立刻睡回去。<b>中断和状态位必须同时到</b>，这是硬件的活，仿真台原来两样都没有。</p>
+</div>
+
+<h2>四、新设备：完成位 + 中断</h2>
+
+<div class="card">
+<p><code>frbox/dev_evt.py</code>，两种模式：</p>
+<ul>
+  <li><code>period=N</code>（默认 4096）：每 N 个周期置一次状态位并打中断 —— 对应「转换器/传感器在连续工作」；</li>
+  <li><code>period=0</code>：看启动位（<code>0x8E</code>/bit3）的上升沿，等 <code>delay</code> 个周期后置位 + 打中断 —— 对应「一次操作一次完成」。</li>
+</ul>
+<p>默认关闭（<code>--events</code> / <code>enable_events()</code> 才挂），所以 V2–V12 的基线一个字节都没动。</p>
+<h3>周期扫描：结论对参数不敏感</h3>
+<pre>周期       事件     服务    有现场的任务
+不挂       0       14     0,1,5
+1024     976      36     0,1,5,9
+2048     488      36     0,1,5,9
+4096     244      36     0,1,5,9
+8192     122      36     0,1,5,9
+16384     61      36     0,1,5,9      （100 万步，无任何 flag 注入）</pre>
+<p>事件从 976 次到 61 次，系统停的位置完全一样 —— 说明推进不是被「喂太多次」喂出来的，
+而是那几次事件真的解开了阻塞。出处 <code>results/frbox/events.txt</code>。</p>
+</div>
+
+<h2>五、推进结果：固件自己把任务 9 和任务 4 拉起来了</h2>
+
+<div class="card">
+<table>
+  <tr><th>阶段</th><th>服务调用</th><th>任务 1 走到哪</th><th>谁被拉起</th></tr>
+  <tr><td>V11 基线（什么都不加）</td><td class="m">14</td><td>flag3 / 0x2000（第 1 个等待）</td><td>—</td></tr>
+  <tr><td>V12（注入 flag ×19）</td><td class="m">116</td><td>走完自己的 startup 后 <code>ext_tsk</code> 退出</td><td>9、10、4（靠注入）</td></tr>
+  <tr class="good"><td><b>V13（只加事件源，不注入）</b></td><td class="m"><b>36</b></td><td><b>flag9 / 0x400（第 3 个等待）</b></td><td><b>sta_tsk 9、sta_tsk 4（固件自己）</b></td></tr>
+</table>
+<p>调用流水（节选，100 万步内）：</p>
+<pre>53,797  任务 1  sta_tsk(9)          ← 拉起任务 9
+54,072  任务 9  clr_flg flg10 0xFFFFBFFF
+54,159  任务 9  wai_flg flg10 0x4000
+54,526  任务 1  sta_tsk(4)          ← 拉起任务 4
+55,713  任务 4  wai_flg flg2 0x4000（OR 等待）
+55,811  任务 4  set_flg flg2 0xC000
+58,310  任务 4  chg_pri(4, 1)
+58,523  任务 4  set_flg flg1 0x8000  ← 叫醒任务 1
+58,708  任务 4  ext_tsk              ← 干完活自己退出
+71,005  任务 1  set_flg flg9 0x40000
+71,101  任务 1  wai_flg flg9 0x400   ← 新的停点</pre>
+<p>任务 4 的「起来 → 干活 → <code>ext_tsk</code> 退出」全过程是固件自己的逻辑，
+我们只提供了一个周期性硬件事件。这是 V11 之后第一次<b>不靠注入</b>看到新任务上场。</p>
+</div>
+
+<h2>六、现在卡在哪：新的三个等待</h2>
+
+<div class="card">
+<table>
+  <tr><th>任务</th><th>在等</th><th>说明</th></tr>
+  <tr class="hi"><td>1</td><td>flag9 的 0x400</td><td>静态扫过：<b>没有任何 set_flg 置过这一位</b></td></tr>
+  <tr><td>9</td><td>flag10 的 0x4000</td><td>静态里只有 <code>0x0AF648</code> 一处置位，所有者未定</td></tr>
+  <tr><td>5</td><td>消息（rcv_msg）</td><td>这次是真等消息了（0x00400004）</td></tr>
+</table>
+<p>顺手做了个实验：跑完后整轮运行注册了 <b>5 个回调槽</b>（vec 0x13 / 0x19 / 0x1B / 0x24 / 0x3C），
+逐个点火只有 <code>vec 0x24</code> 产生了一次 <code>wup_tsk</code>，没有一个能解开上面三个等待。
+说明还缺<b>第二个事件源</b>（另一个向量 + 另一个状态位），或者那两位本来就来自我们完全没建模的器件。</p>
+</div>
+
+<h2>七、代码与命令</h2>
+
+<div class="card">
+<table>
+  <tr><th>位置</th><th>新增 / 改动</th></tr>
+  <tr><td class="m">frbox/dev_evt.py</td><td>新：<code>CompletionEvent</code>（周期 / 启动位两种模式，状态位 + 向量可配）</td></tr>
+  <tr><td class="m">frbox/machine.py</td><td><code>enable_events()</code>；<code>event</code> 字段；reset 后保活</td></tr>
+  <tr><td class="m">frbox/realos.py</td><td><code>wait_kind()</code> <code>in_flag_queue()</code>；<code>wait_of()</code> 重写；<code>states()</code> 加 <code>wait_kind/wait_flag</code></td></tr>
+  <tr><td class="m">frbox/monitor.py</td><td><code>tasks</code> 显示「休眠（等 wup_tsk）」「等消息」；新增 <code>events [PERIOD]</code></td></tr>
+  <tr><td class="m">frbox/cli.py</td><td><code>--events [PERIOD]</code></td></tr>
+  <tr><td class="m">probe/</td><td><code>exp_wait_kind.py</code>（等待原因位对照）、<code>exp_events.py</code>（周期扫描）</td></tr>
+</table>
+<pre>cd emu
+python frbox_selftest.py                                   # 345/345
+
+# 挂上事件源，让固件自己走
+python -m frbox -M d300-a --realos 1 --events 4096 -c "cont 200000; tasks; events"
+
+# 对照：不挂事件源（V11 基线，停在第一个等待）
+python -m frbox -M d300-a --realos 1 -c "cont 60000; tasks"
+
+python probe/exp_events.py        # 周期 0 / 1024 … 16384 的对照
+python probe/exp_wait_kind.py     # 状态字 ↔ 最后调用 的对照表</pre>
+</div>
+
+<h2>八、这一轮改掉的旧说法</h2>
+
+<div class="card">
+<ul>
+  <li><span class="tag t-old">作废</span><b>V12「任务 5 等消息对象 0x45990」</b>：0x45990 是优先级 1 的就绪队列槽，
+  任务 5 是 <code>slp_tsk</code> 休眠。真正的等消息状态是 <code>0x00400004</code>（rcv_msg）。</li>
+  <li><span class="tag t-old">作废</span><b>「TCB+0x00 是等待对象」</b>：它是链表 prev 指针。判等待对象只能靠状态位 + 队列反查。</li>
+  <li><span class="tag t-ok">新增</span><b>等待原因位表</b>：0x00100000 标志 / 0x00400000 消息 / 0x00010000 休眠。</li>
+  <li><span class="tag t-ok">新增</span><b>「中断 + 状态位」是一对</b>：只有中断，回调会走「没数据」分支，
+  任务被叫醒又睡回去 —— 这是 V12 里 <code>wup_tsk(5)</code> 只能生效一次的原因。</li>
+</ul>
+</div>
+
+<h2>九、下一步</h2>
+
+<div class="card">
+<ul>
+  <li><b>第二个事件源</b>：任务 1 等 flag9/0x400、任务 9 等 flag10/0x4000，得先找到哪条向量/哪个器件能置这两位
+  （静态里一处都没有 → 更可能来自一个还没注册回调的外设）。</li>
+  <li><b>邮箱对象</b>：任务 5 现在真的在等消息（0x00400004）。邮箱结构还没读（对象基址 +0x08 是队列头），
+  读出来之后才能判断那条消息该由谁发。</li>
+  <li><b>周期与时基</b>：现在事件周期是「随便选的、结论不敏感」。真正的时基中断（系统 tick）还没找到 ——
+  找到之后 <code>dly_tsk</code> 这类延时才能自己到期。</li>
+  <li><b>多事件源驱动</b>：<code>dev_evt</code> 已经支持多个实例（状态位/向量可配），下一步做一个「按已注册回调槽自动配事件源」的驱动。</li>
+</ul>
+</div>
+
+<div class="note">
+数据与复现：<code>results/frbox/wait-kind.txt</code>、<code>events.txt</code>（本轮新增），
+以及上一轮的 <code>stamap.txt</code> / <code>realos-flow.txt</code> / <code>irq-wake.txt</code> / <code>native-drive.txt</code>。
+</div>
+
+</div>
+</body>
+</html>
