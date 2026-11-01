@@ -54,6 +54,11 @@ def build_parser():
                    help="--task 只给入口，栈顶从 REALOS 任务表里取")
     p.add_argument("--rp", type=lambda x: int(x, 0), default=None, metavar="ADDR",
                    help="任务初始 RP（任务的 ret 落地处）；推荐固件自带的 0x81338")
+    p.add_argument("--events", nargs="?", type=int, const=4096, default=None,
+                   metavar="PERIOD",
+                   help="挂「完成位+中断」事件源（默认周期 4096 周期；0 = 按启动位触发）")
+    p.add_argument("--flow", action="store_true",
+                   help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--realos", type=lambda x: int(x, 0), default=None,
                    metavar="TASKID",
                    help="V10：跑固件自带的 REALOS 并把首次派发改给这个任务号（如 --realos 1）。"
@@ -82,7 +87,7 @@ def build_parser():
     p.add_argument("--autospin-threshold", dest="autospin_threshold", type=int,
                    default=3000, metavar="N",
                    help="同一 0x100 窗口内连续 N 步未离开就算自旋（默认 3000）")
-    p.add_argument("--version", action="version", version="frbox 0.11.0")
+    p.add_argument("--version", action="version", version="frbox 0.13.0")
     return p
 
 
@@ -128,6 +133,10 @@ def main(argv=None):
     except Exception as e:                                   # noqa: BLE001
         print(f"固件加载失败：{e}", file=sys.stderr)
         return 2
+    if args.events is not None:
+        m.enable_events(period=args.events)
+    if args.flow:
+        m.attach_flow()
     if args.realos is not None:
         info = m.boot_realos(args.realos, max_steps=args.max_steps)
         rec = info["record"]
