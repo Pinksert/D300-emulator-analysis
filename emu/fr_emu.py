@@ -15,9 +15,9 @@ FR30/FR60/FR80 指令级解释器（函数级仿真台核心）
   MMIO = 0x00000000 .. 0x00001000（默认读 0、写丢弃，全部记日志）
   其余 = RAM（稀疏，初值 0）
 """
-import re, sys
+import os, re, sys
 
-HERE = r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp"
+HERE = os.path.dirname(os.path.abspath(__file__))
 M32 = 0xFFFFFFFF
 
 
@@ -212,6 +212,7 @@ class Fr:
         self.trace_on = False
         self.unimpl_seen = {}
         self.svc_hook = None                           # μITRON 服务调用钩子：hook(cpu, num, pc)
+        self.int_hook = None                           # 被动观察钩子：hook(cpu, num, pc)，不改变执行
         self.int40 = 0                                 # 执行到的 int #0x40 条数（含被钩子截住的）
         self.call_hook = None                          # 子程序调用钩子：hook(cpu, target, pc) -> True 表示打桩
 
@@ -844,6 +845,8 @@ class Fr:
             num = g("u8")
             if num == 0x40:
                 self.int40 += 1                      # 先记数：不管走钩子还是走 EIT
+            if self.int_hook is not None:            # 被动观察：只看一眼，不改执行
+                self.int_hook(self, num, pc)
             if self.svc_hook is not None:            # 打桩模式：直接当服务调用返回
                 self.svc_hook(self, num, pc)
                 return
@@ -892,4 +895,4 @@ class Fr:
         return "\n".join(out)
 
 
-TABLE = InsnTable(HERE + r"\fr30.cpu", HERE + r"\fr30-opc.c")
+TABLE = InsnTable(os.path.join(HERE, "fr30.cpu"), os.path.join(HERE, "fr30-opc.c"))
