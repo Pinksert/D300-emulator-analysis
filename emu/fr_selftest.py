@@ -9,8 +9,9 @@
 覆盖：有符号除法全序列（DIV0S+32×DIV1+DIV2+DIV3+DIV4S）、加减法标志位、
       LSL/LSR/ASR、@(disp,R14) 负偏移、XCHB、LDI:8 无符号、PS 位域布局。
 """
+import os
 import sys
-sys.path.insert(0, r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8")
 from fr_emu import Fr, Mem, TABLE, M32, sx
 
