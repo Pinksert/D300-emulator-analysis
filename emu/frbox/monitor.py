@@ -13,7 +13,11 @@
     svc [N]            服务调用直方图（μITRON 半主机）
     flag [list|set ID=BITS|clr ID]          事件标志（注入外部事件）
     resume             从被阻塞的 int 指令继续
-    tasks               REALOS 任务表（入口 / 栈顶 / 是否激活）
+    tasks               REALOS 任务状态（入口 / 当前 PC / 在等哪个 flag 的哪些位）
+    flow [N]            最近 N 条服务调用流水（被动记录，不改执行）
+    events [PERIOD]     挂/看「完成位 + 中断」事件源（默认周期 4096）
+    wake FLAG BITS      用固件自己的 sys_set_flg 置位（注入一个外部事件）
+    kcall SVC [r4..r7]  直接调一次固件系统调用（服务号用负数，如 -48 = set_flg）
     realos [TASKID]     固件自带 REALOS：13 条记录 / 让内核原生调度某任务
     dev                dump                quit
 """
@@ -419,19 +423,83 @@ class Monitor:
         return True
 
     def cmd_tasks(self, arg=""):
+        """tasks —— 13 条任务的状态 / 在等谁 / 当前 PC（V12：读 TCB 而不是任务表初始值）"""
+        from . import realos as R
         m = self.m
-        rows = m.task_table()
+        rows = R.states(m)
         if not rows:
             self.out("没有任务表")
             return True
-        self.out("REALOS 任务表 @0x%06X（每条 0x%X 字节，共 %d 条）"
-                 % (m.TASK_REC0, m.TASK_REC, len(rows)))
-        self.out("  #   TCB     任务号  状态        入口       栈顶       是否已启动")
-        for r in rows:
-            self.out("  %-3d %06X   %-5d  0x%08X  0x%06X   0x%06X   %s"
-                     % (r["index"], r["tcb"], r["id"], r["state"],
-                        r["entry"], r["sp"], "已激活" if r["active"] else "-"))
-        self.out("  想看上下文 / 让内核原生调度：realos（不带参数列表，realos 1 启动任务 1）")
+        fl = {f["cb"]: f for f in R.flags(m)}
+        cur = int.from_bytes(m.fetch_bytes(R.CUR_TCB, 4), "big")
+        self.out("REALOS 任务表 @0x%06X（%d 条 × 0x%X 字节）  当前 TCB=0x%06X"
+                 % (R.TASK_TABLE, len(rows), R.TASK_REC, cur))
+        self.out("  id  激活 TCB      入口       当前 PC    在等什么")
+        for t in rows:
+            k = t["wait_kind"]
+            if k == "flag" and t["wait_flag"]:
+                f = fl.get(0x45C38 + (t["wait_flag"] - 1) * 0x10)
+                want = "flag%d 位 0x%X（现 0x%X，%d 个在等）" % (
+                    t["wait_flag"], t["wait_pat"] & 0xFFFFFFFF,
+                    f["pattern"] if f else 0, f["waiters"] if f else 0)
+            elif k == "sleep":
+                want = "休眠（等 wup_tsk）"
+            elif k == "msg":
+                want = "等消息（邮箱对象未建模）"
+            elif k == "dormant":
+                want = "休眠/未启动"
+            else:
+                want = "—"
+            self.out("  %-3d %-4s 0x%05X 0x%06X 0x%06X  %s%s"
+                     % (t["id"], "是" if t["active"] else "否", t["tcb"],
+                        t["entry"], t["pc"], want,
+                        "  ◀ 在跑" if t["current"] else ""))
+        parts = []
+        for b in R.blockers(m):
+            if b["kind"] == "flag":
+                parts.append("任务 %d(flag%d/0x%X)" % (b["task"], b["flag"], b["wants"] & 0xFFFFFFFF))
+            elif b["kind"] == "sleep":
+                parts.append("任务 %d(休眠)" % b["task"])
+            else:
+                parts.append("任务 %d(等消息)" % b["task"])
+        self.out("  在等的：%s" % ("、".join(parts) or "无"))
+        return True
+
+    def cmd_events(self, arg=""):
+        """events [PERIOD] —— 看/挂「完成位 + 中断」事件源（无参数 = 看状态）"""
+        m = self.m
+        a = arg.split()
+        if a:
+            per = self._num(a[0])
+            if per is None:
+                self.out("用法：events [PERIOD]   例如 events 4096（0 = 按启动位触发）")
+                return True
+            ev = m.enable_events(period=per)
+            self.out("事件源已挂：周期 %d 周期，状态位 0x%02X/0x%02X → vec 0x%02X"
+                     % (ev.period, ev.status[0], ev.status[1], ev.vector))
+            return True
+        ev = getattr(m, "event", None)
+        if ev is None:
+            self.out("没有事件源（events 4096 挂一个，或命令行 --events）")
+            return True
+        st = ev.state()
+        self.out("事件源状态：" + "  ".join("%s=%s" % (k, v) for k, v in st.items()))
+        return True
+
+    def cmd_flow(self, arg=""):
+        """flow [N] —— 最近 N 条服务调用流水（被动记录，需先跑过一段）"""
+        m = self.m
+        fl = getattr(m, "flow", None)
+        if fl is None:
+            self.out("还没挂流水记录器：先 realos 1 再 cont，或 --flow 启动")
+            return True
+        n = self._num(arg) or 24
+        self.out("服务调用 %d 次，当前 TCB 换过 %d 次"
+                 % (len(fl.calls), len(fl.switches)))
+        self.out("  切换时间线：" + " → ".join("0x%05X@%d" % (t, s)
+                                              for s, t in fl.switches[-12:]))
+        for line in fl.dump(limit=n).splitlines():
+            self.out(line)
         return True
 
     def cmd_realos(self, arg=""):
@@ -479,12 +547,12 @@ class Monitor:
                  f"{'（内核还没写回，cont 之后才有）' if not cur else ''}")
         self.out("  id  属性  TCB      入口       栈顶       状态     上下文 PC")
         for r in rows:
-            c = R.context(m, r["sp"]) if r["sp"] else {"pc": 0}
+            c = R.saved_context(m, r["tcb"]) if r["tcb"] else {"pc": 0}
             tag = " ◀ 当前" if r["tcb"] == cur else ""
             self.out("  %-3d 0x%02X  0x%06X 0x%06X  0x%06X  %-8s 0x%06X%s"
                      % (r["id"], r["attr"], r["tcb"], r["entry"], r["sp"],
                         "已激活" if r["active"] else "未启动", c["pc"], tag))
-        built = [r["id"] for r in rows if r["sp"] and R.context(m, r["sp"])["pc"]]
+        built = [r["id"] for r in rows if r["tcb"] and R.saved_context(m, r["tcb"])["pc"]]
         self.out(f"  已建上下文的：{('、'.join('任务 %d' % i for i in built)) or '无'}"
                  f"（跑 realos 1 之后内核会先建任务 1 / 5 / 0）")
         self.out(f"  启动阶段标记 *(0x003FBB0) = "
