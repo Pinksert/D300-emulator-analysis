@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8")
 
 from fr_emu import TABLE                                   # noqa: E402
@@ -238,18 +238,18 @@ def test_monitor():
 # ---------------------------------------------------------------- 7 CLI
 def test_cli():
     section("7 CLI")
-    env = dict(os.environ, PYTHONPATH=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp")
+    env = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.abspath(__file__)))
     r = subprocess.run(
         [sys.executable, "-m", "frbox", "-M", "d300-b", "-c", "info rom; dev"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp", env=env, timeout=180)
+        cwd=os.path.dirname(os.path.abspath(__file__)), env=env, timeout=180)
     check("CLI 退出码", r.returncode, 0)
     check("CLI 输出含机器名", "d300-b" in r.stdout, True)
     check("CLI 输出含 CRC 校验", "CRC16 OK" in r.stdout, True)
     r2 = subprocess.run(
         [sys.executable, "-m", "frbox", "-M", "help"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=r"C:\Users\admin\WorkBuddy\D300固件\.workbuddy\tmp", env=env, timeout=120)
+        cwd=os.path.dirname(os.path.abspath(__file__)), env=env, timeout=120)
     check("列出机器", "d300-a" in r2.stdout and "d300-b" in r2.stdout, True)
 
 
@@ -903,6 +903,179 @@ def test_kernel():
     check("返回落在停机占位 0x081338", m4.cpu.pc, 0x00081338)
 
 
+def _to_deadlock(m, budget=200000, chunk=20000):
+    """跑到「空闲任务连续两轮、且没有新的 int #0x40」——就是 V12 描述的那个死锁现场。"""
+    n0 = m.cpu.int40
+    idle = 0
+    while m.step_count < budget:
+        m.run(max_steps=chunk, spin_guard=False)
+        if m.cpu.pc == 0x000FE510 and m.cpu.int40 == n0:
+            idle += 1
+            if idle >= 2:
+                break
+        else:
+            idle = 0
+            n0 = m.cpu.int40
+    return m.cpu.pc == 0x000FE510
+
+
+def test_waits():
+    print("\n[18 任务状态 / 等待对象 / 服务流水（V12）]")
+    from frbox import realos as R
+
+    m = create("d300-a")
+    m.load()
+    m.boot_realos(1)
+    st = R.states(m)
+    check("任务表 13 条", len(st), 13)
+    check("激活的是 0/1/5", sorted(t["id"] for t in st if t["active"]), [0, 1, 5])
+    check("没跑过的任务不报等待对象",
+          [t["id"] for t in st if t["wait_obj"] and not t["active"]], [])
+
+    fl = R.flags(m)
+    check("flag 对象 10 个（不是 17）", len(fl), 10)
+    check("内核建好时 flg3 队列为空", [f["waiters"] for f in fl if f["id"] == 3], [0])
+
+    ok = _to_deadlock(m)
+    check("跑得到死锁现场（停在空闲任务 bra -1）", (ok, m.cpu.pc), (True, 0x000FE510))
+    check("死锁累计 103,428 步", m.step_count, 103428)
+
+    st = {t["id"]: t for t in R.states(m)}
+    check("任务 1 在等 flag3 的 0x2000",
+          (st[1]["wait_kind"], st[1]["wait_flag"], st[1]["wait_pat"]),
+          ("flag", 3, 0x2000))
+    check("任务 1 的等待状态字 0x00100004", st[1]["wait_state"], 0x00100004)
+    # V13 更正：0x45990 是优先级 1 的就绪队列槽，不是邮箱；任务 5 是 slp_tsk 休眠
+    check("任务 5 是休眠（不是等消息）",
+          (st[5]["wait_kind"], st[5]["wait_state"]), ("sleep", 0x00010004))
+    check("任务 1 当前 PC 落在它的 wai_flg 之后", st[1]["pc"], 0x00081492)
+    check("任务 5 当前 PC", st[5]["pc"], 0x000A6812)
+    check("任务 1 的保存 SP 在它自己的栈上", 0x46200 < st[1]["sp"] < 0x46300, True)
+    check("未启动的 10 个任务上下文仍是 0",
+          [t["id"] for t in st.values() if not t["active"] and t["pc"]], [])
+    check("空闲任务在跑", [t["id"] for t in st.values() if t["current"]], [0])
+
+    fl = {f["id"]: f for f in R.flags(m)}
+    check("flg3 有 1 个等待者", fl[3]["waiters"], 1)
+    check("flg3 位模式仍是 0（没人置）", fl[3]["pattern"], 0)
+    check("flg6 位模式 0x1000（任务 1 置过）", fl[6]["pattern"], 0x1000)
+    check("flg9 位模式 0x4", fl[9]["pattern"], 0x4)
+
+    bl = R.blockers(m)
+    check("死锁时两个任务在等", sorted(b["task"] for b in bl), [1, 5])
+    check("其中只有一个是等 flag", [b["flag"] for b in bl if b["kind"] == "flag"], [3])
+
+    # V11 的 summary 读的是任务表里的**初始**栈顶，跑过之后那块内存已不是上下文
+    rec = R.find(m, 1)
+    old = R.context(m, rec["sp"])["pc"]
+    check("旧的 context(初始栈顶) 读出非代码地址（V11 的错）",
+          old < 0x00080000, True)
+    check("新的 saved_context(TCB+0x18) 落在代码区",
+          0x00080000 <= st[1]["pc"] < 0x00100000, True)
+
+    # ---- 服务流水：被动记录，不改变执行
+    m2 = create("d300-a")
+    m2.load()
+    fl2 = m2.attach_flow()
+    check("attach_flow 幂等", m2.attach_flow() is fl2, True)
+    m2.boot_realos(1)
+    _to_deadlock(m2)
+    check("挂了流水也停在同一步", m2.step_count, m.step_count)
+    check("挂了流水也停在同一个 PC", m2.cpu.pc, m.cpu.pc)
+    check("流水记到 14 次服务调用", len(fl2.calls), 14)
+    check("当前 TCB 换过 4 段", len(fl2.switches), 4)
+    check("第一次切换发生在 43,622 步", fl2.switches[0][0], 43622)
+    check("流水里的第一个服务是任务 5 的 rcv_msg",
+          fl2.names.get(fl2.calls[0][2]), "rcv_msg")
+    first_set = [c for c in fl2.calls if c[2] == -48][0]
+    check("第一次 set_flg 在 44,073 步、由任务 1 发出",
+          (first_set[0], first_set[8]), (44073, st[1]["tcb"]))
+    check("最后一次调用是任务 1 的 wai_flg",
+          (fl2.calls[-1][2], fl2.calls[-1][3 + 1]), (-46, 3))
+    w = fl2.waits()
+    check("waits() 里任务 1 要 0x2000", w[st[1]["tcb"]][3], 0x2000)
+    check("谁置过 flg2/0x4000 → 任务 1（44,073 步）",
+          [t for _, t in fl2.unblocked(2, 0x4000)], [st[1]["tcb"]])
+    check("没人置过 flg3/0x2000", fl2.unblocked(3, 0x2000), [])
+
+    # ---- V12：用固件自己的内核服务注入事件
+    m3 = create("d300-a")
+    m3.load()
+    m3.boot_realos(1)
+    _to_deadlock(m3)
+    bad = R.kernel_call(m3, -48 & 0xFF, r4=3, r5=0x2000)       # 只写低 8 位：表的另一头
+    check("服务号只写低 8 位 → 内核回 E_ID(-20)，什么也没做（陷阱）",
+          (bad["err"], [f["pattern"] for f in R.flags(m3) if f["id"] == 3]),
+          (-20, [0]))
+    r = R.set_flag(m3, 3, 0x2000)
+    check("sys_set_flg 返回 0", r["err"], 0)
+    check("set_flg 本体用了 139 步", r["steps"], 139)
+    check("flg3 位模式变成 0x2000",
+          [f["pattern"] for f in R.flags(m3) if f["id"] == 3], [0x2000])
+    check("任务 1 被内核自己解除等待",
+          [t["wait_obj"] for t in R.states(m3) if t["id"] == 1], [0])
+    check("置位后等待队列清空",
+          [f["waiters"] for f in R.flags(m3) if f["id"] == 3], [0])
+    _to_deadlock(m3)
+    t1 = [t for t in R.states(m3) if t["id"] == 1][0]
+    check("任务 1 继续跑到下一个等待（flag1）",
+          (t1["wait_kind"], t1["wait_flag"], t1["wait_pat"]), ("flag", 1, 0x8000))
+
+def test_events():
+    print("\n[19 等待原因解码 + 完成位/中断事件源（V13）]")
+    from frbox import realos as R
+
+    # 纯函数：状态字 → 等待原因
+    check("0x00100004 → 等标志", R.wait_kind(0x00100004), "flag")
+    check("0x00400004 → 等消息", R.wait_kind(0x00400004), "msg")
+    check("0x00010004 → 休眠", R.wait_kind(0x00010004), "sleep")
+    check("0x00000010 → 休眠/未启动", R.wait_kind(0x00000010), "dormant")
+    check("0x00000000 → 运行/就绪", R.wait_kind(0x00000000), "ready")
+
+    # 默认不挂事件源，基线必须还是 V11 那 14 次
+    m = create("d300-a")
+    m.load()
+    check("默认没有事件源", m.event, None)
+    m.boot_realos(1)
+    R0 = R
+    _to_deadlock(m)
+    check("不挂事件源仍是 14 次服务调用", m.cpu.int40, 14)
+    t1 = [t for t in R.states(m) if t["id"] == 1][0]
+    check("任务 1 停在 flag3/0x2000",
+          (t1["wait_kind"], t1["wait_flag"], t1["wait_pat"]), ("flag", 3, 0x2000))
+    t5 = [t for t in R.states(m) if t["id"] == 5][0]
+    check("任务 5 其实是休眠，不是等消息",
+          (t5["wait_kind"], t5["wait_flag"]), ("sleep", None))
+
+    # 挂上事件源：只看「完成位 + 中断」，不注入任何 flag
+    m2 = create("d300-a")
+    m2.load()
+    m2.boot_realos(1)
+    from frbox.flow import Flow
+    fl2 = Flow(m2)
+    ev = m2.enable_events(period=4096)
+    check("事件源已挂", m2.event is ev, True)
+    check("周期记下了", ev.period, 4096)
+    check("状态位是 0x80/bit3", ev.status, (0x80, 0x08))
+    check("向量是 0x23", ev.vector, 0x23)
+    m2.run(max_steps=200000, spin_guard=False)
+    check("200k 步后服务调用 36 次", m2.cpu.int40, 36)
+    check("事件按周期触发（200k/4096 ≈ 48 次）", ev.fired, 48)
+    st = {t["id"]: t for t in R.states(m2)}
+    check("任务 1 推进到 flag9/0x400",
+          (st[1]["wait_kind"], st[1]["wait_flag"], st[1]["wait_pat"]),
+          ("flag", 9, 0x400))
+    check("任务 9 被拉起并等 flag10/0x4000",
+          (st[9]["wait_kind"], st[9]["wait_flag"], st[9]["wait_pat"]),
+          ("flag", 10, 0x4000))
+    check("任务 5 转而等消息", st[5]["wait_kind"], "msg")
+    check("有现场的任务是 0/1/5/9", sorted(t["id"] for t in st.values() if t["pc"]),
+          [0, 1, 5, 9])
+    sta = [c[3] for c in fl2.calls if c[2] == -23]
+    check("固件自己 sta_tsk 了任务 9 和 4", sta, [9, 4])
+    check("任务 4 干完活自己 ext_tsk 退出",
+          [c[3] for c in fl2.calls if c[2] == -21] != [], True)
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -922,6 +1095,8 @@ def main():
     test_kernel()
     test_realos()
     test_sched()
+    test_waits()
+    test_events()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
