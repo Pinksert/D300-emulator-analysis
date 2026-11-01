@@ -1,0 +1,48 @@
+启动：真实任务数 13，派发点前 43428 步，改派给任务 1（TCB 0x459FC）
+跑了 80000 步（含启动），执行到 14 次 int #0x40，停 PC=0x000FE510
+
+任务切换时间线（*0x45980 变化）
+  43622:0x45AAC → 43854:0x459FC → 44648:0x45AAC → 45144:0x459FC
+
+服务调用序列（14 条，按当前 TCB 分组）
+     43622  0x000A6324  tcb=0x45AAC  rcv_msg  
+     43854  0x0008141A  tcb=0x459FC  clr_flg  flg4 bits=0xFFFFDFFF
+     43927  0x00081428  tcb=0x459FC  clr_flg  flg1 bits=0xFFFFBDFF
+     44000  0x00081436  tcb=0x459FC  clr_flg  flg9 bits=0xFFFB00FF
+     44073  0x00081442  tcb=0x459FC  set_flg  flg2 bits=0x4000
+     44155  0x0008144E  tcb=0x459FC  set_flg  flg6 bits=0x1000
+     44237  0x00081458  tcb=0x459FC  set_flg  flg9 bits=0x4
+     44346  0x00081774  tcb=0x459FC  clr_flg  flg3 bits=0xFFFFDFFF
+     44433  0x0008179C  tcb=0x459FC  snd_msg  
+     44648  0x000A6358  tcb=0x45AAC  wai_flg  flg2 ptn=0x4000 mode=2
+     44738  0x000A6368  tcb=0x45AAC  clr_flg  flg2 bits=0xFFFFBFFF
+     44866  0x000A67D8  tcb=0x45AAC  can_wup  
+     44972  0x000A6810  tcb=0x45AAC  slp_tsk  
+     45144  0x00081490  tcb=0x459FC  wai_flg  flg3 ptn=0x2000 mode=2
+
+10 个 flag 对象（0x45C38 起，步长 0x10；登记表 0xFE180 只到第 10 个）
+  flg1  @0x45C38  模式=0x00000000  队列头=0x45C38  等待者 0
+  flg2  @0x45C48  模式=0x00000000  队列头=0x45C48  等待者 0
+  flg3  @0x45C58  模式=0x00000000  队列头=0x459FC  等待者 1  ★有等待队列
+  flg4  @0x45C68  模式=0x00000000  队列头=0x45C68  等待者 0
+  flg5  @0x45C78  模式=0x00000000  队列头=0x45C78  等待者 0
+  flg6  @0x45C88  模式=0x00001000  队列头=0x45C88  等待者 0
+  flg7  @0x45C98  模式=0x00000000  队列头=0x45C98  等待者 0
+  flg8  @0x45CA8  模式=0x00000000  队列头=0x45CA8  等待者 0
+  flg9  @0x45CB8  模式=0x00000004  队列头=0x45CB8  等待者 0
+  flg10 @0x45CC8  模式=0x00000000  队列头=0x45CC8  等待者 0
+
+13 条任务记录（表里的 state 高位是「复位时就激活」，不是「被 sta_tsk 过」）
+  任务 1  入口 0x0008133A 初始栈 0x462EC 表state 0x80000000 当前PC=0x00081492
+  任务 2  入口 0x00089632 初始栈 0x46404 表state 0x00000000 当前PC=0x00000000
+  任务 3  入口 0x0008B264 初始栈 0x464D8 表state 0x00000000 当前PC=0x00000000
+  任务 4  入口 0x0008C486 初始栈 0x46600 表state 0x00000000 当前PC=0x00000000
+  任务 5  入口 0x000A62FE 初始栈 0x466B4 表state 0x80000000 当前PC=0x000A6812
+  任务 6  入口 0x000A6A30 初始栈 0x467D0 表state 0x00000000 当前PC=0x00000000
+  任务 7  入口 0x000A9A4E 初始栈 0x468FC 表state 0x00000000 当前PC=0x00000000
+  任务 8  入口 0x000ACC32 初始栈 0x4699C 表state 0x00000000 当前PC=0x00000000
+  任务 9  入口 0x000AD74E 初始栈 0x46B54 表state 0x00000000 当前PC=0x00000000
+  任务 10 入口 0x000BFAE6 初始栈 0x46D78 表state 0x00000000 当前PC=0x00000000
+  任务 11 入口 0x000DB386 初始栈 0x46ED0 表state 0x00000000 当前PC=0x00000000
+  任务 12 入口 0x000E3094 初始栈 0x46FA8 表state 0x00000000 当前PC=0x00000000
+  任务 0  入口 0x000FE510 初始栈 0x4617C 表state 0x80000000 当前PC=0x000FE510  ◀ 在跑
