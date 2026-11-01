@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 282 条断言
+python frbox_selftest.py                      # 345 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -71,7 +71,7 @@ emu/
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    282 条断言
+├── frbox_selftest.py    345 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
 └── probe/               17 个取证脚本（见 probe/README.md）
 ```
@@ -594,7 +594,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 282 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 |
+| `frbox_selftest.py` | 345 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待与服务流水 42 / **事件源与等待原因 20** |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -602,7 +602,7 @@ machines   help   quit
 `results/frbox/` 下是同一次运行的真实输出：`selftest.txt`、`cpu-selftest.txt`、`boot.txt`、
 `session.txt`、`isr-injection.txt`、`isr-fire.txt`、`autospin-run.txt`、`autospin-session.txt`、
 `irq-session.txt`、`boot-seq.txt`、`boot-session.txt`、`sp-rp.txt`、`sp-rp-sweep.txt`、
-`svc-layers.txt`、`coverage.txt`、`realos-chain.txt`、`realos-tcb.txt`、`realos-run.txt`、`realos-objects.txt`、`realos-sched.txt`。
+`svc-layers.txt`、`coverage.txt`、`realos-chain.txt`、`realos-tcb.txt`、`realos-run.txt`、`realos-objects.txt`、`realos-sched.txt`、`stamap.txt`（静态可达图 + ICR 判决）、`realos-flow.txt`（死锁现场与调用流水）、`irq-wake.txt`（48 向量逐个点火）、`native-drive.txt`（内核注入事件推进）。
 
 ---
 
@@ -627,3 +627,71 @@ machines   help   quit
 5. **没有 gdbstub**。想看汇编级单步只能靠 monitor 或 `-d in_asm`。
 6. **B 段没有帧缓冲，也没有字库**。就算把中断链路全接通，也不会"出画面" —— 真正的
    显示对象由外部芯片处理，固件只发事件标志。
+
+
+---
+
+## V12：把「任务在等什么」变成可读、可推
+
+V11 能换任务了，但 13 个任务只上场 3 个，其余 10 个卡在「缺硬件事件」上。V12 把这件事拆成三步。
+
+### 1. 读对 TCB
+
+```
+TCB（0x2C 字节）
+  +0x00 等待对象控制块（不等待时是就绪队列节点）
+  +0x08 状态字：低字节 0 = 运行/就绪，4 = 等待，0x10 = 休眠/退出
+                 高位 0x00100000 = 等标志，0x00010000 = 等消息
+  +0x14 waiptn（等标志时的位模式）
+  +0x18 保存的 SP  ← **任务的现场在这里，不在任务表里**
+```
+
+`realos.states()` / `blockers()` / `flags()` 把这几个字段摊平成表；monitor 的 `tasks` 直接打印
+「在等 flag3 的 0x2000，现 0x0，1 个在等」。两个坑写在 KNOWN_ISSUES 45/46。
+
+### 2. 被动流水（不改变执行）
+
+`fr_emu` 加了 `int_hook`（看一眼就放行），`frbox/flow.py` 用它记 calls / switches / waits / sets。
+自检里有一条断言守着「挂了流水之后步数与 PC 完全不变」。
+
+### 3. 用固件自己的内核注入事件
+
+```python
+from frbox import realos
+realos.set_flag(m, 3, 0x2000)   # = kernel_call(m, -48, r4=3, r5=0x2000)
+realos.wake_task(m, 5)          # = kernel_call(m, -39, r4=5)
+```
+
+实现是让 CPU 执行一次 `eit(0x40)`：参数进 R4–R7/R12（**32 位补码**），走固件自己的陷阱入口
+`0xFE3C0` → 分发表 `0xFE3B8` → 真实现，`reti` 回标记地址 `0x81338` 算返回，然后恢复寄存器。
+实测 `set_flg` 139 步、`err=0`。
+
+⚠️ 这是「注入外部事件」，不是「硬件真的产生了事件」。19 次注入之后（`probe/exp_native_drive.py`）：
+曾有现场的任务 0/1/4/5/7/9/10，真跑过 1/4/9/10，停机时 4/5 等消息、9 等 flag10、10 在跑。
+
+### 4. monitor 新命令
+
+```
+tasks                13 条任务：入口 / 当前 PC / 在等哪个 flag 的哪些位
+flow [N]             最近 N 条服务调用流水（要先用 --flow 或 attach_flow 挂上）
+wake FLAG BITS       用固件自己的 sys_set_flg 置位
+kcall SVC [r4..r7]   直接调一次固件系统调用（服务号用负数）
+```
+
+
+---
+
+## V13：补上「完成位 + 中断」，让固件自己往前走
+
+V12 以为任务 4/5 卡在消息上，V13 发现任务 5 只是 `slp_tsk` 休眠；真正缺的是
+**中断和状态位必须一起到**（回调 `0x0A687A` 会先 `btstl #8,@0x80`）。
+
+- `frbox/dev_evt.py`：`CompletionEvent`，`period=N` 周期触发 / `period=0` 按启动位触发；
+  状态位默认 `0x80/bit3`，向量 `0x23`，可配。默认关闭，`--events` / `enable_events()` 才挂。
+- `realos.wait_kind()` / `in_flag_queue()`：等待原因位表
+  （`0x00100000` 标志 / `0x00400000` 消息 / `0x00010000` 休眠），等待对象靠扫 flag 队列反查。
+- monitor：`tasks` 会写「休眠（等 wup_tsk）」「等消息」；新增 `events [PERIOD]`。
+
+实测（100 万步、不注入）：36 次服务调用，任务 1 推完三个等待点后停在 `flag9/0x400`；
+固件自己 `sta_tsk(9)` 与 `sta_tsk(4)`，任务 4 跑完 `ext_tsk` 退出。
+事件周期 1,024–16,384 结论一致。
