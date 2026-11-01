@@ -28,7 +28,7 @@ FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 sys.stdout.reconfigure(encoding="utf-8")
 
 FW = FW_DIR
-PROPS = os.environ.get("REALOS_PROPS", "")
+PROPS = os.environ.get("REALOS_PROPS") or os.path.join(FW_DIR, "realos-systemcalls.properties")
 
 SEGS = {
     "A": dict(file="A3000111.bin", base=0x00080000, lo=0x00080000, hi=0x00100000,
