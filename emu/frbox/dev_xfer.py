@@ -90,12 +90,17 @@ class XferHandshake(Device):
 #   0x0AF  0x0DCD2A 置 bit1，0x0DCD30 测 bit7
 #   0x174  0x09C976 置位后 0x09C97C 测 bit6
 #   0x524  0x0CE132 置 bit1，0x0CE134 测 bit6（寄存器在 r8，动态）
+#   0x534  0x0CA89C 置 bit1，0x0CA89E 测 bit6（V12 新增：任务 10 被拉起后卡在这里）
 # 后两处的启动位在反汇编里不是紧邻的 borl，这里按「任意写都可能启动」处理：
 # start_mask=0 表示这个偏移不建模启动，只由外部显式 set_ready。
 D300_A_TABLE = {
     0x0AF: (0x02, 0x80),
     0x174: (0x02, 0x40),
     0x524: (0x02, 0x40),
+    # V12：第四处。判据与前三条完全同构 —— 0x0CA89C `borl #2,@r9` 置启动位，
+    # 0x0CA89E `btsth #4,@r9`（掩码 0x40）等 bit6，`beq -4` 自旋。
+    # 实测到达时 [0x534]=0x02（只剩启动位），与 0x0AF 的表现一模一样。
+    0x534: (0x02, 0x40),
 }
 
 
