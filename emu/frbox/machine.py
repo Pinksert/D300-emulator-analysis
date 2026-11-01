@@ -147,6 +147,9 @@ class Machine:
         self.blocked = None              # μITRON 阻塞记录（见 frbox/itron.py）
         self.exited = None               # 任务自己调 sys_ext_tsk 退出的记录
         self.kernel = None               # 挂上的 μITRON 半主机内核
+        self.int_hook = None             # 被动观察 int #0x40 的钩子（见 attach_int_hook）
+        self.flow = None                 # 服务调用流水（见 attach_flow / frbox.flow）
+        self.event = None                # 完成位+中断事件源（见 enable_events / frbox.dev_evt）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -184,6 +187,8 @@ class Machine:
             c.svc_hook = self.itron
         if self.kernel is not None:      # 后挂的生效；load()/reset() 之后要保住
             c.svc_hook = self.kernel
+        if self.int_hook is not None:    # 被动观察钩子同样不能在换 CPU 后丢
+            c.int_hook = self.int_hook
         for d in self.devices:
             d.reset()
         self.icu.reset()
@@ -233,6 +238,26 @@ class Machine:
         return self.itron
 
     # ------------------------------------------------------- μITRON 半主机
+    def attach_flow(self, force=False):
+        """挂服务调用流水记录器（frbox.flow），返回它本身。幂等。"""
+        if self.flow is not None and not force:
+            return self.flow
+        from .flow import Flow
+        self.flow = Flow(self)
+        return self.flow
+
+    def attach_int_hook(self, fn):
+        """挂一个被动观察 `int #0x40` 的钩子（不拦截执行）。
+
+        与 `attach_kernel` / `attach_itron` 的区别是**不改语义**：钩子看一眼就放行，
+        `int` 照原样走真向量表。V12 用它记录「谁在第几步、用哪些参数调了哪个服务」，
+        从而在不挂内核的情况下读出固件自己的任务在等什么。
+        """
+        self.int_hook = fn
+        if self.cpu is not None:
+            self.cpu.int_hook = fn
+        return fn
+
     def attach_kernel(self, nflags=17, auto_event=False):
         """挂上会阻塞的 μITRON 半主机（事件标志 + 睡眠/退出）。
 
@@ -450,6 +475,15 @@ class Machine:
         self.xfer.trace = self.trace
         self.devices.append(self.xfer)
         return self.xfer
+
+    def enable_events(self, **kw):
+        """挂「完成位 + 中断」事件源（见 dev_evt.py）。默认关闭以保住旧基线。"""
+        if self.event is not None:
+            return self.event
+        from .dev_evt import attach as attach_evt
+        self.event = attach_evt(self, **kw)
+        self.event.trace = self.trace
+        return self.event
 
     def enable_dispatch(self):
         """打开直接页 0x44 的「请求调度」建模（见 dev_dispatch.py）。
