@@ -93,13 +93,21 @@ def main():
         st = m.bus.rd(t + 0x0C, 4) & 0xFFFF
         print(f"  任务 {r['id']:<3} 状态字 0x{st:04X}  {where}")
 
-    sep("5. 跑过 30 万步之后，阻塞着的任务还留着初始上下文")
+    sep("5. 跑过 30 万步之后，任务表里的初始栈顶已经不是上下文了")
     print("  任务 栈顶      首字 PC    第二字 PS    第三字")
     for tid in (1, 5, 0):
         r = realos.find(m, tid)
         w = [int.from_bytes(m.fetch_bytes(r["sp"] + 4 * i, 4), "big") for i in range(3)]
         print(f"  {tid:<3}  0x{r['sp']:06X}  0x{w[0]:06X}   0x{w[1]:08X}   0x{w[2]:06X}"
               f"   {'首字仍 == entry' if w[0] == r['entry'] else '（栈顶已是活的现场）'}")
+    # V12 更正：任务跑过之后，真正的上下文在 TCB+0x18 指向的地方，不是任务表的初始栈顶。
+    # 表里那个值只对「刚建好、还没跑过」的任务有意义。
+    print("  V12 更正：上表读的是任务表里的**初始**栈顶；当前上下文要用 TCB+0x18：")
+    for tid in (1, 5, 0):
+        t = realos.find(m, tid)
+        c = realos.saved_context(m, t["tcb"])
+        print(f"    任务 {tid:<2} TCB 0x{t['tcb']:05X}  保存 SP=0x{c['sp']:06X}  "
+              f"PC=0x{c['pc']:06X}  PS=0x{c['ps']:08X}")
 
     sep("6. 跑完 30 万步之后，当前 TCB 是谁")
     cur = m.bus.rd(realos.CUR_TCB, 4)
