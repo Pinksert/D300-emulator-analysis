@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.14.0** | NikonEmulator 驱动 |
+| | **frbox 0.15.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -37,8 +37,10 @@ python -m frbox -M d300-a --realos 1 -c "c 300000;realos"
 python -m frbox -M d300-a --realos 1 --events 4096 \
        --bits 0x0110:0x13,0x19:2048 --flow -monitor none \
        -c "fast 200000; tasks"                          # 喂事件位图 → 固件自己拉起任务 8（V14）
+python -m frbox -M d300-a --realos 1 --events 4096 --cov \
+       -monitor none -c "fast 120000; cov 96; readyq"    # 覆盖率 + 就绪队列（V15）
 
-python frbox_selftest.py     # 356/356
+python frbox_selftest.py     # 381/381
 python fr_selftest.py        # 63/63
 ```
 
@@ -100,7 +102,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.14.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.15.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -112,14 +114,14 @@ D300-emulator-analysis/
 │   ├── fr_selftest.py      63 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   356 条断言
+│   ├── frbox_selftest.py   381 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              41 个取证脚本（见 probe/README.md）
+│   └── probe/              46 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
 │   ├── 03-frbox.md         ★ 模拟器设计与命令参考
-│   └── reports/            26 份报告（HTML，01–13 NikonEmulator 线，14–26 frbox 线）
+│   └── reports/            27 份报告（HTML，01–13 NikonEmulator 线，14–27 frbox 线）
 ├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
 │   └── upstream-changes.md 对上游的 5 处修改
@@ -145,7 +147,7 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 356 条（frbox）+ 63 条（CPU），全绿 |
+| 自检 | 381 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
 | 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
@@ -158,6 +160,8 @@ D300-emulator-analysis/
 | 任务 1 跑完整条启动链 | 35,573 步 / 56 次服务 / 10 次 `sta_tsk` / 13 个握手事件 / `sys_ext_tsk` 退出 |
 | 快照体积 | B 段 191,517 步时 1,312,632 字节 |
 | REALOS 原生派发 | 复位 → 派发点 `0x0FE4E6` 43,428 步；30 万步 1,888 次陷阱全部由固件内核处理（A 模式） |
+| 代码覆盖（V15） | 20 万步踩到 2,764–6,119 个指令地址；**7 个任务入口从没执行过**，其中 6 个落在 18.8 万字节那段没跑过的代码里 |
+| 任务 4 解冻（V15） | 与任务 8 同优先级排队被忙等饿死；放行 `0x90.bit1` 后任务 8 转 sleep，任务 4 跑完并 `ext_tsk` 退出（执行地址 2,764 → 6,382） |
 | 任务切换（V11） | 100 万步 6 次：43,429 / 43,516 / 43,806 / 44,614 / 45,125 / 45,341，停 `0x0FE510` |
 | 调度请求 / 编码查询 | 7 / 7，位图为 0 的次数 0 |
 | 调度器 | `vec 0x3F → 0x000FE776`；就绪位图 `0x45984` / 就绪队列 `0x45988`（13×8B）/ 派发请求 `0x459F0` |
