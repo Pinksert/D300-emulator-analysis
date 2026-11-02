@@ -4,7 +4,8 @@
 命令刻意对齐 QEMU 的肌肉记忆：
     info registers / info mtree / info devices / info irq
     x/16x 0x40000      x/8i 0x000FC000
-    step [N]           cont [MAX]         bp 0x40000        bps / bpc ADDR
+    step [N]           cont [MAX]         fast [N]（不吃自旋保护）
+    bp 0x40000         bps / bpc ADDR
     reset              load [PATH]        irq raise 0x1B    irq rx 41 42
     savevm PATH        loadvm PATH         info snap
     boottask ENTRY[:SP[:ARG[:STOPPC]]] [rp=ADDR] [table]
@@ -16,6 +17,7 @@
     tasks               REALOS 任务状态（入口 / 当前 PC / 在等哪个 flag 的哪些位）
     flow [N]            最近 N 条服务调用流水（被动记录，不改执行）
     events [PERIOD]     挂/看「完成位 + 中断」事件源（默认周期 4096）
+    bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
     wake FLAG BITS      用固件自己的 sys_set_flg 置位（注入一个外部事件）
     kcall SVC [r4..r7]  直接调一次固件系统调用（服务号用负数，如 -48 = set_flg）
     realos [TASKID]     固件自带 REALOS：13 条记录 / 让内核原生调度某任务
@@ -174,6 +176,18 @@ class Monitor:
 
     cmd_run = cmd_cont
     cmd_c = cmd_cont
+
+    def cmd_fast(self, arg=""):
+        """fast [N] —— 关掉自旋保护直接跑 N 步（喂事件时用，cont 会在自旋处停下）"""
+        n = self._num(arg) or 1000000
+        m = self.m
+        if m.cpu.halted:
+            self.out(f"CPU 已停机：{m.cpu.halt_reason}")
+            return True
+        m.run(max_steps=n, spin_guard=False)
+        self.out(f"跑至 0x{m.cpu.pc:08X}，累计 {m.step_count:,} 步"
+                 + (f"（停机：{m.cpu.halt_reason}）" if m.cpu.halted else ""))
+        return True
 
     def cmd_reset(self, arg=""):
         self.m.reset()
@@ -484,6 +498,32 @@ class Monitor:
             return True
         st = ev.state()
         self.out("事件源状态：" + "  ".join("%s=%s" % (k, v) for k, v in st.items()))
+        return True
+
+    def cmd_bits(self, arg=""):
+        """bits [MASK[:VECS[:PERIOD]]] —— 看/挂「事件位图 + 中断」源（V14）"""
+        m = self.m
+        a = arg.split()
+        if a:
+            spec = a[0].split(":")
+            mask = self._num(spec[0])
+            if mask is None:
+                self.out("用法：bits 0x0110:0x13,0x19:2048   （只给掩码时向量默认 0x13,0x19）")
+                return True
+            vecs = ([self._num(x) for x in spec[1].split(",")]
+                    if len(spec) > 1 and spec[1] else [0x13, 0x19])
+            period = self._num(spec[2]) if len(spec) > 2 and spec[2] else 2048
+            dev = m.enable_bits(mask=mask, vecs=vecs, period=period)
+            self.out("事件位图源已挂：0x41A56 |= 0x%04X → %s，周期 %d"
+                     % (dev.mask, ",".join("0x%02X" % v for v in dev.vecs), dev.period))
+            return True
+        devs = [d for d in getattr(m, "devices", []) if getattr(d, "name", "") == "bits"]
+        if not devs:
+            self.out("没有位图源（bits 0x0110 挂一个，或命令行 --bits）")
+            return True
+        for d in devs:
+            self.out("位图源：" + "  ".join("%s=%s" % (k, v) for k, v in d.state().items()))
+        self.out("位图现值 0x41A56 = 0x%04X" % m.bus.rd(0x41A56, 2))
         return True
 
     def cmd_flow(self, arg=""):
