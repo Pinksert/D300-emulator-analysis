@@ -1,0 +1,403 @@
+================================================================================================
+一、五个回调槽：判定翻译成「哪几位」
+================================================================================================
+
+槽 0x3F028  vec 0x13  回调 0x0ACBDA
+  0x0ACBDA  st  ri=8                                             
+  0x0ACBDC  st  rs2=1                                            
+  0x0ACBDE  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACBE2  ldi:20  i20=0xAD56C ri=0xC                           
+  0x0ACBE6  call:d  ri=0xC                                       
+  0x0ACBE8  ldi:8  i8=0 ri=4                                     
+  0x0ACBEA  cmp  u4=0 ri=4                                       
+  0x0ACBEC  bne  cc=3 rel9=0x1F                                  
+  0x0ACBEE  ldi:8  i8=2 ri=4                                     
+  0x0ACBF0  ldi:8  i8=0 ri=5                                     
+  0x0ACBF2  ldi:20  i20=0xAD74C ri=6                             
+  0x0ACBF6  ldi:20  i20=0xAD58E ri=0xC                           
+  0x0ACBFA  call  ri=0xC                                         
+  0x0ACBFC  btsth  u4=4 ri=8                                     [0x41A56 掩码 0x40 → bit6] ★
+  0x0ACBFE  beq  cc=2 rel9=0xD                                   
+  0x0ACC00  ldi:8  i8=2 ri=4                                     
+  0x0ACC02  ldi:20  i20=0xAD408 ri=0xC                           
+  0x0ACC06  call:d  ri=0xC                                       
+  0x0ACC08  ldi:8  i8=0 ri=5                                     
+  0x0ACC0A  borh  u4=2 ri=8                                      [0x41A56 掩码 0x20 → bit5] ★
+  0x0ACC0C  bandh  u4=3 ri=8                                     [0x41A56 掩码 0x30 → bit4,bit5] ★
+  0x0ACC0E  ldi:8  i8=8 ri=4                                     
+  0x0ACC10  ldi:8  i8=0 ri=5                                     
+  0x0ACC12  ldi:8  i8=0xE9 ri=0xC                                
+
+槽 0x3F040  vec 0x19  回调 0x0ACAFE
+  0x0ACAFE  st  ri=8                                             
+  0x0ACB00  st  rs2=1                                            
+  0x0ACB02  enter  u10=4                                         
+  0x0ACB04  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACB08  btsth  u4=8 ri=8                                     [0x41A56 掩码 0x80 → bit7] ★
+  0x0ACB0A  beq  cc=2 rel9=0x19                                  
+  0x0ACB0C  mov  rj=0xE ri=4                                     
+  0x0ACB0E  ldi:8  i8=0xEC ri=0xC                                
+  0x0ACB10  add2  m4=4 ri=4                                      
+  0x0ACB12  ldi:8  i8=8 ri=5                                     
+  0x0ACB14  extsb  ri=0xC                                        
+  0x0ACB16  int  u8=0x40                                         
+  0x0ACB18  ld  disp10=0xFF ri=0                                 
+  0x0ACB1A  ldi:8  i8=0x10 ri=1                                  
+  0x0ACB1C  cmp  rj=1 ri=0                                       
+  0x0ACB1E  bne  cc=3 rel9=8                                     
+  0x0ACB20  borh  u4=2 ri=8                                      [0x41A56 掩码 0x20 → bit5] ★
+  0x0ACB22  bandh  u4=3 ri=8                                     [0x41A56 掩码 0x30 → bit4,bit5] ★
+  0x0ACB24  ldi:8  i8=8 ri=4                                     
+  0x0ACB26  ldi:8  i8=0 ri=5                                     
+  0x0ACB28  ldi:8  i8=0xE9 ri=0xC                                
+  0x0ACB2A  extsb  ri=0xC                                        
+  0x0ACB2C  int  u8=0x40                                         
+  0x0ACB2E  bra  cc=0 rel9=0x51                                  
+
+槽 0x3F048  vec 0x1B  回调 0x088A96
+  0x088A96  st  rs2=1                                            
+  0x088A98  dmovh  dir9=0x33                                     
+  0x088A9A  mov  rj=0xD ri=0                                     
+  0x088A9C  ldi:20  i20=0x3F110 ri=0xC                           
+  0x088AA0  ld  rj=0xC ri=1                                      
+  0x088AA2  stb  rj=1 ri=0                                       
+  0x088AA4  ldi:20  i20=0x60 ri=0                                
+  0x088AA8  btstl  u4=8 ri=0                                     [0x00060 掩码 0x08 → bit3] ★
+  0x088AAA  bne  cc=3 rel9=8                                     
+  0x088AAC  ldi:20  i20=0x60 ri=0                                
+  0x088AB0  btsth  u4=1 ri=0                                     [0x00060 掩码 0x10 → bit4] ★
+  0x088AB2  bne  cc=3 rel9=4                                     
+  0x088AB4  ldi:20  i20=0x60 ri=0                                
+  0x088AB8  btsth  u4=2 ri=0                                     [0x00060 掩码 0x20 → bit5] ★
+  0x088ABA  beq  cc=2 rel9=2                                     
+  0x088ABC  call  rel12=0xA                                      
+  0x088ABE  bra  cc=0 rel9=7                                     
+  0x088AC0  ldi:20  i20=0xF4305 ri=0xC                           
+  0x088AC4  ldub  rj=0xC ri=0                                    
+  0x088AC6  ldi:20  i20=0x3FE81 ri=0xC                           
+  0x088ACA  stb  rj=0xC ri=0                                     
+  0x088ACC  call  rel12=0x11                                     
+  0x088ACE  ld  rs2=1                                            
+  0x088AD0  ret                                                  
+
+槽 0x3F074  vec 0x23  回调 0x0A6938
+  0x0A6938  dmovh  dir9=0x43                                     
+  0x0A693A  mov  rj=0xD ri=0                                     
+  0x0A693C  ldi:20  i20=0x3FE64 ri=0xC                           
+  0x0A6940  sth  rj=0xC ri=0                                     
+  0x0A6942  dmovh  dir9=0x43                                     
+  0x0A6944  mov  rj=0xD ri=0                                     
+  0x0A6946  ldi:20  i20=0x3FF98 ri=0xC                           
+  0x0A694A  stb  rj=0xC ri=0                                     
+  0x0A694C  ldi:8  i8=0x20 ri=0xD                                
+  0x0A694E  dmovb  dir8=0x82                                     
+  0x0A6950  ldi:8  i8=4 ri=0xD                                   
+  0x0A6952  dmovb  dir8=0x8E                                     
+  0x0A6954  ldi:8  i8=0 ri=0                                     
+  0x0A6956  mov  rj=0 ri=0xD                                     
+  0x0A6958  dmovb  dir8=0x8F                                     
+  0x0A695A  ldi:8  i8=5 ri=4                                     
+  0x0A695C  ldi:8  i8=0xD9 ri=0xC                                
+  0x0A695E  extsb  ri=0xC                                        
+  0x0A6960  int  u8=0x40                                         
+  0x0A6962  ret                                                  
+
+槽 0x3F078  vec 0x24  回调 0x0AD28E
+  0x0AD28E  stm1  reglist-hi-st=0xF0                             
+  0x0AD290  st  rs2=1                                            
+  0x0AD292  enter  u10=2                                         
+  0x0AD294  ldi:20  i20=0x4184C ri=9                             
+  0x0AD298  ldi:20  i20=0x41A63 ri=0xA                           
+  0x0AD29C  ldi:20  i20=0x4184A ri=8                             
+  0x0AD2A0  lduh  rj=8 ri=0                                      
+  0x0AD2A2  call:d  rel12=0x1DF                                  
+  0x0AD2A4  st  disp10=0xFF ri=0                                 
+  0x0AD2A6  ld  disp10=0xFF ri=0                                 
+  0x0AD2A8  ldi:20  i20=0x41952 ri=0xD                           
+  0x0AD2AC  ldi:20  i20=0x41A5B ri=0xC                           
+  0x0AD2B0  stb  rj=0 ri=4                                       
+  0x0AD2B2  ldub  rj=0xC ri=0                                    
+  0x0AD2B4  ldi:20  i20=0x41848 ri=0xB                           
+  0x0AD2B8  cmp  u4=0 ri=0                                       
+  0x0AD2BA  beq  cc=2 rel9=0xB                                   
+  0x0AD2BC  ldi:20  i20=0x41A5B ri=0xC                           
+  0x0AD2C0  ldub  rj=0xC ri=0                                    
+  0x0AD2C2  cmp  u4=1 ri=0                                       
+  0x0AD2C4  beq  cc=2 rel9=0xA                                   
+  0x0AD2C6  ldi:20  i20=0x41A5B ri=0xC                           
+  0x0AD2CA  ldub  rj=0xC ri=0                                    
+  0x0AD2CC  cmp  u4=2 ri=0                                       
+
+================================================================================================
+二、全段 13 处碰 0x41A56（`ldi #0x41A56` 的地方）
+================================================================================================
+共 13 处引用 → 0x0ACB04(r8) 0x0ACBDE(r8) 0x0ACC36(r8) 0x0ACE94(r8) 0x0ACEBE(r7) 0x0AD31E(r10) 0x0AD356(r10) 0x0AD374(r0) 0x0AD3F6(r0) 0x0AD40C(r6) 0x0AD43A(r8) 0x0AD4D0(r6) 0x0AD662(r4)
+
+--- 0x0ACB04  r8 ---
+  0x0ACB04  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACB08  btsth  u4=8 ri=8                                     [0x41A56 掩码 0x80 → bit7] ★
+  0x0ACB0A  beq  cc=2 rel9=0x19                                  
+  0x0ACB0C  mov  rj=0xE ri=4                                     
+  0x0ACB0E  ldi:8  i8=0xEC ri=0xC                                
+  0x0ACB10  add2  m4=4 ri=4                                      
+  0x0ACB12  ldi:8  i8=8 ri=5                                     
+  0x0ACB14  extsb  ri=0xC                                        
+  0x0ACB16  int  u8=0x40                                         
+  0x0ACB18  ld  disp10=0xFF ri=0                                 
+  0x0ACB1A  ldi:8  i8=0x10 ri=1                                  
+  0x0ACB1C  cmp  rj=1 ri=0                                       
+  0x0ACB1E  bne  cc=3 rel9=8                                     
+  0x0ACB20  borh  u4=2 ri=8                                      [0x41A56 掩码 0x20 → bit5] ★
+  0x0ACB22  bandh  u4=3 ri=8                                     [0x41A56 掩码 0x30 → bit4,bit5] ★
+  0x0ACB24  ldi:8  i8=8 ri=4                                     
+  0x0ACB26  ldi:8  i8=0 ri=5                                     
+  0x0ACB28  ldi:8  i8=0xE9 ri=0xC                                
+  0x0ACB2A  extsb  ri=0xC                                        
+  0x0ACB2C  int  u8=0x40                                         
+  0x0ACB2E  bra  cc=0 rel9=0x51                                  
+  0x0ACB30  ldi:20  i20=0xACAFE ri=4                             
+
+--- 0x0ACBDE  r8 ---
+  0x0ACBDE  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACBE2  ldi:20  i20=0xAD56C ri=0xC                           
+  0x0ACBE6  call:d  ri=0xC                                       
+  0x0ACBE8  ldi:8  i8=0 ri=4                                     
+  0x0ACBEA  cmp  u4=0 ri=4                                       
+  0x0ACBEC  bne  cc=3 rel9=0x1F                                  
+  0x0ACBEE  ldi:8  i8=2 ri=4                                     
+  0x0ACBF0  ldi:8  i8=0 ri=5                                     
+  0x0ACBF2  ldi:20  i20=0xAD74C ri=6                             
+  0x0ACBF6  ldi:20  i20=0xAD58E ri=0xC                           
+  0x0ACBFA  call  ri=0xC                                         
+  0x0ACBFC  btsth  u4=4 ri=8                                     [0x41A56 掩码 0x40 → bit6] ★
+  0x0ACBFE  beq  cc=2 rel9=0xD                                   
+  0x0ACC00  ldi:8  i8=2 ri=4                                     
+  0x0ACC02  ldi:20  i20=0xAD408 ri=0xC                           
+  0x0ACC06  call:d  ri=0xC                                       
+  0x0ACC08  ldi:8  i8=0 ri=5                                     
+  0x0ACC0A  borh  u4=2 ri=8                                      [0x41A56 掩码 0x20 → bit5] ★
+  0x0ACC0C  bandh  u4=3 ri=8                                     [0x41A56 掩码 0x30 → bit4,bit5] ★
+  0x0ACC0E  ldi:8  i8=8 ri=4                                     
+  0x0ACC10  ldi:8  i8=0 ri=5                                     
+  0x0ACC12  ldi:8  i8=0xE9 ri=0xC                                
+
+--- 0x0ACC36  r8 ---
+  0x0ACC36  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACC3A  ldi:20  i20=0x3F5D4 ri=9                             
+  0x0ACC3E  ldi:20  i20=0x41A5E ri=0xA                           
+  0x0ACC42  ldi:20  i20=0x41A60 ri=0xB                           
+  0x0ACC46  ldi:8  i8=0 ri=0                                     
+  0x0ACC48  ldi:20  i20=0x41A5B ri=0xC                           
+  0x0ACC4C  stb  rj=0xC ri=0                                     
+  0x0ACC4E  stb  rj=0xA ri=0                                     
+  0x0ACC50  bandl  u4=0 ri=8                                     [0x41A56 掩码 0x00 → 无] ★
+  0x0ACC52  mov  rj=8 ri=0                                       
+  0x0ACC54  add  u4=1 ri=0                                       
+  0x0ACC56  bandh  u4=7 ri=0                                     [r0? 掩码 0x70 → bit4,bit5,bit6]
+  0x0ACC58  mov  rj=8 ri=0                                       
+  0x0ACC5A  add  u4=1 ri=0                                       
+  0x0ACC5C  bandh  u4=0xB ri=0                                   [r0? 掩码 0xB0 → bit4,bit5,bit7]
+  0x0ACC5E  ldi:8  i8=0 ri=0                                     
+  0x0ACC60  ldi:20  i20=0x41A63 ri=0xC                           
+  0x0ACC64  stb  rj=0xC ri=0                                     
+  0x0ACC66  call  rel12=0xAC                                     
+  0x0ACC68  ldi:20  i20=0xAD5EA ri=0xC                           
+  0x0ACC6C  call:d  ri=0xC                                       
+  0x0ACC6E  ldi:8  i8=1 ri=4                                     
+
+--- 0x0ACE94  r8 ---
+  0x0ACE94  ldi:20  i20=0x41A56 ri=8                             
+  0x0ACE98  cmp  u4=0 ri=0                                       
+  0x0ACE9A  bne  cc=3 rel9=4                                     
+  0x0ACE9C  ldub  rj=9 ri=0                                      
+  0x0ACE9E  cmp  u4=0 ri=0                                       
+  0x0ACEA0  bne  cc=3 rel9=1                                     
+  0x0ACEA2  borl  u4=0xA ri=8                                    [0x41A56 掩码 0x0A → bit1,bit3] ★
+  0x0ACEA4  leave                                                
+  0x0ACEA6  ld  rs2=1                                            
+  0x0ACEA8  ldm1  reglist-hi-ld=3                                
+  0x0ACEAA  ret                                                  
+
+--- 0x0ACEBE  r7 ---
+  0x0ACEBE  ldi:20  i20=0x41A56 ri=7                             
+  0x0ACEC2  cmp  u4=0 ri=0                                       
+  0x0ACEC4  bne  cc=3 rel9=0x11                                  
+  0x0ACEC6  ldub  rj=5 ri=0                                      
+  0x0ACEC8  cmp  u4=0 ri=0                                       
+  0x0ACECA  beq  cc=2 rel9=4                                     
+  0x0ACECC  ldub  rj=5 ri=0                                      
+  0x0ACECE  ldi:8  i8=0x4F ri=1                                  
+  0x0ACED0  cmp  rj=1 ri=0                                       
+  0x0ACED2  ble:d  cc=0xC rel9=5                                 
+  0x0ACED4  ldi:8  i8=0 ri=0                                     
+  0x0ACED6  stb  rj=4 ri=0                                       
+  0x0ACED8  stb  rj=6 ri=0                                       
+  0x0ACEDA  borl  u4=0xA ri=7                                    [0x41A56 掩码 0x0A → bit1,bit3] ★
+  0x0ACEDC  bra  cc=0 rel9=9                                     
+  0x0ACEDE  ldi:8  i8=2 ri=0                                     
+  0x0ACEE0  stb  rj=4 ri=0                                       
+  0x0ACEE2  ldub  rj=5 ri=0                                      
+  0x0ACEE4  bra:d  cc=0 rel9=5                                   
+  0x0ACEE6  stb  rj=6 ri=0                                       
+  0x0ACEE8  ldi:8  i8=1 ri=0                                     
+  0x0ACEEA  stb  rj=4 ri=0                                       
+
+--- 0x0AD31E  r10 ---
+  0x0AD31E  ldi:20  i20=0x41A56 ri=0xA                           
+  0x0AD322  borl  u4=9 ri=0xA                                    [0x41A56 掩码 0x09 → bit0,bit3] ★
+  0x0AD324  bra  cc=0 rel9=0x1B                                  
+  0x0AD326  lduh  rj=8 ri=0                                      
+  0x0AD328  cmp  u4=1 ri=0                                       
+  0x0AD32A  bne  cc=3 rel9=6                                     
+  0x0AD32C  lduh  rj=9 ri=0                                      
+  0x0AD32E  add  rj=4 ri=0                                       
+  0x0AD330  sth  rj=9 ri=0                                       
+  0x0AD332  lduh  rj=0xB ri=0                                    
+  0x0AD334  add  rj=4 ri=0                                       
+  0x0AD336  sth  rj=0xB ri=0                                     
+  0x0AD338  lduh  rj=8 ri=0                                      
+  0x0AD33A  lduh  rj=0xB ri=1                                    
+  0x0AD33C  cmp  rj=1 ri=0                                       
+  0x0AD33E  bgt  cc=0xD rel9=0xE                                 
+  0x0AD340  ldub  rj=0xA ri=0                                    
+  0x0AD342  add  rj=4 ri=0                                       
+  0x0AD344  stb  rj=0xA ri=0                                     
+  0x0AD346  lduh  rj=8 ri=0                                      
+  0x0AD348  lduh  rj=0xB ri=1                                    
+  0x0AD34A  cmp  rj=1 ri=0                                       
+
+--- 0x0AD356  r10 ---
+  0x0AD356  ldi:20  i20=0x41A56 ri=0xA                           
+  0x0AD35A  borl  u4=9 ri=0xA                                    [0x41A56 掩码 0x09 → bit0,bit3] ★
+  0x0AD35C  lduh  rj=8 ri=0                                      
+  0x0AD35E  add  u4=1 ri=0                                       
+  0x0AD360  sth  rj=8 ri=0                                       
+  0x0AD362  lduh  rj=9 ri=0                                      
+  0x0AD364  cmp  u4=0 ri=0                                       
+  0x0AD366  beq  cc=2 rel9=0xE                                   
+  0x0AD368  lduh  rj=9 ri=0                                      
+  0x0AD36A  add2  m4=0xF ri=0                                    
+  0x0AD36C  sth  rj=9 ri=0                                       
+  0x0AD36E  lduh  rj=9 ri=0                                      
+  0x0AD370  cmp  u4=0 ri=0                                       
+  0x0AD372  beq  cc=2 rel9=8                                     
+  0x0AD374  ldi:20  i20=0x41A56 ri=0                             
+  0x0AD378  btstl  u4=1 ri=0                                     [0x41A56 掩码 0x01 → bit0] ★
+  0x0AD37A  bne  cc=3 rel9=4                                     
+  0x0AD37C  ldi:20  i20=0x41A57 ri=0                             
+  0x0AD380  btsth  u4=4 ri=0                                     [0x41A57 掩码 0x40 → bit6] ★
+  0x0AD382  beq  cc=2 rel9=0xD                                   
+  0x0AD384  ldi:8  i8=2 ri=4                                     
+  0x0AD386  call:d  rel12=0x40                                   
+
+--- 0x0AD374  r0 ---
+  0x0AD374  ldi:20  i20=0x41A56 ri=0                             
+  0x0AD378  btstl  u4=1 ri=0                                     [0x41A56 掩码 0x01 → bit0] ★
+  0x0AD37A  bne  cc=3 rel9=4                                     
+  0x0AD37C  ldi:20  i20=0x41A57 ri=0                             
+  0x0AD380  btsth  u4=4 ri=0                                     [0x41A57 掩码 0x40 → bit6] ★
+  0x0AD382  beq  cc=2 rel9=0xD                                   
+  0x0AD384  ldi:8  i8=2 ri=4                                     
+  0x0AD386  call:d  rel12=0x40                                   
+  0x0AD388  ldi:8  i8=0 ri=5                                     
+  0x0AD38A  ldi:8  i8=2 ri=4                                     
+  0x0AD38C  ldi:8  i8=0 ri=5                                     
+  0x0AD38E  ldi:20  i20=0xAD74C ri=6                             
+  0x0AD392  call  rel12=0xFD                                     
+  0x0AD394  ldi:8  i8=8 ri=4                                     
+  0x0AD396  ldi:8  i8=0xD9 ri=0xC                                
+  0x0AD398  extsb  ri=0xC                                        
+  0x0AD39A  int  u8=0x40                                         
+  0x0AD39C  bra  cc=0 rel9=0x11                                  
+  0x0AD39E  ldi:20  i20=0x3F8E9 ri=0                             
+  0x0AD3A2  btsth  u4=2 ri=0                                     [0x3F8E9 掩码 0x20 → bit5]
+  0x0AD3A4  ldi:20  i20=0x3F402 ri=0                             
+  0x0AD3A8  beq  cc=2 rel9=2                                     
+
+--- 0x0AD3F6  r0 ---
+  0x0AD3F6  ldi:20  i20=0x41A56 ri=0                             
+  0x0AD3FA  borl  u4=8 ri=0                                      [0x41A56 掩码 0x08 → bit3] ★
+  0x0AD3FC  ldi:8  i8=0xD9 ri=0xC                                
+  0x0AD3FE  ldi:8  i8=8 ri=4                                     
+  0x0AD400  extsb  ri=0xC                                        
+  0x0AD402  int  u8=0x40                                         
+  0x0AD404  ld  rs2=1                                            
+  0x0AD406  ret                                                  
+
+--- 0x0AD40C  r6 ---
+  0x0AD40C  ldi:20  i20=0x41A56 ri=6                             
+  0x0AD410  cmp  u4=2 ri=4                                       
+  0x0AD412  bne:d  cc=3 rel9=7                                   
+  0x0AD414  add  u4=1 ri=6                                       
+  0x0AD416  bandh  u4=0xE ri=6                                   [0x41A56 掩码 0xE0 → bit5,bit6,bit7] ★
+  0x0AD418  ldi:20  i20=0xAD74C ri=4                             
+  0x0AD41C  call:d  rel12=0x12F                                  
+  0x0AD41E  ldi:8  i8=0 ri=5                                     
+  0x0AD420  bra  cc=0 rel9=4                                     
+  0x0AD422  borh  u4=1 ri=6                                      [0x41A56 掩码 0x10 → bit4] ★
+  0x0AD424  ldi:20  i20=0xAD430 ri=4                             
+  0x0AD428  call  rel12=0x129                                    
+  0x0AD42A  leave                                                
+  0x0AD42C  ld  rs2=1                                            
+  0x0AD42E  ret                                                  
+
+--- 0x0AD43A  r8 ---
+  0x0AD43A  ldi:20  i20=0x41A56 ri=8                             
+  0x0AD43E  ldi:20  i20=0x41A60 ri=0xA                           
+  0x0AD442  borl  u4=0xC ri=8                                    [0x41A56 掩码 0x0C → bit2,bit3] ★
+  0x0AD444  ldi:8  i8=2 ri=4                                     
+  0x0AD446  call:d  rel12=0x7E0                                  
+  0x0AD448  ldi:8  i8=0 ri=5                                     
+  0x0AD44A  ldi:20  i20=0xAD74C ri=6                             
+  0x0AD44E  ldi:8  i8=2 ri=4                                     
+  0x0AD450  call:d  rel12=0x9E                                   
+  0x0AD452  ldi:8  i8=0 ri=5                                     
+  0x0AD454  mov  rj=0xE ri=4                                     
+  0x0AD456  ldi:8  i8=0xEC ri=0xC                                
+  0x0AD458  add2  m4=4 ri=4                                      
+  0x0AD45A  ldi:8  i8=8 ri=5                                     
+  0x0AD45C  extsb  ri=0xC                                        
+  0x0AD45E  int  u8=0x40                                         
+  0x0AD460  ld  disp10=0xFF ri=0                                 
+  0x0AD462  ldi:8  i8=0x10 ri=1                                  
+  0x0AD464  cmp  rj=1 ri=0                                       
+  0x0AD466  bne  cc=3 rel9=0x2A                                  
+  0x0AD468  bandh  u4=0xB ri=8                                   [0x41A56 掩码 0xB0 → bit4,bit5,bit7] ★
+  0x0AD46A  call:d  rel12=0x80                                   
+
+--- 0x0AD4D0  r6 ---
+  0x0AD4D0  ldi:20  i20=0x41A56 ri=6                             
+  0x0AD4D4  cmp  u4=2 ri=4                                       
+  0x0AD4D6  bne:d  cc=3 rel9=7                                   
+  0x0AD4D8  add  u4=1 ri=6                                       
+  0x0AD4DA  bandl  u4=7 ri=6                                     [0x41A56 掩码 0x07 → bit0,bit1,bit2] ★
+  0x0AD4DC  ldi:20  i20=0xAD74C ri=4                             
+  0x0AD4E0  call:d  rel12=0xCD                                   
+  0x0AD4E2  ldi:8  i8=0 ri=5                                     
+  0x0AD4E4  bra  cc=0 rel9=4                                     
+  0x0AD4E6  borl  u4=8 ri=6                                      [0x41A56 掩码 0x08 → bit3] ★
+  0x0AD4E8  ldi:20  i20=0xAD4F4 ri=4                             
+  0x0AD4EC  call  rel12=0xC7                                     
+  0x0AD4EE  leave                                                
+  0x0AD4F0  ld  rs2=1                                            
+  0x0AD4F2  ret                                                  
+
+--- 0x0AD662  r4 ---
+  0x0AD662  ldi:20  i20=0x41A56 ri=4                             
+  0x0AD666  ldi:20  i20=0x90 ri=0                                
+  0x0AD66A  btstl  u4=8 ri=0                                     [0x00090 掩码 0x08 → bit3]
+  0x0AD66C  beq  cc=2 rel9=3                                     
+  0x0AD66E  borl  u4=8 ri=4                                      [0x41A56 掩码 0x08 → bit3] ★
+  0x0AD670  add  u4=1 ri=4                                       
+  0x0AD672  borh  u4=8 ri=4                                      [0x41A56 掩码 0x80 → bit7] ★
+  0x0AD674  dmovh  dir9=0x4B                                     
+  0x0AD676  mov  rj=0xD ri=4                                     
+  0x0AD678  ret:d                                                
+
+================================================================================================
+三、结论对照
+================================================================================================
+V14 报的是「bit4 与 bit8 必须同时置」。按掩码语义重解，
+`btsth #1` = 掩码 0x10 = bit4，`btstl #1`(于 0x41A57) = 掩码 0x01 = 字内 bit8。
+也就是说：位号没变，**只是过去把掩码当成了位号**；`btstl #2` 之所以对应 bit1，
+因为它本来就是掩码 0x02。
