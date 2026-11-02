@@ -63,6 +63,8 @@ def build_parser():
                         "（只给 MASK 时向量默认 0x13,0x19、周期 2048）")
     p.add_argument("--flow", action="store_true",
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
+    p.add_argument("--cov", action="store_true",
+                   help="记录覆盖率（monitor 的 cov 看；找「一次都没跑过的代码段」用）")
     p.add_argument("--realos", type=lambda x: int(x, 0), default=None,
                    metavar="TASKID",
                    help="V10：跑固件自带的 REALOS 并把首次派发改给这个任务号（如 --realos 1）。"
@@ -137,6 +139,8 @@ def main(argv=None):
     except Exception as e:                                   # noqa: BLE001
         print(f"固件加载失败：{e}", file=sys.stderr)
         return 2
+    if args.cov:
+        m.enable_cov()
     if args.events is not None:
         m.enable_events(period=args.events)
     if args.bits:
