@@ -215,6 +215,10 @@ class Fr:
         self.int_hook = None                           # 被动观察钩子：hook(cpu, num, pc)，不改变执行
         self.int40 = 0                                 # 执行到的 int #0x40 条数（含被钩子截住的）
         self.call_hook = None                          # 子程序调用钩子：hook(cpu, target, pc) -> True 表示打桩
+        # 覆盖率（V15）：buf[(pc - base) >> 1] = 1。None = 关闭，代价是一次比较。
+        self.cov_buf = None
+        self.cov_base = 0
+        self.cov_end = 0
 
     # ---- PS ----
     # 布局按富士通 CM71-00104-3E p29（与 NikonEmulator 的 FrCPUState.getPS() 一致）：
@@ -369,6 +373,9 @@ class Fr:
 
     def _exec_one(self):
         pc = self.pc
+        cb = self.cov_buf
+        if cb is not None and self.cov_base <= pc < self.cov_end:
+            cb[(pc - self.cov_base) >> 1] = 1
         ins = self.fetch(pc)
         if ins is None:
             self.halted = True
