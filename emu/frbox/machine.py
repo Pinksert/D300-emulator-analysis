@@ -150,6 +150,7 @@ class Machine:
         self.int_hook = None             # 被动观察 int #0x40 的钩子（见 attach_int_hook）
         self.flow = None                 # 服务调用流水（见 attach_flow / frbox.flow）
         self.event = None                # 完成位+中断事件源（见 enable_events / frbox.dev_evt）
+        self.cov = None                  # 覆盖率（见 enable_cov / frbox.cover，V15）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -189,6 +190,8 @@ class Machine:
             c.svc_hook = self.kernel
         if self.int_hook is not None:    # 被动观察钩子同样不能在换 CPU 后丢
             c.int_hook = self.int_hook
+        if self.cov is not None:         # 覆盖率缓冲区换 CPU 后要重绑
+            self.cov.bind(c)
         for d in self.devices:
             d.reset()
         self.icu.reset()
@@ -496,6 +499,13 @@ class Machine:
         dev = attach_bits(self, **kw)
         dev.trace = self.trace
         return dev
+
+    def enable_cov(self, label=""):
+        """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
+        from .cover import attach as attach_cov
+        cov = attach_cov(self, label)
+        self.cov = cov
+        return cov
 
     def enable_dispatch(self):
         """打开直接页 0x44 的「请求调度」建模（见 dev_dispatch.py）。
