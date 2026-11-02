@@ -485,6 +485,18 @@ class Machine:
         self.event.trace = self.trace
         return self.event
 
+    def enable_bits(self, **kw):
+        """挂「事件位图 + 中断」源（见 dev_bits.py，V14）。
+
+        V13 的 `enable_events` 只管一个状态位（0x80/bit3）；这一路管的是软件位图
+        `0x41A56` —— 五个回调槽里有三个靠它判定「有没有事件」。位图位要**成组**
+        置（bit4+bit8）才推得动 vec 0x19 那条链，参见 probe/exp_evt_matrix.py。
+        """
+        from .dev_bits import attach as attach_bits
+        dev = attach_bits(self, **kw)
+        dev.trace = self.trace
+        return dev
+
     def enable_dispatch(self):
         """打开直接页 0x44 的「请求调度」建模（见 dev_dispatch.py）。
 
