@@ -1,0 +1,417 @@
+==============================================================================
+全 A 段对 0x41A56 位图的操作：13 处
+==============================================================================
+0x0ACB08  test  bit8   btsth    op1=8, op2=9, #0x8, r8
+0x0ACBFC  test  bit4   btsth    op1=8, op2=9, #0x4, r8
+0x0ACC50  test  bit0   bandl    op1=8, op2=0, #0x0, r8
+0x0ACEA2  set   bit10  borl     op1=9, op2=0, #0xA, r8
+0x0ACEDA  set   bit10  borl     op1=9, op2=0, #0xA, r7
+0x0AD322  set   bit9   borl     op1=9, op2=0, #0x9, r10
+0x0AD35A  set   bit9   borl     op1=9, op2=0, #0x9, r10
+0x0AD378  test  bit1   btstl    op1=8, op2=8, #0x1, r0
+0x0AD3FA  set   bit8   borl     op1=9, op2=0, #0x8, r0
+0x0AD416  test  bit14  bandh    op1=8, op2=1, #0xE, r6
+0x0AD442  set   bit12  borl     op1=9, op2=0, #0xC, r8
+0x0AD4DA  test  bit7   bandl    op1=8, op2=0, #0x7, r6
+0x0AD66E  set   bit8   borl     op1=9, op2=0, #0x8, r4
+
+==============================================================================
+逐处上下文（看它在哪个函数里）
+==============================================================================
+------------------------------------------------------------------------------
+0x0ACB08 test bit8
+  000ACAE8  9b30f82b       ldi:20   op1=9, #0x3F82B, op2=11, r0
+  000ACAEC  9110           borh     op1=9, op2=1, #0x1, r0
+  000ACAEE  c064           ldi:8    op1=12, #0x6, r4
+  000ACAF0  9b054000       ldi:20   op1=9, #0x4000, op2=11, r5
+  000ACAF4  cd0c           ldi:8    op1=12, #0xD0, r12
+  000ACAF6  978c           extsb    op1=9, op2=7, op3=8, r12
+  000ACAF8  1f40           int      op1=1, op2=15, #0x40
+  000ACAFA  0781           ld       op1=0, op2=7, op3=8, dr1
+  000ACAFC  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000ACAFE  1708           st       op1=1, op2=7, op3=0, r8
+  000ACB00  1781           st       op1=1, op2=7, op3=8, dr1
+  000ACB02  0f04           enter    op1=0, op2=15, #16
+  000ACB04  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8
+  000ACB08  8988           btsth    op1=8, op2=9, #0x8, r8 <<<
+  000ACB0A  e219           beq      op1=14, cc=2, *50
+  000ACB0C  8be4           mov      op1=8, op2=11, r14, r4
+  000ACB0E  cecc           ldi:8    op1=12, #0xEC, r12
+  000ACB10  a544           add2     op1=10, op2=5, #-12, r4
+  000ACB12  c085           ldi:8    op1=12, #0x8, r5
+  000ACB14  978c           extsb    op1=9, op2=7, op3=8, r12
+  000ACB16  1f40           int      op1=1, op2=15, #0x40
+  000ACB18  2ff0           ld       op1=2, #1020, r0
+  000ACB1A  c101           ldi:8    op1=12, #0x10, r1
+  000ACB1C  aa10           cmp      op1=10, op2=10, r1, r0
+  000ACB1E  e308           bne      op1=14, cc=3, *16
+  000ACB20  9128           borh     op1=9, op2=1, #0x2, r8
+  000ACB22  8138           bandh    op1=8, op2=1, #0x3, r8
+  000ACB24  c084           ldi:8    op1=12, #0x8, r4
+  000ACB26  c005           ldi:8    op1=12, #0x0, r5
+------------------------------------------------------------------------------
+0x0ACBFC test bit4
+  000ACBDC  1781           st       op1=1, op2=7, op3=8, dr1
+  000ACBDE  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8
+  000ACBE2  9bacd56c       ldi:20   op1=9, #0xAD56C, op2=11, r12
+  000ACBE6  9f1c           call:d   op1=9, op2=15, op3=1, r12
+  000ACBE8  c004           ldi:8    op1=12, #0x0, r4
+  000ACBEA  a804           cmp      op1=10, op2=8, #0x0, r4
+  000ACBEC  e31f           bne      op1=14, cc=3, *62
+  000ACBEE  c024           ldi:8    op1=12, #0x2, r4
+  000ACBF0  c005           ldi:8    op1=12, #0x0, r5
+  000ACBF2  9ba6d74c       ldi:20   op1=9, #0xAD74C, op2=11, r6
+  000ACBF6  9bacd58e       ldi:20   op1=9, #0xAD58E, op2=11, r12
+  000ACBFA  971c           call     op1=9, op2=7, op3=1, r12
+  000ACBFC  8948           btsth    op1=8, op2=9, #0x4, r8 <<<
+  000ACBFE  e20d           beq      op1=14, cc=2, *26
+  000ACC00  c024           ldi:8    op1=12, #0x2, r4
+  000ACC02  9bacd408       ldi:20   op1=9, #0xAD408, op2=11, r12
+  000ACC06  9f1c           call:d   op1=9, op2=15, op3=1, r12
+  000ACC08  c005           ldi:8    op1=12, #0x0, r5
+  000ACC0A  9128           borh     op1=9, op2=1, #0x2, r8
+  000ACC0C  8138           bandh    op1=8, op2=1, #0x3, r8
+  000ACC0E  c084           ldi:8    op1=12, #0x8, r4
+  000ACC10  c005           ldi:8    op1=12, #0x0, r5
+  000ACC12  ce9c           ldi:8    op1=12, #0xE9, r12
+  000ACC14  978c           extsb    op1=9, op2=7, op3=8, r12
+  000ACC16  1f40           int      op1=1, op2=15, #0x40
+  000ACC18  e009           bra      op1=14, cc=0, *18
+  000ACC1A  9b30f5d4       ldi:20   op1=9, #0x3F5D4, op2=11, r0
+------------------------------------------------------------------------------
+0x0ACC50 test bit0
+  000ACC30  0708           ld       op1=0, op2=7, op3=0, r8
+  000ACC32  8ff0           stm1     op1=8, op2=15, {r12,r13,r14,r15}
+  000ACC34  1781           st       op1=1, op2=7, op3=8, dr1
+  000ACC36  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8
+  000ACC3A  9b39f5d4       ldi:20   op1=9, #0x3F5D4, op2=11, r9
+  000ACC3E  9b4a1a5e       ldi:20   op1=9, #0x41A5E, op2=11, r10
+  000ACC42  9b4b1a60       ldi:20   op1=9, #0x41A60, op2=11, r11
+  000ACC46  c000           ldi:8    op1=12, #0x0, r0
+  000ACC48  9b4c1a5b       ldi:20   op1=9, #0x41A5B, op2=11, r12
+  000ACC4C  16c0           stb      op1=1, op2=6, r12, r0
+  000ACC4E  16a0           stb      op1=1, op2=6, r10, r0
+  000ACC50  8008           bandl    op1=8, op2=0, #0x0, r8 <<<
+  000ACC52  8b80           mov      op1=8, op2=11, r8, r0
+  000ACC54  a410           add      op1=10, op2=4, #0x1, r0
+  000ACC56  8170           bandh    op1=8, op2=1, #0x7, r0
+  000ACC58  8b80           mov      op1=8, op2=11, r8, r0
+  000ACC5A  a410           add      op1=10, op2=4, #0x1, r0
+  000ACC5C  81b0           bandh    op1=8, op2=1, #0xB, r0
+  000ACC5E  c000           ldi:8    op1=12, #0x0, r0
+  000ACC60  9b4c1a63       ldi:20   op1=9, #0x41A63, op2=11, r12
+  000ACC64  16c0           stb      op1=1, op2=6, r12, r0
+  000ACC66  d0ac           call     op1=13, op5=0, *344
+  000ACC68  9bacd5ea       ldi:20   op1=9, #0xAD5EA, op2=11, r12
+  000ACC6C  9f1c           call:d   op1=9, op2=15, op3=1, r12
+  000ACC6E  c014           ldi:8    op1=12, #0x1, r4
+------------------------------------------------------------------------------
+0x0ACEA2 set bit10
+  000ACE82  978c           extsb    op1=9, op2=7, op3=8, r12
+  000ACE84  1f40           int      op1=1, op2=15, #0x40
+  000ACE86  9b4c1952       ldi:20   op1=9, #0x41952, op2=11, r12
+  000ACE8A  06c0           ldub     op1=0, op2=6, r12, r0
+  000ACE8C  9b4c1a5c       ldi:20   op1=9, #0x41A5C, op2=11, r12
+  000ACE90  1690           stb      op1=1, op2=6, r9, r0
+  000ACE92  06c0           ldub     op1=0, op2=6, r12, r0
+  000ACE94  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8
+  000ACE98  a800           cmp      op1=10, op2=8, #0x0, r0
+  000ACE9A  e304           bne      op1=14, cc=3, *8
+  000ACE9C  0690           ldub     op1=0, op2=6, r9, r0
+  000ACE9E  a800           cmp      op1=10, op2=8, #0x0, r0
+  000ACEA0  e301           bne      op1=14, cc=3, *2
+  000ACEA2  90a8           borl     op1=9, op2=0, #0xA, r8 <<<
+  000ACEA4  9f90           leave    op1=9, op2=15, op3=9, op4=0
+  000ACEA6  0781           ld       op1=0, op2=7, op3=8, dr1
+  000ACEA8  8d03           ldm1     op1=8, op2=13, {r8,r9}
+  000ACEAA  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000ACEAC  9b441a5b       ldi:20   op1=9, #0x41A5B, op2=11, r4
+  000ACEB0  9b451a5d       ldi:20   op1=9, #0x41A5D, op2=11, r5
+  000ACEB4  9b461a5e       ldi:20   op1=9, #0x41A5E, op2=11, r6
+  000ACEB8  9b421a5c       ldi:20   op1=9, #0x41A5C, op2=11, r2
+  000ACEBC  0620           ldub     op1=0, op2=6, r2, r0
+  000ACEBE  9b471a56       ldi:20   op1=9, #0x41A56, op2=11, r7
+------------------------------------------------------------------------------
+0x0ACEDA set bit10
+  000ACEBA  1a5c           dmovb    op1=1, op2=10, #92
+  000ACEBC  0620           ldub     op1=0, op2=6, r2, r0
+  000ACEBE  9b471a56       ldi:20   op1=9, #0x41A56, op2=11, r7
+  000ACEC2  a800           cmp      op1=10, op2=8, #0x0, r0
+  000ACEC4  e311           bne      op1=14, cc=3, *34
+  000ACEC6  0650           ldub     op1=0, op2=6, r5, r0
+  000ACEC8  a800           cmp      op1=10, op2=8, #0x0, r0
+  000ACECA  e204           beq      op1=14, cc=2, *8
+  000ACECC  0650           ldub     op1=0, op2=6, r5, r0
+  000ACECE  c4f1           ldi:8    op1=12, #0x4F, r1
+  000ACED0  aa10           cmp      op1=10, op2=10, r1, r0
+  000ACED2  fc05           ble:d    op1=15, cc=12, *10
+  000ACED4  c000           ldi:8    op1=12, #0x0, r0
+  000ACED6  1640           stb      op1=1, op2=6, r4, r0
+  000ACED8  1660           stb      op1=1, op2=6, r6, r0
+  000ACEDA  90a7           borl     op1=9, op2=0, #0xA, r7 <<<
+  000ACEDC  e009           bra      op1=14, cc=0, *18
+  000ACEDE  c020           ldi:8    op1=12, #0x2, r0
+  000ACEE0  1640           stb      op1=1, op2=6, r4, r0
+  000ACEE2  0650           ldub     op1=0, op2=6, r5, r0
+  000ACEE4  f005           bra:d    op1=15, cc=0, *10
+  000ACEE6  1660           stb      op1=1, op2=6, r6, r0
+  000ACEE8  c010           ldi:8    op1=12, #0x1, r0
+  000ACEEA  1640           stb      op1=1, op2=6, r4, r0
+  000ACEEC  0620           ldub     op1=0, op2=6, r2, r0
+  000ACEEE  1660           stb      op1=1, op2=6, r6, r0
+  000ACEF0  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000ACEF2  8ff0           stm1     op1=8, op2=15, {r12,r13,r14,r15}
+  000ACEF4  1781           st       op1=1, op2=7, op3=8, dr1
+  000ACEF6  0f02           enter    op1=0, op2=15, #8
+  000ACEF8  9b4a184e       ldi:20   op1=9, #0x4184E, op2=11, r10
+------------------------------------------------------------------------------
+0x0AD322 set bit9
+  000AD302  ec2c           ble      op1=14, cc=12, *88
+  000AD304  9b4c1844       ldi:20   op1=9, #0x41844, op2=11, r12
+  000AD308  05c0           lduh     op1=0, op2=5, r12, r0
+  000AD30A  05b1           lduh     op1=0, op2=5, r11, r1
+  000AD30C  a610           add      op1=10, op2=6, r1, r0
+  000AD30E  0581           lduh     op1=0, op2=5, r8, r1
+  000AD310  a5f0           add2     op1=10, op2=5, #-1, r0
+  000AD312  aa01           cmp      op1=10, op2=10, r0, r1
+  000AD314  e323           bne      op1=14, cc=3, *70
+  000AD316  06a0           ldub     op1=0, op2=6, r10, r0
+  000AD318  cff1           ldi:8    op1=12, #0xFF, r1
+  000AD31A  aa10           cmp      op1=10, op2=10, r1, r0
+  000AD31C  e21f           beq      op1=14, cc=2, *62
+  000AD31E  9b4a1a56       ldi:20   op1=9, #0x41A56, op2=11, r10
+  000AD322  909a           borl     op1=9, op2=0, #0x9, r10 <<<
+  000AD324  e01b           bra      op1=14, cc=0, *54
+  000AD326  0580           lduh     op1=0, op2=5, r8, r0
+  000AD328  a810           cmp      op1=10, op2=8, #0x1, r0
+  000AD32A  e306           bne      op1=14, cc=3, *12
+  000AD32C  0590           lduh     op1=0, op2=5, r9, r0
+  000AD32E  a640           add      op1=10, op2=6, r4, r0
+  000AD330  1590           sth      op1=1, op2=5, r9, r0
+  000AD332  05b0           lduh     op1=0, op2=5, r11, r0
+  000AD334  a640           add      op1=10, op2=6, r4, r0
+  000AD336  15b0           sth      op1=1, op2=5, r11, r0
+  000AD338  0580           lduh     op1=0, op2=5, r8, r0
+  000AD33A  05b1           lduh     op1=0, op2=5, r11, r1
+  000AD33C  aa10           cmp      op1=10, op2=10, r1, r0
+  000AD33E  ed0e           bgt      op1=14, cc=13, *28
+  000AD340  06a0           ldub     op1=0, op2=6, r10, r0
+------------------------------------------------------------------------------
+0x0AD35A set bit9
+  000AD33A  05b1           lduh     op1=0, op2=5, r11, r1
+  000AD33C  aa10           cmp      op1=10, op2=10, r1, r0
+  000AD33E  ed0e           bgt      op1=14, cc=13, *28
+  000AD340  06a0           ldub     op1=0, op2=6, r10, r0
+  000AD342  a640           add      op1=10, op2=6, r4, r0
+  000AD344  16a0           stb      op1=1, op2=6, r10, r0
+  000AD346  0580           lduh     op1=0, op2=5, r8, r0
+  000AD348  05b1           lduh     op1=0, op2=5, r11, r1
+  000AD34A  aa10           cmp      op1=10, op2=10, r1, r0
+  000AD34C  e307           bne      op1=14, cc=3, *14
+  000AD34E  06a0           ldub     op1=0, op2=6, r10, r0
+  000AD350  cff1           ldi:8    op1=12, #0xFF, r1
+  000AD352  aa10           cmp      op1=10, op2=10, r1, r0
+  000AD354  e203           beq      op1=14, cc=2, *6
+  000AD356  9b4a1a56       ldi:20   op1=9, #0x41A56, op2=11, r10
+  000AD35A  909a           borl     op1=9, op2=0, #0x9, r10 <<<
+  000AD35C  0580           lduh     op1=0, op2=5, r8, r0
+  000AD35E  a410           add      op1=10, op2=4, #0x1, r0
+  000AD360  1580           sth      op1=1, op2=5, r8, r0
+  000AD362  0590           lduh     op1=0, op2=5, r9, r0
+  000AD364  a800           cmp      op1=10, op2=8, #0x0, r0
+  000AD366  e20e           beq      op1=14, cc=2, *28
+  000AD368  0590           lduh     op1=0, op2=5, r9, r0
+  000AD36A  a5f0           add2     op1=10, op2=5, #-1, r0
+  000AD36C  1590           sth      op1=1, op2=5, r9, r0
+  000AD36E  0590           lduh     op1=0, op2=5, r9, r0
+  000AD370  a800           cmp      op1=10, op2=8, #0x0, r0
+  000AD372  e208           beq      op1=14, cc=2, *16
+  000AD374  9b401a56       ldi:20   op1=9, #0x41A56, op2=11, r0
+  000AD378  8810           btstl    op1=8, op2=8, #0x1, r0
+------------------------------------------------------------------------------
+0x0AD378 test bit1
+  000AD358  1a56           dmovb    op1=1, op2=10, #86
+  000AD35A  909a           borl     op1=9, op2=0, #0x9, r10
+  000AD35C  0580           lduh     op1=0, op2=5, r8, r0
+  000AD35E  a410           add      op1=10, op2=4, #0x1, r0
+  000AD360  1580           sth      op1=1, op2=5, r8, r0
+  000AD362  0590           lduh     op1=0, op2=5, r9, r0
+  000AD364  a800           cmp      op1=10, op2=8, #0x0, r0
+  000AD366  e20e           beq      op1=14, cc=2, *28
+  000AD368  0590           lduh     op1=0, op2=5, r9, r0
+  000AD36A  a5f0           add2     op1=10, op2=5, #-1, r0
+  000AD36C  1590           sth      op1=1, op2=5, r9, r0
+  000AD36E  0590           lduh     op1=0, op2=5, r9, r0
+  000AD370  a800           cmp      op1=10, op2=8, #0x0, r0
+  000AD372  e208           beq      op1=14, cc=2, *16
+  000AD374  9b401a56       ldi:20   op1=9, #0x41A56, op2=11, r0
+  000AD378  8810           btstl    op1=8, op2=8, #0x1, r0 <<<
+  000AD37A  e304           bne      op1=14, cc=3, *8
+  000AD37C  9b401a57       ldi:20   op1=9, #0x41A57, op2=11, r0
+  000AD380  8940           btsth    op1=8, op2=9, #0x4, r0
+  000AD382  e20d           beq      op1=14, cc=2, *26
+  000AD384  c024           ldi:8    op1=12, #0x2, r4
+  000AD386  d840           call:d   op1=13, op5=1, *128
+  000AD388  c005           ldi:8    op1=12, #0x0, r5
+  000AD38A  c024           ldi:8    op1=12, #0x2, r4
+  000AD38C  c005           ldi:8    op1=12, #0x0, r5
+  000AD38E  9ba6d74c       ldi:20   op1=9, #0xAD74C, op2=11, r6
+  000AD392  d0fd           call     op1=13, op5=0, *506
+  000AD394  c084           ldi:8    op1=12, #0x8, r4
+  000AD396  cd9c           ldi:8    op1=12, #0xD9, r12
+------------------------------------------------------------------------------
+0x0AD3FA set bit8
+  000AD3DA  c034           ldi:8    op1=12, #0x3, r4
+  000AD3DC  d8d8           call:d   op1=13, op5=1, *432
+  000AD3DE  c005           ldi:8    op1=12, #0x0, r5
+  000AD3E0  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD3E2  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD3E4  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD3E6  c024           ldi:8    op1=12, #0x2, r4
+  000AD3E8  d80f           call:d   op1=13, op5=1, *30
+  000AD3EA  c005           ldi:8    op1=12, #0x0, r5
+  000AD3EC  9ba6d74c       ldi:20   op1=9, #0xAD74C, op2=11, r6
+  000AD3F0  c024           ldi:8    op1=12, #0x2, r4
+  000AD3F2  d8cd           call:d   op1=13, op5=1, *410
+  000AD3F4  c005           ldi:8    op1=12, #0x0, r5
+  000AD3F6  9b401a56       ldi:20   op1=9, #0x41A56, op2=11, r0
+  000AD3FA  9080           borl     op1=9, op2=0, #0x8, r0 <<<
+  000AD3FC  cd9c           ldi:8    op1=12, #0xD9, r12
+  000AD3FE  c084           ldi:8    op1=12, #0x8, r4
+  000AD400  978c           extsb    op1=9, op2=7, op3=8, r12
+  000AD402  1f40           int      op1=1, op2=15, #0x40
+  000AD404  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD406  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD408  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD40A  0f01           enter    op1=0, op2=15, #4
+  000AD40C  9b461a56       ldi:20   op1=9, #0x41A56, op2=11, r6
+  000AD410  a824           cmp      op1=10, op2=8, #0x2, r4
+  000AD412  f307           bne:d    op1=15, cc=3, *14
+  000AD414  a416           add      op1=10, op2=4, #0x1, r6
+  000AD416  81e6           bandh    op1=8, op2=1, #0xE, r6
+  000AD418  9ba4d74c       ldi:20   op1=9, #0xAD74C, op2=11, r4
+------------------------------------------------------------------------------
+0x0AD416 test bit14
+  000AD3F6  9b401a56       ldi:20   op1=9, #0x41A56, op2=11, r0
+  000AD3FA  9080           borl     op1=9, op2=0, #0x8, r0
+  000AD3FC  cd9c           ldi:8    op1=12, #0xD9, r12
+  000AD3FE  c084           ldi:8    op1=12, #0x8, r4
+  000AD400  978c           extsb    op1=9, op2=7, op3=8, r12
+  000AD402  1f40           int      op1=1, op2=15, #0x40
+  000AD404  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD406  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD408  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD40A  0f01           enter    op1=0, op2=15, #4
+  000AD40C  9b461a56       ldi:20   op1=9, #0x41A56, op2=11, r6
+  000AD410  a824           cmp      op1=10, op2=8, #0x2, r4
+  000AD412  f307           bne:d    op1=15, cc=3, *14
+  000AD414  a416           add      op1=10, op2=4, #0x1, r6
+  000AD416  81e6           bandh    op1=8, op2=1, #0xE, r6 <<<
+  000AD418  9ba4d74c       ldi:20   op1=9, #0xAD74C, op2=11, r4
+  000AD41C  d92f           call:d   op1=13, op5=1, *606
+  000AD41E  c005           ldi:8    op1=12, #0x0, r5
+  000AD420  e004           bra      op1=14, cc=0, *8
+  000AD422  9116           borh     op1=9, op2=1, #0x1, r6
+  000AD424  9ba4d430       ldi:20   op1=9, #0xAD430, op2=11, r4
+  000AD428  d129           call     op1=13, op5=0, *594
+  000AD42A  9f90           leave    op1=9, op2=15, op3=9, op4=0
+  000AD42C  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD42E  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD430  8fe0           stm1     op1=8, op2=15, {r13,r14,r15}
+  000AD432  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD434  0f04           enter    op1=0, op2=15, #16
+------------------------------------------------------------------------------
+0x0AD442 set bit12
+  000AD422  9116           borh     op1=9, op2=1, #0x1, r6
+  000AD424  9ba4d430       ldi:20   op1=9, #0xAD430, op2=11, r4
+  000AD428  d129           call     op1=13, op5=0, *594
+  000AD42A  9f90           leave    op1=9, op2=15, op3=9, op4=0
+  000AD42C  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD42E  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD430  8fe0           stm1     op1=8, op2=15, {r13,r14,r15}
+  000AD432  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD434  0f04           enter    op1=0, op2=15, #16
+  000AD436  9b491a64       ldi:20   op1=9, #0x41A64, op2=11, r9
+  000AD43A  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8
+  000AD43E  9b4a1a60       ldi:20   op1=9, #0x41A60, op2=11, r10
+  000AD442  90c8           borl     op1=9, op2=0, #0xC, r8 <<<
+  000AD444  c024           ldi:8    op1=12, #0x2, r4
+  000AD446  dfe0           call:d   op1=13, op5=1, *-64
+  000AD448  c005           ldi:8    op1=12, #0x0, r5
+  000AD44A  9ba6d74c       ldi:20   op1=9, #0xAD74C, op2=11, r6
+  000AD44E  c024           ldi:8    op1=12, #0x2, r4
+  000AD450  d89e           call:d   op1=13, op5=1, *316
+  000AD452  c005           ldi:8    op1=12, #0x0, r5
+  000AD454  8be4           mov      op1=8, op2=11, r14, r4
+  000AD456  cecc           ldi:8    op1=12, #0xEC, r12
+  000AD458  a544           add2     op1=10, op2=5, #-12, r4
+  000AD45A  c085           ldi:8    op1=12, #0x8, r5
+  000AD45C  978c           extsb    op1=9, op2=7, op3=8, r12
+  000AD45E  1f40           int      op1=1, op2=15, #0x40
+  000AD460  2ff0           ld       op1=2, #1020, r0
+------------------------------------------------------------------------------
+0x0AD4DA test bit7
+  000AD4BA  16a0           stb      op1=1, op2=6, r10, r0
+  000AD4BC  c084           ldi:8    op1=12, #0x8, r4
+  000AD4BE  cd9c           ldi:8    op1=12, #0xD9, r12
+  000AD4C0  978c           extsb    op1=9, op2=7, op3=8, r12
+  000AD4C2  1f40           int      op1=1, op2=15, #0x40
+  000AD4C4  9f90           leave    op1=9, op2=15, op3=9, op4=0
+  000AD4C6  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD4C8  8d07           ldm1     op1=8, op2=13, {r8,r9,r10}
+  000AD4CA  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD4CC  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD4CE  0f01           enter    op1=0, op2=15, #4
+  000AD4D0  9b461a56       ldi:20   op1=9, #0x41A56, op2=11, r6
+  000AD4D4  a824           cmp      op1=10, op2=8, #0x2, r4
+  000AD4D6  f307           bne:d    op1=15, cc=3, *14
+  000AD4D8  a416           add      op1=10, op2=4, #0x1, r6
+  000AD4DA  8076           bandl    op1=8, op2=0, #0x7, r6 <<<
+  000AD4DC  9ba4d74c       ldi:20   op1=9, #0xAD74C, op2=11, r4
+  000AD4E0  d8cd           call:d   op1=13, op5=1, *410
+  000AD4E2  c005           ldi:8    op1=12, #0x0, r5
+  000AD4E4  e004           bra      op1=14, cc=0, *8
+  000AD4E6  9086           borl     op1=9, op2=0, #0x8, r6
+  000AD4E8  9ba4d4f4       ldi:20   op1=9, #0xAD4F4, op2=11, r4
+  000AD4EC  d0c7           call     op1=13, op5=0, *398
+  000AD4EE  9f90           leave    op1=9, op2=15, op3=9, op4=0
+  000AD4F0  0781           ld       op1=0, op2=7, op3=8, dr1
+  000AD4F2  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD4F4  1781           st       op1=1, op2=7, op3=8, dr1
+  000AD4F6  c024           ldi:8    op1=12, #0x2, r4
+  000AD4F8  dfe9           call:d   op1=13, op5=1, *-46
+------------------------------------------------------------------------------
+0x0AD66E set bit8
+  000AD64E  9b000090       ldi:20   op1=9, #0x90, op2=11, r0
+  000AD652  8820           btstl    op1=8, op2=8, #0x2, r0
+  000AD654  e2fc           beq      op1=14, cc=2, *-8
+  000AD656  8b4d           mov      op1=8, op2=11, r4, r13
+  000AD658  194b           dmovh    op1=1, op2=9, #150
+  000AD65A  9b000092       ldi:20   op1=9, #0x92, op2=11, r0
+  000AD65E  9110           borh     op1=9, op2=1, #0x1, r0
+  000AD660  9720           ret      op1=9, op2=7, op3=2, op4=0
+  000AD662  9b441a56       ldi:20   op1=9, #0x41A56, op2=11, r4
+  000AD666  9b000090       ldi:20   op1=9, #0x90, op2=11, r0
+  000AD66A  8880           btstl    op1=8, op2=8, #0x8, r0
+  000AD66C  e203           beq      op1=14, cc=2, *6
+  000AD66E  9084           borl     op1=9, op2=0, #0x8, r4 <<<
+  000AD670  a414           add      op1=10, op2=4, #0x1, r4
+  000AD672  9184           borh     op1=9, op2=1, #0x8, r4
+  000AD674  094b           dmovh    op1=0, op2=9, #150
+  000AD676  8bd4           mov      op1=8, op2=11, r13, r4
+  000AD678  9f20           ret:d    op1=9, op2=15, op3=2, op4=0
+  000AD67A  9794           extub    op1=9, op2=7, op3=9, r4
+  000AD67C  9b36f040       ldi:20   op1=9, #0x3F040, op2=11, r6
+  000AD680  9b000057       ldi:20   op1=9, #0x57, op2=11, r0
+  000AD684  80d0           bandl    op1=8, op2=0, #0xD, r0
+  000AD686  8070           bandl    op1=8, op2=0, #0x7, r0
+  000AD688  9b000056       ldi:20   op1=9, #0x56, op2=11, r0
+  000AD68C  8030           bandl    op1=8, op2=0, #0x3, r0
+
+==============================================================================
+跑 1043428 步之后位图 0x41A56 = 0x0020（置起的位：bit5）
+在等：任务1:flag/flag9/0x400；任务5:msg；任务9:flag/flag10/0x4000
+
+位图附近 32 字节：
+  0x41A46  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  0x41A56  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
