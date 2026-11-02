@@ -60,3 +60,13 @@
 | `exp_evt_matrix.py` | 13 种位图位组合 × 100 万步，看谁能拉起任务 8 | V14 §4（只有 bit4+bit8 有效） |
 | `exp_dp_bit.py` | 直接页 `0x90` 逐位扫描，找真正放行任务 8 的那一位 | V14 §5（只有 bit1） |
 | `exp_flag_writer.py` | 给 10 个 flag 控制块挂写监视，抓「位模式到底谁写的」 | V14 §6（只有内核 `0x0FED42` / `0x0FEDD6`） |
+
+### V15：覆盖率与位掩码
+
+| 脚本 | 做什么 | 出处在 |
+|---|---|---|
+| `exp_bitmask.py` | 把五个回调的判定按「掩码语义」翻译成「测的是哪几位」 | V15 §1 |
+| `exp_bit_matrix.py` | 位图 16 位逐位单喂 + 不喂，复算 V14 的结论 | V15 §2（结论：不成立） |
+| `exp_coverage.py` | 四场景覆盖率、未执行区间、13 个任务入口是否被执行 | V15 §3（`results/frbox/coverage.txt`） |
+| `exp_ready_queue.py` | 就绪位图 / 13 个优先级槽 / TCB 对表 | V15 §4 |
+| `exp_task4_unblock.py` | 0x90 逐位 vs 任务 4 是否真被派发 | V15 §4（2,764 → 6,382） |
