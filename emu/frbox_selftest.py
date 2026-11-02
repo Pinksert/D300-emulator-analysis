@@ -1077,50 +1077,40 @@ def test_events():
           [c[3] for c in fl2.calls if c[2] == -21] != [], True)
 
 def test_bits():
-    """V14：事件位图 0x41A56 + 两路齐才拉起任务 8。"""
-    print("\n[20 事件位图 0x41A56（V14）]")
+    """V15：位操作立即数是「掩码」不是位号；V14 报的 bit4+bit8 不是必要条件。"""
+    print("\n[20 位掩码语义 + 事件位图（V15 更正 V14）]")
     from frbox import realos as R
     from frbox.flow import Flow
-    import fr_dis, fr_emu
+    from frbox import bits as B
+    import fr_emu
 
-    # --- 静态：谁碰这张位图
+    # --- 纯函数：掩码语义（V15 结案的东西）
+    check("btstl #2 → 掩码 0x02，测 bit1", B.bits("btstl", 2), [1])
+    check("btstl #8 → 掩码 0x08，测 bit3", B.bits("btstl", 8), [3])
+    check("btsth #1 → 掩码 0x10，测 bit4", B.bits("btsth", 1), [4])
+    check("btsth #8 → 掩码 0x80，测 bit7", B.bits("btsth", 8), [7])
+    check("bandl #0xD 一次动 bit0/2/3", B.bits("bandl", 0xD), [0, 2, 3])
+    check("describe 把掩码与位号一起写出来", B.describe("btsth", 4),
+          "btsth #4 (mask 0x40, bit6)")
+
+    # --- 静态：三条关键指令的真掩码（V14 的表就是在这里把事情读串了）
     T = fr_emu.TABLE
     m = create("d300-a")
     m.load()
     rom, base = m.bus.rom, m.bus.rom_base
-    regs, hits = {}, []
-    off = 0
-    import re
-    LDI = re.compile(r"^(ldi|mov)\S*\s+.*#(0x[0-9A-Fa-f]+|-?\d+),.*?(r\d+)\s*$")
-    BIT = re.compile(r"^(btst|bset|bclr|bor|band|bxor)\S*\s+.*#(0x[0-9A-Fa-f]+|-?\d+),\s*(r\d+)\s*$")
-    num = lambda s: int(s, 16) if s.lower().startswith("0x") else int(s)
-    while off < len(rom) - 1:
-        ins = T.decode(rom, off)
-        if ins is None:
-            regs.clear()
-            off += 2
-            continue
-        mn, _o, _v, size, _w = ins
-        txt, _ = fr_dis.line(rom, off, base)
-        body = txt.split("  ", 2)[-1].strip()
-        mo = LDI.match(body)
-        if mo:
-            regs[mo.group(3)] = num(mo.group(2))
-        mb = BIT.match(body)
-        if mb:
-            r = mb.group(3)
-            if regs.get(r) == 0x00041A56:
-                kind = "set" if mb.group(1).startswith(("bset", "bor")) else \
-                       ("clr" if mb.group(1).startswith("bclr") else "test")
-                hits.append((base + off, kind, num(mb.group(2))))
-            regs.pop(r, None)
-        off += max(2, size)
-    check("全段对 0x41A56 的操作 13 处", len(hits), 13)
-    check("其中置位 7 处", len([h for h in hits if h[1] == "set"]), 7)
-    check("置位过的位是 8/9/10/12",
-          sorted({h[2] for h in hits if h[1] == "set"}), [8, 9, 10, 12])
 
-    # --- 设备：默认参数、不挂就不存在
+    def mask_at(addr):
+        ins = T.decode(rom, addr - base)
+        return (ins[0], B.mask(ins[0], ins[2]["u4"]), B.bits(ins[0], ins[2]["u4"]))
+
+    check("0x0AD652 是 btstl 掩码 0x02（任务 8 的忙等环看的就是 0x90.bit1）",
+          mask_at(0x0AD652), ("btstl", 0x02, [1]))
+    check("0x0ACBFC（vec13 回调）是 btsth 掩码 0x40 = bit6",
+          mask_at(0x0ACBFC), ("btsth", 0x40, [6]))
+    check("0x0ACB08（vec19 回调）是 btsth 掩码 0x80 = bit7",
+          mask_at(0x0ACB08), ("btsth", 0x80, [7]))
+
+    # --- 设备默认值：不挂就不存在
     m2 = create("d300-a")
     check("devices 里默认没有位图源",
           [d for d in m2.devices if getattr(d, "name", "") == "bits"], [])
@@ -1129,36 +1119,95 @@ def test_bits():
     check("位图源默认向量 0x13/0x19", dev.vecs, (0x13, 0x19))
     check("位图源默认周期 2048", dev.period, 2048)
 
-    # --- 两路齐：固件自己 ref_tsk → sta_tsk(8)
+    # --- 判据（V15）：拉起任务 8 的是「vec 0x13 + 0x19」，不是位图位
     m3 = create("d300-a")
     m3.load()
+    cov3 = m3.enable_cov()
     m3.boot_realos(1)
     m3.enable_events(period=4096)
-    fl = Flow(m3)
-    m3.enable_bits(mask=0x0110, vecs=(0x13, 0x19), period=2048)
-    m3.run(max_steps=200000, spin_guard=False)
-    sta = [(c[3], c[1]) for c in fl.calls if c[2] == -23]
-    check("b4+b8 一起推起任务 8（入口 0x0ACB2C）",
+    fl3 = Flow(m3)
+    for _ in range(30):
+        m3.run(max_steps=5000, spin_guard=False)
+        for v in (0x13, 0x19):
+            m3.raise_irq(v)
+    sta = [(c[3], c[1]) for c in fl3.calls if c[2] == -23]
+    check("不碰位图、只打 vec13/19 就有 sta_tsk(8)（调用点 0x0ACB2C）",
           (8, 0x000ACB2C) in sta, True)
-    # ref_tsk 的实参不是 TCB（0x45B30）而是一个对象描述符 0x46118，所以按
-    # 「同一段回调里的两句」来断言：0x0ACB16 = ref_tsk，0x0ACB2C = sta_tsk 8。
-    check("vec 0x19 回调里 ref_tsk → sta_tsk(8) 连着一对",
-          [(c[2], c[3]) for c in fl.calls if c[1] in (0x000ACB16, 0x000ACB2C)],
-          [(-20, 0x46118), (-23, 8)])
     st = {t["id"]: t for t in R.states(m3)}
-    check("任务 8 有现场（真跑过）", bool(st[8]["pc"]), True)
+    check("任务 8 的真入口是任务表里的 0x0ACC32", st[8]["entry"], 0x0ACC32)
+    check("任务 8 的入口真的被执行过（覆盖率）", cov3.visited(0x0ACC32), True)
+    check("bitmap 的默认注入（0x0110）不是必要条件",
+          [c for c in fl3.calls if c[1] == 0x000ACB2C][0][3], 8)
 
-    # --- 只有 b4：不推起任务 8（这是「必须两路齐」的判据）
+    # --- 位图 bit14 才是「换一条路」的那一位：sta_tsk(8) 改从 0x0ACC16 发出
     m4 = create("d300-a")
     m4.load()
     m4.boot_realos(1)
     m4.enable_events(period=4096)
     fl4 = Flow(m4)
-    m4.enable_bits(mask=0x0010, vecs=(0x13,), period=2048)
-    m4.run(max_steps=200000, spin_guard=False)
-    check("只喂 bit4 推不起任务 8",
-          [c[3] for c in fl4.calls if c[2] == -23], [9, 4])
+    for _ in range(30):
+        m4.run(max_steps=5000, spin_guard=False)
+        m4.bus.wr(0x41A56, 2, m4.bus.rd(0x41A56, 2) | 0x4000)
+        for v in (0x13, 0x19):
+            m4.raise_irq(v)
+    check("位图 bit14 时 sta_tsk(8) 从 0x0ACC16 发出",
+          (8, 0x000ACC16) in [(c[3], c[1]) for c in fl4.calls if c[2] == -23], True)
 
+    # --- 只打 vec 0x13：任务 8 压根不在场（说明分叉在向量，不在位图）
+    m5 = create("d300-a")
+    m5.load()
+    m5.boot_realos(1)
+    m5.enable_events(period=4096)
+    fl5 = Flow(m5)
+    for _ in range(30):
+        m5.run(max_steps=5000, spin_guard=False)
+        m5.raise_irq(0x13)
+    check("只打 vec 0x13 时 sta_tsk 只有 9 和 4",
+          [c[3] for c in fl5.calls if c[2] == -23], [9, 4])
+
+
+def test_cov():
+    """V15：覆盖率（找「一次都没跑过的代码」）。"""
+    print("\n[21 覆盖率（V15）]")
+    from frbox.cover import Coverage
+    from frbox import realos as R
+
+    m = create("d300-a")
+    m.load()
+    check("默认不记覆盖率", m.cov, None)
+    cov = m.enable_cov("selftest")
+    check("挂上之后是 Coverage", isinstance(cov, Coverage), True)
+    check("CPU 侧拿到了同一块缓冲区", m.cpu.cov_buf is cov.buf, True)
+    check("初始一个字都没踩", cov.words(), 0)
+
+    m.boot_realos(1)
+    m.run(max_steps=20000, spin_guard=False)
+    check("跑 2 万步后踩到东西了", cov.words() > 0, True)
+    check("RAM 里的状态字没被当成代码", cov.visited(0x45980), False)
+    st = {t["id"]: t for t in R.states(m)}
+    check("复位入口 0x000FE4xx 被踩过", cov.visited(0x000FE4E6), True)
+    check("任务 1 的入口被踩过", cov.visited(st[1]["entry"]), True)
+    check("没跑过的任务 10 入口没被踩", cov.visited(st[10]["entry"]), False)
+
+    holes = cov.holes(min_len=64)
+    check("未访问区间按长度倒序", holes == sorted(holes, key=lambda t: t[1] - t[0],
+                                                    reverse=True), True)
+    check("最长的几段里包着任务 10 的入口 0x0BFAE6",
+          any(a <= 0x0BFAE6 < b for a, b in holes[:3]), True)
+
+    # diff：换了场景才踩到的区间
+    check("自己和自己 diff 是空的", cov.diff(cov), [])
+    check("reset 清空", (cov.reset(), cov.words())[1], 0)
+    check("reset 后 CPU 仍绑着缓冲区", m.cpu.cov_buf is cov.buf, True)
+
+    # 换 CPU（machine.reset）后缓冲区不能丢
+    m.reset()
+    check("machine.reset 之后仍在记录", m.cpu.cov_buf is cov.buf, True)
+    m.run(max_steps=5000, spin_guard=False)
+    check("reset 后能继续踩到东西", cov.words() > 0, True)
+    s = cov.summary()
+    check("summary 有四项", sorted(s.keys()),
+          sorted(["label", "已执行指令地址", "ROM 字数", "占比", "未跑区间(≥64B)"]))
 
 def main():
     print("frbox 自检")
@@ -1182,6 +1231,7 @@ def main():
     test_waits()
     test_events()
     test_bits()
+    test_cov()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
