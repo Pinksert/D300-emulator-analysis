@@ -18,6 +18,8 @@
     flow [N]            最近 N 条服务调用流水（被动记录，不改执行）
     events [PERIOD]     挂/看「完成位 + 中断」事件源（默认周期 4096）
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
+    cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
+    readyq            就绪位图 + 13 个优先级槽的队列（V15）
     wake FLAG BITS      用固件自己的 sys_set_flg 置位（注入一个外部事件）
     kcall SVC [r4..r7]  直接调一次固件系统调用（服务号用负数，如 -48 = set_flg）
     realos [TASKID]     固件自带 REALOS：13 条记录 / 让内核原生调度某任务
@@ -524,6 +526,47 @@ class Monitor:
         for d in devs:
             self.out("位图源：" + "  ".join("%s=%s" % (k, v) for k, v in d.state().items()))
         self.out("位图现值 0x41A56 = 0x%04X" % m.bus.rd(0x41A56, 2))
+        return True
+
+    def cmd_readyq(self, arg=""):
+        """readyq —— 就绪位图 + 13 个优先级槽的队列（V15；空槽是 head=tail=槽自己）"""
+        from . import realos as R
+        m = self.m
+        bm = int.from_bytes(m.fetch_bytes(0x45984, 4), "big")
+        cur = int.from_bytes(m.fetch_bytes(0x45980, 4), "big")
+        tcb2id = {t["tcb"]: t["id"] for t in R.states(m) if t["tcb"]}
+        self.out("就绪位图 0x45984 = 0x%08X → 优先级 %s；当前 TCB 0x%06X（任务 %s）"
+                 % (bm, [31 - i for i in range(32) if bm >> i & 1] or "无",
+                    cur, tcb2id.get(cur, "?")))
+        for p in range(13):
+            head = int.from_bytes(m.fetch_bytes(0x45988 + p * 8, 4), "big")
+            tail = int.from_bytes(m.fetch_bytes(0x45988 + p * 8 + 4, 4), "big")
+            empty = head == tail == 0x45988 + p * 8
+            mark = "（空）" if empty else ""
+            self.out("  槽 %-2d head=0x%06X(任务%s) tail=0x%06X(任务%s) %s"
+                     % (p, head, tcb2id.get(head, "?"), tail, tcb2id.get(tail, "?"), mark))
+        return True
+
+    def cmd_cov(self, arg=""):
+        """cov [MINLEN] —— 覆盖率：跑了多少 / 还差哪些从没执行过的代码段（V15）"""
+        m = self.m
+        cov = getattr(m, "cov", None)
+        a = arg.split()
+        if cov is None:
+            cov = m.enable_cov()
+            self.out("覆盖率记录已开（从现在开始记）")
+        minlen = self._num(a[0]) if a else 64
+        s = cov.summary()
+        self.out("覆盖：%d 个指令地址被执行过（ROM 共 %d 个 2B 槽，占 %.1f%%）"
+                 % (s["已执行指令地址"], s["ROM 字数"], s["占比"]))
+        holes = cov.holes(min_len=minlen)[:12]
+        self.out("从没执行过的区间（≥%dB，共 %d 段）：" % (minlen, len(cov.clusters(min_len=minlen))))
+        for a0, a1 in holes:
+            self.out("  0x%06X–0x%06X  %6d B" % (a0, a1, a1 - a0))
+        if len(holes) == 0:
+            self.out("  （没有：全 ROM 都被踩过了）")
+        elif len(holes) < len(cov.clusters(min_len=minlen)):
+            self.out("  ……只列最长的 12 段")
         return True
 
     def cmd_flow(self, arg=""):
