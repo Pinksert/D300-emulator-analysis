@@ -1076,6 +1076,90 @@ def test_events():
     check("任务 4 干完活自己 ext_tsk 退出",
           [c[3] for c in fl2.calls if c[2] == -21] != [], True)
 
+def test_bits():
+    """V14：事件位图 0x41A56 + 两路齐才拉起任务 8。"""
+    print("\n[20 事件位图 0x41A56（V14）]")
+    from frbox import realos as R
+    from frbox.flow import Flow
+    import fr_dis, fr_emu
+
+    # --- 静态：谁碰这张位图
+    T = fr_emu.TABLE
+    m = create("d300-a")
+    m.load()
+    rom, base = m.bus.rom, m.bus.rom_base
+    regs, hits = {}, []
+    off = 0
+    import re
+    LDI = re.compile(r"^(ldi|mov)\S*\s+.*#(0x[0-9A-Fa-f]+|-?\d+),.*?(r\d+)\s*$")
+    BIT = re.compile(r"^(btst|bset|bclr|bor|band|bxor)\S*\s+.*#(0x[0-9A-Fa-f]+|-?\d+),\s*(r\d+)\s*$")
+    num = lambda s: int(s, 16) if s.lower().startswith("0x") else int(s)
+    while off < len(rom) - 1:
+        ins = T.decode(rom, off)
+        if ins is None:
+            regs.clear()
+            off += 2
+            continue
+        mn, _o, _v, size, _w = ins
+        txt, _ = fr_dis.line(rom, off, base)
+        body = txt.split("  ", 2)[-1].strip()
+        mo = LDI.match(body)
+        if mo:
+            regs[mo.group(3)] = num(mo.group(2))
+        mb = BIT.match(body)
+        if mb:
+            r = mb.group(3)
+            if regs.get(r) == 0x00041A56:
+                kind = "set" if mb.group(1).startswith(("bset", "bor")) else \
+                       ("clr" if mb.group(1).startswith("bclr") else "test")
+                hits.append((base + off, kind, num(mb.group(2))))
+            regs.pop(r, None)
+        off += max(2, size)
+    check("全段对 0x41A56 的操作 13 处", len(hits), 13)
+    check("其中置位 7 处", len([h for h in hits if h[1] == "set"]), 7)
+    check("置位过的位是 8/9/10/12",
+          sorted({h[2] for h in hits if h[1] == "set"}), [8, 9, 10, 12])
+
+    # --- 设备：默认参数、不挂就不存在
+    m2 = create("d300-a")
+    check("devices 里默认没有位图源",
+          [d for d in m2.devices if getattr(d, "name", "") == "bits"], [])
+    dev = m2.enable_bits()
+    check("位图源默认 mask=0x0110", dev.mask, 0x0110)
+    check("位图源默认向量 0x13/0x19", dev.vecs, (0x13, 0x19))
+    check("位图源默认周期 2048", dev.period, 2048)
+
+    # --- 两路齐：固件自己 ref_tsk → sta_tsk(8)
+    m3 = create("d300-a")
+    m3.load()
+    m3.boot_realos(1)
+    m3.enable_events(period=4096)
+    fl = Flow(m3)
+    m3.enable_bits(mask=0x0110, vecs=(0x13, 0x19), period=2048)
+    m3.run(max_steps=200000, spin_guard=False)
+    sta = [(c[3], c[1]) for c in fl.calls if c[2] == -23]
+    check("b4+b8 一起推起任务 8（入口 0x0ACB2C）",
+          (8, 0x000ACB2C) in sta, True)
+    # ref_tsk 的实参不是 TCB（0x45B30）而是一个对象描述符 0x46118，所以按
+    # 「同一段回调里的两句」来断言：0x0ACB16 = ref_tsk，0x0ACB2C = sta_tsk 8。
+    check("vec 0x19 回调里 ref_tsk → sta_tsk(8) 连着一对",
+          [(c[2], c[3]) for c in fl.calls if c[1] in (0x000ACB16, 0x000ACB2C)],
+          [(-20, 0x46118), (-23, 8)])
+    st = {t["id"]: t for t in R.states(m3)}
+    check("任务 8 有现场（真跑过）", bool(st[8]["pc"]), True)
+
+    # --- 只有 b4：不推起任务 8（这是「必须两路齐」的判据）
+    m4 = create("d300-a")
+    m4.load()
+    m4.boot_realos(1)
+    m4.enable_events(period=4096)
+    fl4 = Flow(m4)
+    m4.enable_bits(mask=0x0010, vecs=(0x13,), period=2048)
+    m4.run(max_steps=200000, spin_guard=False)
+    check("只喂 bit4 推不起任务 8",
+          [c[3] for c in fl4.calls if c[2] == -23], [9, 4])
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1097,6 +1181,7 @@ def main():
     test_sched()
     test_waits()
     test_events()
+    test_bits()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
