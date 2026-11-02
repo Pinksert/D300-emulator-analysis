@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V14 · 不是等一个位，是在等一张表</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  tr.good td{background:#eaf7ef}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .okbox{background:#eaf7ef;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V14：不是等一个位，是在等一张表</h1>
+<div class="sub">把五个回调槽逐个拆开看它们判什么 · 找到固件自己的<b>事件位图</b> · 第一次让任务 8 被固件自己拉起来</div>
+
+<div class="kpis">
+  <div class="kpi"><b>5</b><span>已注册回调槽（画像齐全）</span></div>
+  <div class="kpi"><b>13</b><span>全段对位图 0x41A56 的操作</span></div>
+  <div class="kpi"><b>2</b><span>必须同时喂的位（bit4+bit8）</span></div>
+  <div class="kpi"><b>356+63</b><span>自检通过</span></div>
+</div>
+
+<div class="okbox">
+<b>一句话：</b>V13 只补了「一路状态位 + 一个中断」，能推任务 5，推不动任务 1 和 9。
+V14 把五个回调槽逐个反汇编之后发现：它们真正判的不是各自外设的寄存器，而是<b>一张公共的事件位图</b>
+<code>0x41A56</code> —— 固件自己在别处就把「外设状态 → 位图位」转发好了。
+按这张表喂位之后，<b>位图 bit4 和 bit8 必须同时置</b>，固件才会在 vec 0x19 的回调里
+<b>自己</b> <code>ref_tsk</code> → <code>sta_tsk(8)</code> 把任务 8 建起来。
+</div>
+
+<div class="warnbox">
+<b>边界：</b><code>0x41A56</code> 是我们从固件里读出来的地址与位语义，不是手册；
+「哪一路外设对应哪一位」仍未知，我们只证明了「这几位是必要条件」。
+能报「给到位图位 + 中断之后，固件自己把任务 8 拉起来并跑了一段」；
+<b>不能报</b>「相机某个功能跑通了」—— 任务 8 起来后立刻卡在一个直接页轮询环里（见第五节）。
+</div>
+
+<h2>一、起点：V13 剩下的三个等待</h2>
+
+<div class="card">
+<p>V13 收尾时有三个等待没人能解：任务 1 停在 flag9/0x400、任务 9 停在 flag10/0x4000、
+任务 5 在等消息。静态扫 <code>set_flg</code> 找不到置位者，于是当时的结论是「还缺第二个事件源」。</p>
+<p>这个结论方向是对的，但**粒度太粗**：缺的不是「再来一个和 0x80/bit3 一样的状态位」，
+而是一整张位图。三件事把线索连了起来：</p>
+<ul>
+  <li>vec 0x23 的回调 <code>0x0A687A</code> 第一句是 <code>btstl #8, @0x80</code> —— 单点判断；</li>
+  <li>vec 0x19 的回调 <code>0x0ACAFE</code> 第一句是 <code>btsth #8, r8</code>，而 r8 刚从
+      <code>ldi #0x41A56</code> 装进来 —— 判的是 RAM 里的一个字，不是外设寄存器；</li>
+  <li>五个槽里三个都在读同一个地址。</li>
+</ul>
+</div>
+
+<h2>二、五个回调槽的画像：各自在判哪一位</h2>
+
+<div class="card">
+<p>做法：跑 100 万步（启用 0x23 事件源）→ 收集被写过的 <code>0x3F0xx</code> → 用 ROM 里的
+ISR 扫描反查「槽 → 向量」（不套 <code>0x3F01C+(vec-0x10)*4</code> 那个公式，因为 <code>0x3F074</code> 就是例外）
+→ 对每个回调反汇编前 64 条，**跟寄存器**抽位判定。</p>
+<table>
+  <tr><th>槽</th><th>向量</th><th>回调</th><th>第一处判定</th><th>判定依据</th></tr>
+  <tr><td class="m">0x3F028</td><td class="m">0x13</td><td class="m">0x0ACBDA</td><td class="m">btsth #4, r8</td><td>位图 <b>bit4</b></td></tr>
+  <tr class="good"><td class="m">0x3F040</td><td class="m">0x19</td><td class="m">0x0ACAFE</td><td class="m">btsth #8, r8</td><td>位图 <b>bit8</b></td></tr>
+  <tr><td class="m">0x3F048</td><td class="m">0x1B</td><td class="m">0x088A96</td><td class="m">btstl #8/#1/#2, r0（r0=0x60）</td><td>直接页 <b>0x60</b> 的 bit8 / bit1 / bit2</td></tr>
+  <tr><td class="m">0x3F074</td><td class="m">0x23</td><td class="m">0x0A6938</td><td>无</td><td>直接叫醒（V13 的 dev_evt 覆盖）</td></tr>
+  <tr><td class="m">0x3F078</td><td class="m">0x24</td><td class="m">0x0AD28E</td><td class="m">btsth #9, r8</td><td>位图 <b>bit9</b></td></tr>
+</table>
+
+<div class="fixbox">
+<b>顺手纠一个：</b>被写的 <code>0x3F0xx</code> 一共 8 个，但其中 <code>0x3F0D4</code>、
+<code>0x3F0E8</code>、<code>0x3F0EB</code> <b>不是回调槽</b> —— 没有任何 ISR 读它们，
+写进去的值（<code>0x0E2D1C</code> / <code>0x71</code> / <code>0x08</code>）也都不像代码地址。
+V13 说的「5 个已注册槽」是对的，别把这三个算进去。
+</div>
+
+<pre>槽 0x3F040（vec 0x19）  回调 0x0ACAFE
+  000ACAFE  1708           st       op1=1, op2=7, op3=0, r8
+  000ACB02  0f04           enter    op1=0, op2=15, #16
+  000ACB04  9b481a56       ldi:20   op1=9, #0x41A56, op2=11, r8     ← 位图地址
+  000ACB08  8988           btsth    op1=8, op2=9, #0x8, r8          ← 判 bit8
+  000ACB0A  e219           beq      op1=14, cc=2, *50               ← 没置就跳过整段
+  ...
+  000ACB0E  cecc           ldi:8    op1=12, #0xEC, r12              ← r12 = -20 = ref_tsk
+  000ACB16  1f40           int      op1=1, op2=15, #0x40            ← ref_tsk
+  ...
+  000ACB2C  ...            int      op1=1, op2=15, #0x40            ← sta_tsk(8)</pre>
+</div>
+
+<h2>三、0x41A56 是一张事件位图，而且固件自己就在往里写</h2>
+
+<div class="card">
+<p>全 A 段（512 KB）扫描「谁碰这个字」，一共 13 处：<b>7 处置位、6 处判定</b>，
+置位只用到了 bit8 / bit9 / bit10 / bit12。</p>
+<table>
+  <tr><th>地址</th><th>动作</th><th>位</th><th>所属</th></tr>
+  <tr><td class="m">0x0ACB08</td><td>判定</td><td class="m">bit8</td><td>vec 0x19 回调开头</td></tr>
+  <tr><td class="m">0x0ACBFC</td><td>判定</td><td class="m">bit4</td><td>vec 0x13 回调中段</td></tr>
+  <tr><td class="m">0x0ACC50</td><td>判定</td><td class="m">bit0</td><td>同上函数尾部</td></tr>
+  <tr><td class="m">0x0ACEA2 / 0x0ACEDA</td><td>置位</td><td class="m">bit10</td><td>通信模块（两处）</td></tr>
+  <tr><td class="m">0x0AD322 / 0x0AD35A</td><td>置位</td><td class="m">bit9</td><td>vec 0x24 回调同一函数</td></tr>
+  <tr class="hi"><td class="m">0x0AD3FA</td><td>置位</td><td class="m">bit8</td><td>见下方转发链</td></tr>
+  <tr><td class="m">0x0AD416</td><td>判定</td><td class="m">bit14</td><td>—</td></tr>
+  <tr><td class="m">0x0AD442</td><td>置位</td><td class="m">bit12</td><td>—</td></tr>
+  <tr><td class="m">0x0AD4DA</td><td>判定</td><td class="m">bit7</td><td>—</td></tr>
+  <tr class="hi"><td class="m">0x0AD66E</td><td>置位</td><td class="m">bit8</td><td>见下方转发链</td></tr>
+</table>
+
+<h3>固件自己怎么「转发」的</h3>
+<pre>  000AD64E  9b000090       ldi:20   op1=9, #0x90, op2=11, r0    ← 外设状态寄存器 0x90
+  000AD652  8820           btstl    op1=8, op2=8, #0x2, r0
+  000AD654  e2fc           beq      op1=14, cc=2, *-8           ← 没就绪就在这打转
+  000AD656  8b4d           mov      op1=8, op2=11, r4, r13
+  000AD658  194b           dmovh    op1=1, op2=9, #150
+  000AD65A  9b000092       ldi:20   op1=9, #0x92, op2=11, r0
+  000AD65E  9110           borh     op1=9, op2=1, #0x1, r0      ← 给 0x92 置位（命令）
+  ...
+  000AD662  9b441a56       ldi:20   op1=9, #0x41A56, op2=11, r4  ← 位图地址
+  000AD666  9b000090       ldi:20   op1=9, #0x90, op2=11, r0
+  000AD66A  8880           btstl    op1=8, op2=8, #0x8, r0      ← 0x90 的 bit8
+  000AD66C  e203           beq      op1=14, cc=2, *6            ← 没置就跳过
+  000AD66E  9084           borl     op1=9, op2=0, #0x8, r4      ← 位图置 bit8
+  000AD672  9184           borh     op1=9, op2=1, #0x8, r4      ← 连高字节一起</pre>
+<p>这就是答案的形状：<b>外设状态位 → 软件位图位 → 回调判定</b>。
+我们原来只补了最后一步的一半（打中断），缺的是中间那一步。</p>
+</div>
+
+<h2>四、必须两路齐：位图组合矩阵</h2>
+
+<div class="card">
+<p>100 万步、每 5,000 步喂一次位图 + 打对应向量，一共跑了 13 种组合（下表节选 10 种，
+全表在 <code>results/frbox/evt-matrix.txt</code>；<code>+b10</code> / <code>+b12</code> /
+<code>b4..b12</code> 三行的结果与 <code>b4+b8+b9</code> 完全一致）：</p>
+<table>
+  <tr><th>喂的位</th><th>服务调用</th><th>有现场的任务</th><th>被固件拉起的任务</th></tr>
+  <tr><td>基线（不喂）</td><td class="m">36</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr><td>bit4</td><td class="m">36</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr><td>bit8</td><td class="m">36</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr><td>bit9</td><td class="m">234</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr><td>bit4 + bit9</td><td class="m">234</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr><td>bit8 + bit9</td><td class="m">234</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+  <tr class="good"><td><b>bit4 + bit8</b></td><td class="m">32</td><td class="m"><b>0,1,4,5,8,9</b></td><td class="m"><b>8 @0x0ACB2C</b>、9、4</td></tr>
+  <tr class="good"><td>bit4 + bit8 + bit9</td><td class="m">230</td><td class="m">0,1,4,5,8,9</td><td class="m">8 @0x0ACB2C、9、4</td></tr>
+  <tr class="hi"><td>位图全置（0xFFFF）</td><td class="m">229</td><td class="m">0,1,4,5,8,9</td><td class="m"><b>8 @0x0ACC16</b>、9、4</td></tr>
+  <tr><td>直接页 0x60 三位</td><td class="m">36</td><td class="m">0,1,5,9</td><td class="m">9、4</td></tr>
+</table>
+
+<p>三条硬结论：</p>
+<ul>
+  <li><b>单喂 bit4 或单喂 bit8 都没用</b> —— 必须是「两路齐」。两个回调各自守一段状态机，
+      一段过了另一段才轮到。</li>
+  <li><b>位图全置时任务 8 换了入口</b>（<code>0x0ACC16</code> 而不是 <code>0x0ACB2C</code>）——
+      说明位图不只是「有没有事件」，还编码了「是哪一类事件」。</li>
+  <li><b>bit9 单独喂会把服务调用从 36 拉到 234</b>，但一个任务都不多拉 —— 它是「喂饱了某条已有循环」，
+      不是「打开了新流程」。这类数字很容易被误读成「进展」，得看有现场任务数才分得清。</li>
+</ul>
+
+<div class="warnbox">
+<b>别把「任务 1 前进」当成进展：</b>矩阵里 <code>b4+b8</code> 那一行任务 1 显示在等 flag1/0x8000，
+而基线显示 flag9/0x400。看起来像「解开了 flag9」，其实是<b>落后</b> —— 任务 8 起来以后
+在轮询环里吃 CPU，任务 1 还没来得及走到后面的等待点。判断进展要看<b>服务调用走到第几步</b>，
+不能只看停在哪。
+</div>
+</div>
+
+<h2>五、任务 8 起来之后：卡在直接页 0x90</h2>
+
+<div class="card">
+<p>每 10,000 步采一次「当前 TCB + PC」，40 次里有 39 次当前任务是任务 8，其中 37 次的 PC
+落在同一小段；<code>results/frbox/dp-bit.txt</code> 里按 5,000 步一批的 20 次批末采样，
+有 18 次还在这个环里：</p>
+<pre>  000AD64E  ldi   r0, #0x90
+  000AD652  btstl #2, r0
+  000AD654  beq   *-8          ; 位没起来就在这里打转</pre>
+
+<p>逐位扫描（8 次独立运行，各 10 万步，<code>results/frbox/dp-bit.txt</code>）：</p>
+<table>
+  <tr><th>置 0x90 的</th><th>自旋占比</th><th>任务 8 落点</th><th>服务调用</th></tr>
+  <tr><td>不置 / bit0 / bit2..bit7</td><td class="m">18/20</td><td class="m">0x0AD64E</td><td class="m">32</td></tr>
+  <tr class="good"><td><b>bit1</b></td><td class="m"><b>0/20</b></td><td class="m"><b>0x0ACE86</b>（转 sleep）</td><td class="m"><b>40</b></td></tr>
+</table>
+
+<div class="fixbox">
+<b>一个必须记下来的坑：</b>反汇编里写的是 <code>btstl #2</code>，但真正放行的是 <b>bit1</b>。
+立即数和位号不是一一对应 —— V13 那个 <code>btstl #8, @0x80</code> 也有同样的问题
+（dev_evt 置的是 bit3）。这条编码规则我们还没搞清，所以现在的做法是<b>逐个位实测</b>，
+不靠读立即数猜。
+</div>
+
+<p>放行之后任务 8 走到 <code>0x0ACE86</code> 进入 sleep，任务 1 也回到 flag9/0x400 ——
+说明中间那圈「0x8Cxxx 置 flag1/0x8000」的流程终于跑完了。</p>
+</div>
+
+<h2>六、为什么 flag9/0x400 谁都置不了</h2>
+
+<div class="card">
+<p>给 10 个 flag 控制块（<code>0x45C38</code> 起，步长 <code>0x10</code>）挂写监视，
+跑 15 万步（位图 bit4+bit8），把落在里面的写全抓下来（<code>results/frbox/flag-writer.txt</code>）：</p>
+<pre>flag9  @0x45CB8 现位模式=0x104  队列空
+        +0x8 位模式: 0x104 ← 0x0FED42 0x0FEDD6 ×3
+flag10 @0x45CC8 现位模式=0x0    队列非空
+        +0x0 头: 0x45B5C ← 0x0FEFE6 ×1</pre>
+
+<p>所有「位模式」的写入者只有两个地址：<code>0x0FED42</code> 和 <code>0x0FEDD6</code>，
+都在内核段里（<code>sys_set_flg</code> / <code>sys_clr_flg</code> 的实现内部）。
+也就是说：</p>
+<ul>
+  <li><b>应用层没有「直接改 flag 内存」这条路</b>，一律走系统调用 —— 所以 V13 静态扫
+      <code>set_flg</code> 没找到置位者，是有效的否定证据，不是漏扫；</li>
+  <li>整轮运行的服务流水里，和 flag9 有关的只有四条：<code>clr_flg flg9 0xFFFB00FF</code>（启动时清）、
+      <code>set_flg flg9 0x4</code>、<code>set_flg flg9 0x100</code>、<code>set_flg flg9 0x40000</code> ——
+      <b>没有一条置 0x400</b>；</li>
+  <li>而 <code>0xFFFB00FF</code> 取反正好是 <code>0x0004FF00</code>，<b>0x400 就在被清掉的那一组里</b>。</li>
+</ul>
+<div class="okbox">
+结论：任务 1 等的 <code>flag9/0x400</code> 在固件自己的软件流程里<b>永远不会被置</b>。
+它只能来自外部 —— 真机上大概率是 USB/PTP 或按键那条链路。这也解释了为什么
+仿真台再往里喂位图，也只能推进到「等 0x400」为止。
+</div>
+</div>
+
+<h2>七、这一版加了什么</h2>
+
+<div class="card">
+<table>
+  <tr><th>东西</th><th>位置</th><th>作用</th></tr>
+  <tr><td>事件位图源</td><td class="m">frbox/dev_bits.py</td><td>周期性地把 <code>0x41A56</code> 的若干位置 1 再打一串中断；默认关闭</td></tr>
+  <tr><td><code>enable_bits()</code></td><td class="m">frbox/machine.py</td><td>挂载入口，默认 <code>mask=0x0110</code>、<code>vecs=(0x13,0x19)</code>、周期 2048</td></tr>
+  <tr><td><code>--bits MASK[:VECS[:PERIOD]]</code></td><td class="m">frbox/cli.py</td><td>命令行挂载</td></tr>
+  <tr><td><code>bits</code> / <code>fast N</code></td><td class="m">frbox/monitor.py</td><td>看状态；<code>fast</code> 不吃自旋保护（<code>cont</code> 会在自旋处停）</td></tr>
+  <tr><td>五个探针</td><td class="m">probe/exp_slot_profile.py 等</td><td>见第八节</td></tr>
+</table>
+</div>
+
+<h2>八、跑一遍看</h2>
+
+<div class="card">
+<pre>cd emu
+python -m frbox -M d300-a --realos 1 --events 4096 \
+       --bits 0x0110:0x13,0x19:2048 --flow -monitor none -c "fast 200000; tasks"</pre>
+<p>会看到任务 8 从「休眠/未启动」变成在跑，当前 PC 落在 <code>0x0AD654</code>
+（就是上面那个轮询环）。再挂一次 <code>bits</code> 命令能看到位图现值。</p>
+
+<h3>探针</h3>
+<table>
+  <tr><th>脚本</th><th>问的问题</th></tr>
+  <tr><td class="m">probe/exp_slot_profile.py</td><td>每个回调槽判哪一位（寄存器跟踪 + 反汇编）</td></tr>
+  <tr><td class="m">probe/exp_evt_bitmap.py</td><td>全段谁碰 0x41A56、各给上下文</td></tr>
+  <tr><td class="m">probe/exp_evt_matrix.py</td><td>13 种位组合各自推到哪</td></tr>
+  <tr><td class="m">probe/exp_dp_bit.py</td><td>0x90 逐位扫描，找真正放行的那一位</td></tr>
+  <tr><td class="m">probe/exp_flag_writer.py</td><td>flag 位模式的写入者（抓现行）</td></tr>
+</table>
+</div>
+
+<h2>九、还没通的</h2>
+
+<div class="card">
+<ul>
+  <li><b>任务 8 在 0x0ACE86 睡下去之后等什么</b> —— 状态字还没解码，下一版看。</li>
+  <li><b>位图位 ↔ 物理外设</b> 仍是空白：我们知道 bit8 由 0x90.bit8 转发，但 0x90 背后是什么器件没有证据。</li>
+  <li><b><code>btstl #N</code> 的 N 与位号的映射规则</b> 没解出来（<code>#2</code> → bit1，<code>#8</code> → ？）。
+      现在只能逐位实测，代价是每加一路事件都要扫 8 次。</li>
+  <li><b>任务 5 等消息的对象</b>：流水里 <code>rcv_msg</code> 的 r4 = <code>0x466E4</code>，
+      而 <code>snd_msg</code> 的 r4 = 1 —— 两者口径不一致，消息对象还没定位。</li>
+</ul>
+</div>
+
+<div class="note">
+本版所有数字来自 <code>results/frbox/</code> 下的五个文本文件；自检 356 项（frbox）+ 63 项（CPU）全通过，
+其中新增 10 项专测 V14 的位图源（含「只喂 bit4 推不起任务 8」的反向断言）。
+</div>
+
+</div>
+</body>
+</html>
