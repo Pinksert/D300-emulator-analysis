@@ -21,6 +21,7 @@ import sys
 from .machine import MACHINES, create, machine_names
 from .monitor import Monitor
 from .trace import Trace
+from . import __version__
 
 
 def build_parser():
@@ -57,6 +58,9 @@ def build_parser():
     p.add_argument("--events", nargs="?", type=int, const=4096, default=None,
                    metavar="PERIOD",
                    help="挂「完成位+中断」事件源（默认周期 4096 周期；0 = 按启动位触发）")
+    p.add_argument("--bits", default=None, metavar="MASK[:VECS[:PERIOD]]",
+                   help="V14：挂「事件位图 0x41A56 + 中断」源，例如 0x0110:0x13,0x19:2048"
+                        "（只给 MASK 时向量默认 0x13,0x19、周期 2048）")
     p.add_argument("--flow", action="store_true",
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--realos", type=lambda x: int(x, 0), default=None,
@@ -87,7 +91,7 @@ def build_parser():
     p.add_argument("--autospin-threshold", dest="autospin_threshold", type=int,
                    default=3000, metavar="N",
                    help="同一 0x100 窗口内连续 N 步未离开就算自旋（默认 3000）")
-    p.add_argument("--version", action="version", version="frbox 0.13.0")
+    p.add_argument("--version", action="version", version=f"frbox {__version__}")
     return p
 
 
@@ -135,6 +139,15 @@ def main(argv=None):
         return 2
     if args.events is not None:
         m.enable_events(period=args.events)
+    if args.bits:
+        spec = args.bits.split(":")
+        mask = int(spec[0], 0)
+        vecs = ([int(v, 0) for v in spec[1].split(",")]
+                if len(spec) > 1 and spec[1] else [0x13, 0x19])
+        period = int(spec[2], 0) if len(spec) > 2 and spec[2] else 2048
+        dev = m.enable_bits(mask=mask, vecs=vecs, period=period)
+        print(f"事件位图源已挂：0x41A56 |= 0x{mask:04X} → "
+              f"{','.join('0x%02X' % v for v in vecs)}，周期 {period}")
     if args.flow:
         m.attach_flow()
     if args.realos is not None:
