@@ -5,7 +5,7 @@ frbox 线的原始输出
 
 文件                    生成命令
 ----------------------  ---------------------------------------------------------------
-selftest.txt            cd emu && python frbox_selftest.py              （282 条断言）
+selftest.txt            cd emu && python frbox_selftest.py              （420 条断言）
 cpu-selftest.txt        cd emu && python fr_selftest.py                 （63 条 CPU 断言）
 realos-chain.txt        cd emu && python probe/exp_realos_chain.py      （启动链 + 13 条记录 + 初始上下文）
 realos-tcb.txt          cd emu && python probe/exp_realos_tcb.py        （TCB 布局 + 队列归属）
@@ -25,6 +25,17 @@ boot-session.txt        cd emu && python probe/exp_boot_session.py    （任务�
 session.txt             cd emu && python probe/exp_monitor_session.py session
 autospin-session.txt    cd emu && python probe/exp_monitor_session.py autospin
 irq-session.txt         monitor 的 irq table / irq fire 实录（早期手工录，未脚本化）
+all13.txt              cd emu && python probe/exp_all13.py             （V16 三场景总账 5→9→11 / 12）
+unlock-chain.txt       cd emu && python probe/exp_unlock_chain.py      （V16 逐任务轨迹）
+unlock-live.txt        cd emu && python probe/exp_unlock_chain.py --live
+msg-static.txt         cd emu && python probe/exp_msg_static.py        （V17 服务号普查：1,008 处 int / 1 处 rcv_msg / 15 处 snd_msg）
+mbx-live.txt           cd emu && python probe/exp_mbx_live.py          （V17 任务 5 的等待现场 + 三次消息调用）
+mbx-probe.txt          cd emu && python probe/exp_mbx_probe.py         （V17 kernel_call 代投 + 信箱控制块结构）
+msg-frame.txt          cd emu && python probe/exp_msg_frame.py         （V17 抄固件自己造的那条消息）
+msg-slot.txt           cd emu && python probe/exp_msg_slot.py          （V17 投递后的 11 次服务调用链）
+msg-matrix.txt         cd emu && python probe/exp_msg_matrix.py        （V17 内容矩阵 15 例）
+msg-chain.txt          cd emu && python probe/exp_msg_chain.py         （V17 A–E 五场景）
+msg-full.txt           cd emu && python probe/exp_msg_full.py          （V17 与 flag 通道叠加 P/Q/R）
 
 关键读数
 --------
