@@ -154,6 +154,7 @@ class Machine:
         self.msg = None                  # 信箱源（见 enable_msgs / frbox.mailbox，V17）
         self.cb = None                   # 回调槽（见 enable_callbacks / frbox.callback，V18）
         self.isr2b = None                # INT 0x2B 驱动（见 enable_isr2b / frbox.isr2b，V19）
+        self.irq2b_clock = None          # INT 0x2B 周期时钟（见 enable_auto_irq2b / frbox.dev_irq2b，V21）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -540,6 +541,23 @@ class Machine:
         """
         from .isr2b import attach as attach_irq
         return attach_irq(self)
+
+    def enable_auto_irq2b(self, period=1024):
+        """给 INT 0x2B 配一个周期时钟（见 dev_irq2b.py，V21）。
+
+        V19/V20 的 `--irq2b N` 是手动一次一次拉线；这一层把线挂到设备时基上，
+        `m.run()` / `fast N` 里中断自己来 —— 包括在任务代码里、内核里被拉起来。
+        周期是模型参数（真机频率未知，V20 已声明），实验里做频率扫描用。
+        同一向量已有待决请求时时钟会合并，不会把 cpu.irq_pending 灌满。
+        """
+        if self.irq2b_clock is not None:
+            return self.irq2b_clock
+        if self.isr2b is None:
+            self.enable_isr2b()
+        from .dev_irq2b import attach as attach_clk
+        dev = attach_clk(self, period=period)
+        dev.trace = self.trace
+        return dev
 
     def enable_cov(self, label=""):
         """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
