@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D300 仿真台 V20 · 那道墙是假的</title>
+<style>:root{--bg:#f7f8fa;--card:#ffffff;--ink:#1f2430;--sub:#5b6472;--line:#e3e7ee;
+        --hi:#c0392b;--acc:#1d6fb8;--ok:#1f8a4c;--warn:#b8791b;--mono:'Consolas','Courier New',monospace}
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 80px;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;line-height:1.8;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--sub);font-size:14px;margin-bottom:28px}
+  h2{font-size:19px;margin:38px 0 12px;padding-left:11px;border-left:4px solid var(--acc);font-weight:600}
+  h3{font-size:16px;margin:22px 0 8px;font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+  code,.mono{font-family:var(--mono);font-size:13px;background:#eef1f6;padding:1px 5px;border-radius:4px}
+  pre{background:#f2f4f8;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;
+      font-family:var(--mono);font-size:12.5px;line-height:1.65;margin:12px 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#eef1f6;font-weight:600}
+  td.m{font-family:var(--mono);font-size:12.5px}
+  tr.hi td{background:#fdf6e6}
+  tr.good td{background:#eaf7ef}
+  tr.bad td{background:#fdeceb}
+  .tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;margin-right:6px}
+  .t-fix{background:#fdecea;color:var(--hi)}
+  .t-ok{background:#e7f6ec;color:var(--ok)}
+  .t-old{background:#eef1f6;color:var(--sub)}
+  .t-wn{background:#fdf3e2;color:var(--warn)}
+  .note{background:#fbfcfd;border-left:3px solid var(--acc);padding:10px 14px;color:var(--sub);font-size:13.5px;margin:12px 0}
+  .warnbox{background:#fdf6ec;border-left:3px solid var(--warn);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .fixbox{background:#fdeceb;border-left:3px solid var(--hi);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  .okbox{background:#eaf7ef;border-left:3px solid var(--ok);padding:10px 14px;font-size:13.5px;margin:12px 0}
+  ul{margin:8px 0 8px 22px;padding:0}
+  li{margin:4px 0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:24px;color:var(--acc);line-height:1.3}
+  .kpi span{font-size:12.5px;color:var(--sub)}
+  @media(max-width:720px){.kpis{grid-template-columns:1fr 1fr}}</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>仿真台 V20：那道墙是假的</h1>
+<div class="sub">0x174 早就有人管 · 分水岭是「谁在单步」 · 240 次中断一个字节都不用硬写</div>
+
+<div class="kpis">
+  <div class="kpi"><b>484+63</b><span>自检通过</span></div>
+  <div class="kpi"><b>605 步</b><span>第 9 次中断（V19 是两万步超时）</span></div>
+  <div class="kpi"><b>0 次</b><span>硬件被硬写的次数</span></div>
+  <div class="kpi"><b>+2053</b><span>240 次中断的新执行地址</span></div>
+</div>
+
+<div class="okbox">
+<b>一句话：</b>V19 结尾留了一道「新墙」——不替外设答话，第 9 次中断就死等
+<code>0x174</code> 的 bit6。V20 查下去发现<b>墙不存在</b>：<code>0x174</code> 早在
+<code>dev_xfer.D300_A_TABLE</code> 里就有建模（启动位 <code>0x02</code>、完成位 <code>0x40</code>），
+<code>boot_realos()</code> 还无条件调了 <code>enable_xfer()</code>。真正的问题是
+<code>Irq2B.raise_once()</code> 用 <code>cpu.step()</code> 单步，<b>绕过了
+<code>Machine.step()</code> 的设备时基分发</b> —— 握手模型的 <code>tick()</code> 一个节拍都拿不到，
+完成位当然永远不出现。改走设备时基之后，第 9 次中断 605 步就走完，
+<b>一个字节都不用硬写</b>。
+</div>
+
+<h2>1. 那句「缺一个外设」错在哪</h2>
+
+<p>V19 看到 <code>0x9C974</code> 置 bit1、<code>0x9C97A</code> 等 bit6 就自转，判定「外部器件没建模」，
+于是在轮询点上替它写 <code>0x40</code>。可是这个握手一直有模型：</p>
+
+<table>
+<tr><th><code>D300_A_TABLE</code>（<code>dev_xfer.py</code> 里写死的）</th><th>启动位</th><th>完成位</th><th>运行期 <code>dp.owner()</code></th></tr>
+<tr class="good"><td class="m">0x0AF</td><td class="m">0x02</td><td class="m">0x80</td><td class="m">XferHandshake</td></tr>
+<tr class="hi"><td class="m">0x174</td><td class="m">0x02</td><td class="m">0x40</td><td class="m">XferHandshake</td></tr>
+<tr><td class="m">0x524</td><td class="m">0x02</td><td class="m">0x40</td><td class="m">XferHandshake</td></tr>
+<tr><td class="m">0x534</td><td class="m">0x02</td><td class="m">0x40</td><td class="m">XferHandshake</td></tr>
+</table>
+
+<p>而且它是<b>默认挂上的</b>：<code>Machine.boot_realos()</code> 的头两行就是
+<code>enable_xfer()</code> 和 <code>enable_dispatch()</code>。所以从 V10 起，
+每一个走 REALOS 的实验（包括 V19 自己的探针）都已经有这套模型了。</p>
+
+<div class="fixbox">
+<b>更正 V19 第 6 节。</b>原文写「不替外设答话时第 9 次中断一去不回，卡在
+<code>0x9C97A</code>」——卡住这件事是真的，但原因不是缺器件，是<b>探针绕过了设备时基</b>。
+这条更正同时推翻 V19 的「不能报：0x174 那个握手背后是什么器件」之外的另一个判断：
+那个握手不需要我们替它答。
+</div>
+
+<h2>2. 分水岭：谁在单步</h2>
+
+<p>同一条中断线、同一台机器、同一套预热，唯一的变量是「用哪个循环推进 CPU」：</p>
+
+<table>
+<tr><th>步进口径</th><th>第 9 次中断</th><th>在 <code>0x9C97A</code> 上自旋的次数</th><th>终点 PC</th><th><code>[0x174]</code></th></tr>
+<tr class="bad"><td class="m">cpu.step()</td><td>卡死（两万步超时）</td><td class="m">6,519</td><td class="m">0x9C97A</td><td class="m">0x02</td></tr>
+<tr class="good"><td class="m">m.step(1)</td><td>605 步走完，正常 reti</td><td class="m">14</td><td class="m">0xFE510</td><td class="m">0x00</td></tr>
+</table>
+
+<p>差别只有一行：<code>Machine.step()</code> 每 <code>cycles_per_tick</code>（256）步会分发一次
+<code>d.tick()</code>；<code>cpu.step()</code> 不会。<code>XferHandshake.tick()</code> 就在那里
+把完成位置起来（<code>delay=64</code> 个周期，一次 tick 就够）。</p>
+
+<pre># frbox/isr2b.py · raise_once()
+while steps &lt; max_steps:
+    if run_tick:
+        m.step(1)          # ← V20：走设备时基
+    else:
+        c.step(); m.step_count += 1    # ← V19 的做法，设备永远不走时间</pre>
+
+<div class="warnbox">
+<b>这个坑值得单记一条：</b>任何自己写 <code>cpu.step()</code> 循环的探针，
+都会让<b>所有</b>设备模型（xfer / timer / serial / clock）停在原地。
+这类「卡住」看起来像缺硬件，其实是少了时基 —— 排查顺序应该是
+「先确认设备 tick 有没有跑」，再去怀疑器件。
+</div>
+
+<h2>3. bit6 到底是谁置的</h2>
+
+<p>挂上访存监视看 <code>0x174</code>，9 次中断里最后一次完整事务长这样：</p>
+
+<pre>rd 0x9C974 = 0x00
+wr 0x9C974 = 0x02          ← 固件置启动位
+rd 0x9C97A = 0x02          ← 等 bit6，还没有
+rd 0x9C97A = 0x02
+...（共 13 次 0x02）...
+rd 0x9C97A = 0x42          ← bit6 出现了：0x02 | 0x40
+rd 0x9C982 = 0x42
+wr 0x9C982 = 0x00          ← 固件清寄存器</pre>
+
+<p><code>0x9C97A</code> 上一共读 14 次，只有第 14 次带回 bit6。整个过程中
+<b>没有一行代码写过 <code>0x40</code></b> —— 它是 <code>XferHandshake.tick()</code>
+按「启动后 64 周期完成」置上的。</p>
+
+<h2>4. 240 次中断：全程不硬写</h2>
+
+<table>
+<tr><th></th><th>V19（硬写 0x40）</th><th>V20（设备模型）</th></tr>
+<tr><td>请求次数</td><td class="m">240</td><td class="m">240</td></tr>
+<tr><td>硬写完成位</td><td class="m">15 次</td><td class="m"><b>0 次</b></td></tr>
+<tr><td>结果</td><td>全部回到 reti</td><td>全部回到 reti</td></tr>
+<tr class="good"><td>覆盖增量</td><td class="m">+2053</td><td class="m">+2053</td></tr>
+<tr><td>使用服务</td><td class="m">14 → 17</td><td class="m">14 → 17</td></tr>
+<tr><td>回调槽</td><td>走到 <code>0x822B6</code> 后注销</td><td>走到 <code>0x822B6</code> 后注销</td></tr>
+</table>
+
+<p>两条路的覆盖数字完全一样 —— 因为固件拿到 bit6 之后的走法一样，差别只在「谁给的位」。
+V20 起 <code>answer</code> 默认改成 <code>False</code>，靠模型自己答；
+<code>answer=True</code>（CLI <code>--answer</code>、monitor <code>irq2b answer N</code>）
+留作复现 V19 那种做法的对照组。</p>
+
+<h2>5. 顺带摸清：那两个通道组</h2>
+
+<p>既然 <code>0x174</code> 是「启动—等完成—读结果」这一类寄存器，那结果读在哪？
+把 <code>0x170</code>–<code>0x18F</code> 全挂上监视，240 次中断的访问统计是：</p>
+
+<table>
+<tr><th>地址</th><th>读</th><th>写</th><th>说明</th></tr>
+<tr class="hi"><td class="m">0x174</td><td class="m">616</td><td class="m">60</td><td>控制/状态：bit1 启动、bit6 完成</td></tr>
+<tr><td class="m">0x176</td><td class="m">—</td><td class="m">15</td><td>转换前写 <code>0x77</code></td></tr>
+<tr><td class="m">0x177</td><td class="m">—</td><td class="m">15</td><td>转换前写 <code>0</code></td></tr>
+<tr class="hi"><td class="m">0x186</td><td class="m">15</td><td class="m">—</td><td><b>唯一被读的结果寄存器</b></td></tr>
+<tr><td class="m">0x178 / 0x17A / 0x17C / 0x17E / 0x180 / 0x182 / 0x184 / 0x188 / 0x18A / 0x18C / 0x18E</td><td class="m">0</td><td class="m">—</td><td>一次都没碰</td></tr>
+</table>
+
+<p>240 次中断里只有 <b>15 次</b>走到「写 0x176/0x177 → 置启动 → 等完成 → 读 0x186」这条完整流程，
+而且只取第 8 路（<code>0x186</code>）。再往上翻静态代码，<code>0x8A500</code> 附近是一个
+按通道号选寄存器的大 switch：</p>
+
+<table>
+<tr><th>组</th><th>结果寄存器</th><th>位宽</th><th>个数</th><th>配套控制</th></tr>
+<tr class="good"><td>10 位组</td><td class="m">0x178 0x17A … 0x18E（步长 0x2）</td><td>10 位（&amp; 0x3FF）</td><td class="m">12</td><td class="m">0x174（bit1 / bit6）</td></tr>
+<tr class="good"><td>12 位组</td><td class="m">0x528 0x52A 0x52C 0x52E 0x538 0x53A 0x53C 0x53E</td><td>12 位（&amp; 0xFFF）</td><td class="m">8</td><td class="m">0x524 / 0x534（同为 bit1 / bit6）</td></tr>
+</table>
+
+<div class="note">
+12 位组在 <code>0x52E</code> 之后跳到 <code>0x538</code>，中间 <code>0x530</code>–<code>0x536</code>
+这 4 个字不在通道表里。<code>0x534</code> 恰好是 <code>D300_A_TABLE</code> 里的另一个握手点 ——
+所以这一带的布局是「控制字夹在结果字中间」。
+</div>
+
+<p>两个组用的是同一套「启动—完成—取结果」协议，这是 A/D 转换的典型签名。</p>
+
+<div class="warnbox">
+<b>但只能说「签名像」。</b>固件的办事顺序确实符合采样器：选通道 → 写配置 → 置启动 →
+等完成 → 取低 N 位。可器件身份（是不是片内 ADC、哪一路接什么传感器）没有被证实，
+报告里不能写「它就是 ADC」。
+</div>
+
+<h2>6. 灌不同模拟量，覆盖一个字都不变</h2>
+
+<p>既然只读第 8 路，那就给 12 个通道灌上不同的值试试：</p>
+
+<table>
+<tr><th>灌进 <code>0x178</code>–<code>0x18E</code> 的值</th><th>覆盖</th><th>增量</th><th>服务调用</th></tr>
+<tr><td>全 0（现状）</td><td class="m">3,496</td><td class="m">+2053</td><td class="m">17</td></tr>
+<tr><td>全 0x200（半量程）</td><td class="m">3,496</td><td class="m">+2053</td><td class="m">17</td></tr>
+<tr><td>全 0x3FF（满量程）</td><td class="m">3,496</td><td class="m">+2053</td><td class="m">17</td></tr>
+<tr><td>0x40, 0x80, …, 0x200</td><td class="m">3,496</td><td class="m">+2053</td><td class="m">17</td></tr>
+</table>
+
+<p>四个场景一模一样。不是「值被忽略」，而是它只被搬到别处存着，中间没有任何分支看它 ——
+和 V15 那条「事件越多 ≠ 覆盖越广」是一回事：<b>换输入不等于换路径</b>。</p>
+
+<h2>7. 改了哪些地方</h2>
+
+<ul>
+<li><code>frbox/isr2b.py</code>：<code>raise_once</code> / <code>burst</code> 加 <code>run_tick</code>
+（默认 <code>True</code>，走 <code>Machine.step</code>）；<code>answer</code> 默认改 <code>False</code>；
+头部文档第 5 节整段重写</li>
+<li><code>cli.py</code>：<code>--no-answer</code> 退役（<code>argparse.SUPPRESS</code>），新增 <code>--answer</code>
+（硬写完成位，对照用）</li>
+<li><code>monitor.py</code>：<code>irq2b off N</code> → <code>irq2b answer N</code>，默认走设备模型</li>
+<li><code>frbox_selftest.py</code>：删掉「不答话时第 9 次回不来」，换成 1 条「20 次全部 reti」+
+  「第 9 次 605 步」+「硬写 0 次」+「<code>run_tick=False</code> 能复现 V19」+「只有 0x186 被读」</li>
+<li>探针 <code>exp_tick.py</code>（A–H 八段）→ <code>results/frbox/tick.txt</code></li>
+</ul>
+
+<h2>8. 口径与边界</h2>
+
+<div class="warnbox">
+<b>数字口径（重要）：</b>V20 沿用 V19 的预热 —— <b>12 × 5000 步、不注入 vec 0x13/0x19</b>，
+基线覆盖 <b>1,443</b>。V17/V18 是 40 × 5000 步 + 每批喂事件（基线 <b>6,382</b>）。
+两套数字<b>不能相减</b>。
+</div>
+
+<table>
+<tr><th></th><th>能报</th></tr>
+<tr class="good"><td>接线</td><td><code>0x174</code> 归 <code>XferHandshake</code>（启动位 <code>0x02</code>、完成位 <code>0x40</code>）；<code>boot_realos()</code> 无条件 <code>enable_xfer()</code></td></tr>
+<tr class="good"><td>更正</td><td>V19 那次「第 9 次卡死」是 <code>raise_once</code> 绕过设备时基造成的；<code>run_tick=False</code> 可稳定复现</td></tr>
+<tr class="good"><td>行为</td><td>走设备时基后 240 次全部 reti、覆盖 +2053，<b>硬写 0 次</b></td></tr>
+<tr class="good"><td>结构</td><td>10 位组 12 路（<code>0x178</code>–<code>0x18E</code>）+ 12 位组 8 路（<code>0x528</code>–<code>0x53E</code>）；这条路径只取第 8 路，240 次走 15 趟</td></tr>
+<tr class="bad"><td>不能报</td><td>它是 A/D 转换器 —— 软件签名像，器件身份未证</td></tr>
+<tr class="bad"><td>不能报</td><td>各通道接的是什么物理量；真机上这条中断多久来一次</td></tr>
+<tr class="bad"><td>不能报</td><td>转换要多少时间（<code>delay=64</code> 是近似值，不是逆向出来的时序）</td></tr>
+<tr class="bad"><td>不能报</td><td>「相机跑起来了」——中断仍然是我们请求的</td></tr>
+</table>
+
+<p class="sub" style="margin-top:30px">全部数字来自 <code>emu/probe/exp_tick.py</code>
+的原始输出 <code>results/frbox/tick.txt</code>；自检 484/484（frbox）+ 63/63（CPU）。</p>
+
+</div>
+</body>
+</html>
