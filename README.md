@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.19.0** | NikonEmulator 驱动 |
+| | **frbox 0.20.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -46,9 +46,10 @@ python -m frbox -M d300-a --realos 1 --msg --flow \
 python -m frbox -M d300-a --realos 1 --cb --flow \
        -c "fast 60000; cb; cb tick 13; cb"               # 替 0x80588 手动扫一圈回调槽（V18）
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240 \
-       -c "irq2b"                                        # 接上 INT 0x2B，回调链自己走（V19）
+       -c "irq2b"                                        # 接上 INT 0x2B，回调链自己走（V19/V20）
+python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer  # 硬写完成位（V19 对照）
 
-python frbox_selftest.py     # 475/475
+python frbox_selftest.py     # 484/484
 python fr_selftest.py        # 63/63
 ```
 
@@ -110,7 +111,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.19.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.20.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -122,14 +123,14 @@ D300-emulator-analysis/
 │   ├── fr_selftest.py      63 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   475 条断言
+│   ├── frbox_selftest.py   484 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              62 个取证脚本（见 probe/README.md）
+│   └── probe/              63 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
 │   ├── 03-frbox.md         ★ 模拟器设计与命令参考
-│   └── reports/            18 份报告（HTML，14–31 号，frbox 线）
+│   └── reports/            19 份报告（HTML，14–32 号，frbox 线）
 ├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
 │   └── upstream-changes.md 对上游的 5 处修改
@@ -155,7 +156,7 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 475 条（frbox）+ 63 条（CPU），全绿 |
+| 自检 | 484 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
 | 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
@@ -178,7 +179,11 @@ D300-emulator-analysis/
 | A 段位分派器（V19） | 14 字节待办标志 `0x3F402`–`0x3F40F`，61 个位开关（主路径 54 + 尾声子程序 `0x8096A` 7）、57 个处理函数；槽0 在 `0x3F404` bit1、槽1 在 `0x3F40D` bit2 |
 | 接上中断之后（V19） | 回调链**不用手动 tick** 就走完四站：第 24 / 44 / 60 次换站，第 120 次计数归零、`0x3F404` 清 0；240 次中断 **+2053** 执行地址（手动 tick 同口径 +624） |
 | 全开任务 + 中断（V19） | 服务调用 57 → **301**（+244），任务 4/8/9 变 ready；任务 6 由 `sta_tsk(6,1)` 起来 |
-| 新的一道墙（V19） | 不替外设答话时第 9 次中断卡死在 `0x9C97A`（`btsth @0x174,#0x40` 轮询，`beq -4` 自转）；外层函数 `0x9C94A`–`0x9C9CE`，ISR 的 `0x80782` 调它 |
+| 🚫**那道墙是假的**（V20 更正 V19） | 第 9 次中断卡在 `0x9C97A` 是真的，但**不是缺器件**：`0x174` 归 `XferHandshake`（`D300_A_TABLE` 有 `0x174:(0x02,0x40)`），`boot_realos()` 无条件 `enable_xfer()`。真正原因是 `raise_once()` 用 `cpu.step()` **绕过设备时基**，`tick()` 拿不到节拍 |
+| ⭐分水岭（V20） | 同一台机器：`cpu.step()` 第 9 次两万步超时、`0x9C97A` 自旋 6,519 次；`m.step(1)` 605 步正常 `reti`、只经过 14 次 |
+| 不硬写也能过（V20） | 240 次中断全部 `reti`、覆盖 **+2053**、硬写 **0 次**（V19 硬写了 15 次）；`answer` 默认改 `False`，`--answer` 只作对照 |
+| 两组结果寄存器（V20） | 10 位组 12 路 `0x178`–`0x18E`（步长 2）+ 12 位组 8 路 `0x528`–`0x53E`；两组都是「bit1 启动 / bit6 完成」同一套协议 |
+| 只取第 8 路（V20） | 240 次里只有 15 次走完整流程，且只读 `0x186`；给 12 路灌全 0 / 0x200 / 0x3FF / 渐变，覆盖都是 +2053 —— **换输入 ≠ 换路径** |
 | 倒计时门控（V18） | 每 tick 计数减 1，归零才 `call [槽]`；槽0 计数 12、链式；槽1 计数 8、一次性（跑完注销） |
 | 回调链四站（V18） | `0x8225E` → `0x82278`（`set_flg(9,0x400)`）→ `0x82298`（`sta_tsk(6,1)`）→ `0x822B6`（`set_flg(9,0x200)`，终点） |
 | 手动 tick 的收益（V18） | 只 tick +246 卡第 3 站；全开 dormant + tick **+507**、链走完四站、活任务 4→8（任务 6 从 `sta_tsk` 起来）—— **换路径才涨** |
