@@ -1209,6 +1209,71 @@ def test_cov():
     check("summary 有四项", sorted(s.keys()),
           sorted(["label", "已执行指令地址", "ROM 字数", "占比", "未跑区间(≥64B)"]))
 
+def test_taskboot():
+    """V16：把「复位就激活」位打开，让 REALOS 自己创建 dormant 任务 + 轨迹解锁。"""
+    print("\n[22 任务启动 / 轨迹解锁（V16）]")
+    from frbox import taskboot, unlock
+
+    m = create("d300-a")
+    m.load()
+    # 开机时只有任务 1/5/0 的「复位就激活」位是 1；4/8/9 也是 0，它们靠运行时
+    # sta_tsk 才被建起来（V13 的 sta_tsk(9)/sta_tsk(4)、V15 的 sta_tsk(8)）。
+    check("开机时只有 3 个任务是「复位就激活」",
+          taskboot.dormant(m), [2, 3, 4, 6, 7, 8, 9, 10, 11, 12])
+    check("任务 1/5/0 是「复位就激活」",
+          [t for t in (1, 5, 0) if taskboot.is_active(m, t)], [1, 5, 0])
+
+    m.bus.wr(0xFE038, 4, 0x80000000)
+    check("任务表在 ROM 区，bus.wr 写不动",
+          m.fetch_bytes(0xFE038, 4), b"\x00\x00\x00\x00")
+
+    check("activate 返回真正改动的任务", taskboot.activate(m, [2]), [2])
+    check("重复 activate 不算改动", taskboot.activate(m, [2]), [])
+    check("改完 records 立刻反映", taskboot.is_active(m, 2), True)
+    check("activate(off) 能关回去",
+          (taskboot.activate(m, [2], on=False), taskboot.is_active(m, 2))[1], False)
+    check("activate('dormant') 一次全开", sorted(taskboot.activate(m, "dormant")),
+          [2, 3, 4, 6, 7, 8, 9, 10, 11, 12])
+
+    # 单开一个：入口必须真的被执行（这才是「起来了」的判据，不是状态字）
+    m2 = create("d300-a")
+    m2.load()
+    taskboot.activate(m2, [2])
+    m2.reset()
+    cov = m2.enable_cov()
+    m2.boot_realos(1)
+    m2.enable_events(period=4096)
+    m2.attach_flow()
+    rec = taskboot.record(m2, 2)
+    for _ in range(12):
+        m2.run(max_steps=5000, spin_guard=False)
+        m2.bus.wr(0x90, 1, m2.bus.rd(0x90, 1) | 0x02)
+        for v in (0x13, 0x19):
+            m2.raise_irq(v)
+    check("激活后任务 2 的入口真的被执行", cov.visited(rec["entry"]), True)
+    check("任务 2 起来后停在某个 flag 上", unlock.task_state(m2, 2)["wait_kind"], "flag")
+
+    # 轨迹：任务 11 自己会一路走到 ext_tsk
+    m3 = create("d300-a")
+    m3.load()
+    taskboot.activate(m3, [11])
+    m3.reset()
+    cov3 = m3.enable_cov()
+    m3.boot_realos(1)
+    m3.enable_events(period=4096)
+    m3.attach_flow()
+    st = unlock.trace(m3, 11, rounds=12, batch=4000, cov=cov3)
+    check("任务 11 的轨迹不止一站", len(st["stations"]) >= 4, True)
+    check("任务 11 最后是自己退出的", st["end"], "任务自己 ext_tsk 退出")
+    check("任务 11 的站点里出现 flag5", any(s["flag"] == 5 for s in st["stations"]), True)
+
+    # flag 是握手闸门：等待方自己 clr 自己要的那一位
+    tcb11 = taskboot.record(m3, 11)["tcb"]
+    clr = [s for s in m3.flow.sets() if s[1] == "clr" and s[2] == tcb11]
+    check("任务 11 自己发过 clr_flg（清的是自己要等的那一位）", len(clr) > 0, True)
+    check("任务 11 清过 flag1 与 flag5 的位", {1, 5} <= {x[3] for x in clr}, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1232,6 +1297,7 @@ def main():
     test_events()
     test_bits()
     test_cov()
+    test_taskboot()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
