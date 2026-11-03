@@ -153,6 +153,7 @@ class Machine:
         self.cov = None                  # 覆盖率（见 enable_cov / frbox.cover，V15）
         self.msg = None                  # 信箱源（见 enable_msgs / frbox.mailbox，V17）
         self.cb = None                   # 回调槽（见 enable_callbacks / frbox.callback，V18）
+        self.isr2b = None                # INT 0x2B 驱动（见 enable_isr2b / frbox.isr2b，V19）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -520,14 +521,25 @@ class Machine:
 
         A 段有一对「登记—倒计时—派发」链：全局单槽存一个代码指针 + 一个倒计时，
         每 tick 计数减 1，减到 0 才 `call [槽]`。两套槽的派发器分别在 0x8223A /
-        0x822CE，唯一的引用点都在主循环 0x80588 那张分派表里。
+        0x822CE，唯一的引用点都在 `0x80588` 那张位分派表里。
 
-        ⚠️ 主循环在模拟器里**一次都没跑过**（静态上也找不到调用者），所以槽里虽然
-        早就登记好了回调，却永远等不到派发。`Machine.cb.tick()` 就是手动替主循环
-        转一圈 —— 这是「注入外部 tick」，不是「相机自己在跑」。
+        ⚠️ V19 更正：`0x80588` **不是主循环**，它是 INT 0x2B 的处理函数
+        （见 isr2b.py）。它静态上没有 `call` 引用是对的 —— 它不是被调用的，
+        是被中断进来的。要让它跑，用 `Machine.enable_isr2b()`，而不是 `cb.tick()`：
+        后者是「手动替它转一圈」，前者是「把那根中断线接上」。
         """
         from .callback import attach as attach_cb
         return attach_cb(self)
+
+    def enable_isr2b(self):
+        """接上 INT 0x2B（见 isr2b.py，V19）。
+
+        `0x80588` = 向量表第 0xD4 项 → INT 0x2B。它是 A 段的位分派器：逐位测
+        `0x3F402`–`0x3F40F` 这 14 个待办标志字节，命中就调对应处理函数。
+        接上之后两个回调槽会自己往前走，不用再手动 tick。
+        """
+        from .isr2b import attach as attach_irq
+        return attach_irq(self)
 
     def enable_cov(self, label=""):
         """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
