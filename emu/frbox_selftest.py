@@ -1347,6 +1347,73 @@ def test_msgs():
     check("历史记录里两条都带回来码 0", [h[1] for h in mb.history], [0, 0])
 
 
+def test_callbacks():
+    """V18：两个回调槽 —— 登记是活的，派发器没人调。"""
+    print("\n[24 回调槽（V18）]")
+    from frbox import callback
+
+    m = create("d300-a")
+    check("默认不挂回调槽", m.cb, None)
+    m.load()
+    m.reset()
+    m.enable_cov()
+    m.boot_realos(1)
+    m.enable_events(period=4096)
+    m.attach_flow()
+    cb = m.enable_callbacks()
+    check("挂上之后是 Callbacks", isinstance(cb, callback.Callbacks), True)
+    check("Machine.cb 指向同一个对象", m.cb is cb, True)
+    check("两个槽", len(cb.slots), 2)
+
+    # 静态常量：两套槽与两个派发器
+    check("槽0 指针 = 0x417EC", cb.slots[0].ptr, 0x000417EC)
+    check("槽1 指针 = 0x417F4（步长 8）", cb.slots[1].ptr, 0x000417F4)
+    check("槽0 派发器 = 0x8223A", cb.slots[0].dispatch, 0x0008223A)
+    check("槽1 派发器 = 0x822CE", cb.slots[1].dispatch, 0x000822CE)
+    check("两个派发器各只有一个引用点，都在主循环里",
+          (cb.slots[0].caller, cb.slots[1].caller), (0x00080606, 0x000808A4))
+    check("主循环入口记在模块里", callback.MAIN_LOOP, 0x00080588)
+
+    for _ in range(24):
+        m.run(max_steps=5000, spin_guard=False)
+        m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
+        for v in (0x13, 0x19):
+            m.raise_irq(v)
+
+    # 基线：槽已经登记好了，但主循环/派发器一次都没执行
+    st0 = cb.slots[0].state()
+    check("基线后槽0 已登记 0x8225E", st0["cb"], 0x0008225E)
+    check("槽0 倒计时 0x000C（12 圈一拍）", st0["count"], 0x000C)
+    check("槽0 挂起标志位开着", st0["pending"], True)
+    check("主循环 0x80588 从没执行过", m.cov.visited(callback.MAIN_LOOP), False)
+    check("派发器 0x8223A 从没执行过", m.cov.visited(callback.DISPATCH0), False)
+    check("派发器 0x822CE 从没执行过", m.cov.visited(callback.DISPATCH1), False)
+
+    # tick 12 圈：倒计时减到 0 才会真的 call 一次
+    n0 = m.cov.words()
+    got = cb.tick(12)
+    # 槽0 倒计时 0xC（第 12 圈）、槽1 倒计时 0x8（第 8 圈）—— 12 圈内两个都会到点
+    check("12 圈内两个槽各执行了一次", len(got), 2)
+    check("其中一次是槽0 的 0x8225E",
+          0x0008225E in [r["cb"] for _, _, r in got], True)
+    check("执行完槽里换成下一站 0x82278", cb.slots[0].state()["cb"], 0x00082278)
+    check("派发器从此被执行过", m.cov.visited(callback.DISPATCH0), True)
+    check("这一圈带来了新覆盖", m.cov.words() > n0, True)
+    check("主循环本身仍然没执行", m.cov.visited(callback.MAIN_LOOP), False)
+
+    # 门控：倒计时没到点的圈不执行回调
+    got2 = cb.tick(3)
+    check("门控未到点的 3 圈不执行任何回调", got2, [])
+    check("倒计时确实在减", cb.slots[0].state()["count"], 0x0007)
+
+    # 继续扫：槽会一站站往前走，走到 0x82278（set_flg 叫醒任务 9）那一站时，
+    # 控制权可能被交给调度器 —— 这时 call_function 收不回来，槽就停在那里。
+    cb.tick(200)
+    check("再扫 200 圈之后槽已经离开起点 0x8225E",
+          cb.slots[0].state()["cb"] != 0x0008225E, True)
+    check("槽0 至少真执行过两次以上", len(cb.slots[0].fired) >= 2, True)
+
+
 def cov_words(m):
     return m.cov.words() if getattr(m, "cov", None) else 0
 
@@ -1376,6 +1443,7 @@ def main():
     test_cov()
     test_taskboot()
     test_msgs()
+    test_callbacks()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
