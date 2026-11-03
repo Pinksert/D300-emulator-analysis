@@ -1669,6 +1669,108 @@ def test_autoirq():
     check("boot 前挂钟：终态覆盖 3,861（与挂钟在后一致）", m5.cov.words(), 3861)
 
 
+def test_bboot():
+    """V22：B 段 REALOS 内核原生启动 + 任务 2 上 CPU。"""
+    print("\n[27 B 段内核启动 + 任务上 CPU（V22）]")
+    from frbox import brealos
+    from frbox.isr2b import table as dispatch_table
+
+    m = create("d300-a")
+    m.load()
+    m.reset()
+    t = dispatch_table(m)
+    check("A 位分派表 61 条（V19 口径）", len(t), 61)
+    check("A 位分派表去重 57 个处理函数", len(set(x[4] for x in t)), 57)
+
+    # B 段 boot：确定性 - 191,520 步到空闲任务
+    b = brealos.boot()
+    check("B boot 191,520 步到空闲任务", b.step_count, 191520)
+    check("B 空闲任务 PC=0x407DC", b.cpu.pc, 0x000407DC)
+    check("B 空闲任务 SP=0x68000BE8（任务栈在内核窗口里）", b.cpu.r[15], 0x68000BE8)
+    check("B 空闲任务 S=1（用户态）", b.cpu.s, 1)
+    check("B 空闲任务 ILM=0x1F", b.cpu.ilm, 0x1F)
+    check("B boot 覆盖 1241（确定性）", b.cov.words(), 1241)
+    check("B 当前 TCB=空闲任务 0x6800060C",
+          b.bus.rd(brealos.CUR_TCB_SLOT, 4), 0x6800060C)
+
+    # 任务表：28 条，字段实测
+    recs = brealos.records(b)
+    check("B 任务表 28 条", len(recs), 28)
+    r2 = [r for r in recs if r["idx"] == 2][0]
+    check("任务 2 入口 0x1200AC", r2["entry"], 0x1200AC)
+    check("任务 2 栈顶 0x9F800AA4", r2["stack"], 0x9F800AA4)
+    check("任务 2 的 +0x0C 域 = 0x68000194（表域与内核 TCB 错位一格，对应关系未定）",
+          r2["tcb"], 0x68000194)
+    r28 = [r for r in recs if r["idx"] == 28][0]
+    check("任务 28（空闲）TCB 0x6800060C", r28["tcb"], 0x6800060C)
+
+    # 任务 2 的初始帧在 boot 时已建好（栈区 RAM 建好后才存得住）
+    check("任务 2 帧 [0x9F800AA4]=入口 0x1200AC",
+          b.bus.rd(0x9F800AA4, 4), 0x1200AC)
+    check("任务 2 帧 [+4]=PS 0x1F0030",
+          b.bus.rd(0x9F800AA8, 4), 0x1F0030)
+
+    # 向量表：真 ISR 42 条（桩 0x404F8/0x4046E/0x406E6 已剔除）
+    stubs = {0x000404F8, 0x0004046E, 0x000406E6}
+    real = [v for v in range(0x10, 0x40)
+            if b.vector(v) not in stubs and 0x40000 <= b.vector(v) < 0x740000]
+    check("B 向量表真 ISR 42 条", len(real), 42)
+    check("B INT 0x3F=调度请求向量 0x40D32", b.vector(0x3F), 0x40D32)
+    check("B INT 0x1B=串口 ISR 0x12FDB4", b.vector(0x1B), 0x12FDB4)
+
+    # sys_sta_tsk + 派发：任务 2 真正上 CPU
+    r = brealos.sta_tsk(b, 2)
+    check("sys_sta_tsk(2) err=-63（帧已在 boot 建好）", r["err"], -63)
+    dc, pc = brealos.request_dispatch(b)
+    check("一次派发覆盖 +217（确定性）", dc, 217)
+    check("任务 2 入口 0x1200AC 执行过", b.cov.visited(0x1200AC), True)
+    check("当前 TCB 切到任务 2 (0x68000168)",
+          b.bus.rd(brealos.CUR_TCB_SLOT, 4), 0x68000168)
+    check("任务 2 跑进 0x14E8xx（SDRAM 扫描循环）",
+          0x14E800 <= pc <= 0x14E8FF, True)
+
+
+def test_pendbits():
+    """V22：A 段位分派器逐位点亮 - 干净机单点确定性。"""
+    print("\n[28 A 段待办区位扫描（V22）]")
+    from frbox.isr2b import attach as attach_irq
+
+    def fresh():
+        m = create("d300-a")
+        m.load()
+        m.reset()
+        m.enable_cov()
+        m.boot_realos(1)
+        m.attach_flow()
+        m.enable_callbacks()
+        h = attach_irq(m)
+        for _ in range(12):
+            m.run(max_steps=5000, spin_guard=False)
+        return m, h
+
+    # 干净机单点：0x3F402 bit6 → 0xAD3C8 执行，+369（确定性）
+    m, h = fresh()
+    b = m.cov.words()
+    m.bus.wr(0x3F402, 1, 0x40, m.cpu.pc)
+    h.raise_once()
+    m.run(max_steps=2000, spin_guard=False)
+    check("单点 [0x3F402]&0x40：基线 1443", b, 1443)
+    check("单点 [0x3F402]&0x40：覆盖 +369", m.cov.words() - b, 369)
+    check("单点 [0x3F402]&0x40：目标 0xAD3C8 执行过",
+          m.cov.visited(0xAD3C8), True)
+    check("单点后回空闲任务", m.cpu.pc, 0xFE510)
+
+    # 干净机单点：0x3F404 bit7 → 0xAF64C 不执行（位被点亮但处理函数不走目标）
+    m, h = fresh()
+    b = m.cov.words()
+    m.bus.wr(0x3F404, 1, 0x80, m.cpu.pc)
+    h.raise_once()
+    m.run(max_steps=2000, spin_guard=False)
+    check("单点 [0x3F404]&0x80：覆盖 +299（分派器骨架）", m.cov.words() - b, 299)
+    check("单点 [0x3F404]&0x80：目标 0xAF64C 未执行",
+          m.cov.visited(0xAF64C), False)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1697,6 +1799,8 @@ def main():
     test_callbacks()
     test_isr2b()
     test_autoirq()
+    test_bboot()
+    test_pendbits()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
