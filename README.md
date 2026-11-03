@@ -130,7 +130,7 @@ D300-emulator-analysis/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
 │   ├── 03-frbox.md         ★ 模拟器设计与命令参考
-│   └── reports/            19 份报告（HTML，14–32 号，frbox 线）
+│   └── (reports/           HTML 报告只留本地，不入仓库 —— 索引见文末)
 ├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
 │   └── upstream-changes.md 对上游的 5 处修改
@@ -322,9 +322,12 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 
 ---
 
-## 报告索引（23 份）
+## 报告索引（32 份）
 
-01–13 是 NikonEmulator 线，14–23 是 frbox 线。
+01–13 是 NikonEmulator 线，14–32 是 frbox 线。
+
+**报告 HTML 一律不入本仓库**，只保留在本地工作区（根目录 `D300固件-仿真台V*.html`
+与 `docs/reports/`）。此处只留索引，方便对号入座。
 
 | # | 文件 | 主题 |
 |---|---|---|
@@ -351,6 +354,15 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 | 21 | `21-frbox-v9-task-table-boot.html` | frbox V9：任务表解密与 μITRON 半主机 |
 | 22 | `22-frbox-v10-native-realos.html` | frbox V10：固件自带的 REALOS 第一次真的跑起来了 |
 | 23 | `23-frbox-v11-native-scheduler.html` | frbox V11：固件自己的调度器第一次真的换起任务来（ILM 约定 / 0x44 / 0x3F4–0x3FC） |
+| 24 | `24-frbox-v12-task-waits.html` | frbox V12：任务不再是黑盒（flag 对象表 / TCB 状态字） |
+| 25 | `25-frbox-v13-event-source.html` | frbox V13：不是等消息，是在等时间 |
+| 26 | `26-frbox-v14-event-bitmap.html` | frbox V14：不是等一个位，是在等一张表 |
+| 27 | `27-frbox-v15-coverage.html` | frbox V15：覆盖率、位掩码，和一条更正 |
+| 28 | `28-frbox-v16-task-boot.html` | frbox V16：那 7 个不开机启动的任务 |
+| 29 | `29-frbox-v17-mailbox.html` | frbox V17：第二条同步通道打通了，然后一格新代码都没多 |
+| 30 | `30-frbox-v18-callback.html` | frbox V18：回调登记好了，派发器却从没人叫过 |
+| 31 | `31-frbox-v19-isr2b.html` | frbox V19：那条没人拉的中断线 |
+| 32 | `32-frbox-v20-tick.html` | frbox V20：那道墙是假的 |
 
 ---
 
