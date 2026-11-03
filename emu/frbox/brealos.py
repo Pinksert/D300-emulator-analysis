@@ -1,0 +1,148 @@
+# -*- coding: utf-8 -*-
+"""brealos.py —— B 段（d300-b）的 REALOS 内核调用与任务视图（V22）。
+
+前提：V22 把 0x68000000（内核对象区）和 0x9F800000（任务栈区）建了 RAM 之后，
+B 段自带的 REALOS 内核原生跑起来了：boot 191,520 步 → 派发 retI → 空闲任务
+0x407DC（`bra -1` 自旋）。之后内核就在等两件事：
+
+  * 系统调用（int #0x40 → B 向量表 0x40 槽 → 0x40668 陷阱入口）
+  * 调度请求（INT 0x3F → 0x40D32 的内联派发：存当前任务现场 →
+    USP←[TCB+0x18] → 恢复下一任务现场）
+
+本模块把「替固件发一次系统调用 / 请求一次派发」做成可复用的工具，
+用法与 A 段 `realos.kernel_call` 相同（V17 建立的口径）：
+
+    from frbox import brealos
+    r = brealos.kernel_call(m, brealos.SVC_STA_TSK, r4=3)   # sys_sta_tsk(3)
+    brealos.request_dispatch(m)                              # INT 0x3F
+    brealos.states(m)                                        # 任务状态表
+
+⚠️ 边界（写报告必须带上）：
+  * 这是「注入外部事件」，不是硬件真的产生了事件；
+  * 调用发生在被中断的当前任务上下文里（EIT 用系统栈），返回后寄存器原样恢复；
+  * sys_sta_tsk 的 err=0 只说明内核受理了，任务要等下一次派发才真正上 CPU。
+"""
+
+# ---- 常量（全部实测，见 docs/03-frbox.md V22 段）----
+
+SAFE_PC = 0x000407DC        # 空闲任务 `bra -1`：当「系统调用已返回」的标记
+TRAP_VEC = 0x40             # int #0x40 陷阱（→ 0x40668）
+DISPATCH_VEC = 0x3F         # 调度请求中断（→ 0x40D32 内联派发）
+IDLE_PC = 0x000407DC
+
+TASK_TABLE = 0x00054C10     # 任务表（28 条 × 0x1C）
+TASK_COUNT = 28
+TCB_BASE = 0x6800013C       # TCB 数组（步长 0x2C；0x6800013C 起实测自指）
+TCB_STRIDE = 0x2C
+CUR_TCB_SLOT = 0x68000000   # 当前任务 TCB 槽（派发序列写 [0x68000000]=r14）
+
+# 任务表字段（V22 实测，ROM @0x54C10）
+F_ENTRY = 0x00
+F_STACK = 0x04
+F_TCB = 0x0C
+F_PRIO = 0x10               # 高 16 位：优先级+1；低 16 位：任务号
+F_FLAGS = 0x18              # 激活标志（语义未证：位 31/30 的分工没做对照实验）
+
+# μITRON 服务号（负数，32 位补码进 R12 —— V17 的口径）
+SVC_STA_TSK = -23
+SVC_TER_TSK = -25
+SVC_WUP_TSK = -39
+SVC_SET_FLG = -48
+SVC_SLP_TSK = -41
+SVC_EXT_TSK = -45
+
+
+def kernel_call(m, svc, r4=0, r5=0, r6=0, r7=0, r13=0, max_steps=80000):
+    """在 B 段自己的 REALOS 内核里执行一次系统调用。
+
+    与 realos.kernel_call（A 段）同构：参数进 R4–R7/R12（R12 是 32 位补码），
+    执行一次 eit(0x40)，`reti` 回到 SAFE_PC（空闲任务的 bra -1）就算返回，
+    之后把寄存器原样恢复。返回 {'steps', 'err'}。
+    """
+    c = m.cpu
+    saved = (list(c.r), list(c.dr), c.ps, c.pc, c.delay, c.halted)
+    c.r[4], c.r[5], c.r[6], c.r[7], c.r[13] = r4, r5, r6, r7, r13
+    c.r[12] = svc & 0xFFFFFFFF
+    c.pc = SAFE_PC
+    c.eit(TRAP_VEC)
+    n = 0
+    while n < max_steps and not c.halted:
+        c.step()
+        n += 1
+        m.step_count += 1
+        if c.pc == SAFE_PC and n > 1:
+            break
+    r12 = c.r[12]
+    c.r[:], c.dr[:], c.ps, c.pc, c.delay, c.halted = saved
+    return {"steps": n, "err": r12 - 0x100000000 if r12 & 0x80000000 else r12}
+
+
+def sta_tsk(m, tid):
+    """sys_sta_tsk(tid, 1)：让内核把任务 tid 挂进就绪队列。"""
+    return kernel_call(m, SVC_STA_TSK, r4=tid, r5=1)
+
+
+def request_dispatch(m, max_steps=200000):
+    """请求一次调度（INT 0x3F），跑到派发完成或步数用尽。
+
+    返回 (覆盖增量, 结束 PC)。0x3F 的受理要求 ICR 电平 < ILM ——
+    固件把 0x3F 的 ICR 配成 0x1E，空闲任务跑在 ILM=0x1F 下，可受理。
+    """
+    c0 = m.cov.words() if m.cov else 0
+    m.raise_irq(DISPATCH_VEC)
+    m.run(max_steps=max_steps, spin_guard=False)
+    return (m.cov.words() - c0) if m.cov else 0, m.cpu.pc
+
+
+def boot(m=None, idle_extra=0):
+    """新建 d300-b 并 boot 到空闲任务（191,520 步，确定性）。"""
+    from .machine import create
+    m = m or create("d300-b")
+    if m.cpu is None or m.step_count == 0:
+        m.load()
+        m.reset()
+        m.enable_cov()
+        m.attach_flow()
+    n = 0
+    while not m.cpu.halted and n < 191520:
+        m.step(1)
+        n += 1
+    if idle_extra:
+        m.run(max_steps=idle_extra, spin_guard=False)
+    return m
+
+
+def records(m):
+    """读任务表 28 条：入口 / 栈顶 / TCB / 优先级 / 标志。"""
+    out = []
+    raw = m.fetch_bytes(TASK_TABLE, TASK_COUNT * 0x1C)
+    for i in range(TASK_COUNT):
+        e = raw[i * 0x1C:(i + 1) * 0x1C]
+        f = [int.from_bytes(e[j:j + 4], "big") for j in (0, 4, 12, 16, 24)]
+        out.append({"id": f[3] & 0xFFFF or i + 1,
+                    "idx": i + 1,
+                    "entry": f[0], "stack": f[1], "tcb": f[2],
+                    "prio": (f[3] >> 16) & 0xFFFF,
+                    "flags": f[4],
+                    "addr": TASK_TABLE + i * 0x1C})
+    return out
+
+
+def states(m):
+    """各任务当前状态：入口执行过没有（cov）+ TCB+0x18 的保存 SP。"""
+    out = []
+    for r in records(m):
+        sp = m.bus.rd(r["tcb"] + 0x18, 4) if 0x68000000 <= r["tcb"] < 0x680010000 else 0
+        out.append({"idx": r["idx"], "id": r["id"], "entry": r["entry"],
+                    "tcb": r["tcb"], "saved_sp": sp,
+                    "ran": bool(m.cov and m.cov.visited(r["entry"]))})
+    return out
+
+
+def summary(m):
+    """跑完之后的概览。"""
+    cur = m.bus.rd(CUR_TCB_SLOT, 4)
+    ran = [t["idx"] for t in states(m) if t["ran"]]
+    return {"cur_tcb": cur, "pc": m.cpu.pc, "steps": m.step_count,
+            "cov": m.cov.words() if m.cov else 0,
+            "ran_tasks": ran, "calls": len(m.flow.calls) if m.flow else 0}
