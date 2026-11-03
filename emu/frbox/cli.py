@@ -67,6 +67,12 @@ def build_parser():
     p.add_argument("--msg-every", dest="msg_every", type=int, default=None,
                    metavar="N",
                    help="V17：每 N 步自动投一条消息（隐含 --msg），最大步数按 --max-steps 分批跑")
+    p.add_argument("--cb", action="store_true",
+                   help="V18：挂上两个回调槽（只观测，不主动 tick）")
+    p.add_argument("--cb-tick", dest="cb_tick", type=int, default=None,
+                   metavar="N",
+                   help="V18：每 N 步替主循环扫一圈回调槽（隐含 --cb）。"
+                        "主循环 0x80588 自己从不执行，这是外部注入的 tick")
     p.add_argument("--flow", action="store_true",
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--cov", action="store_true",
@@ -175,6 +181,10 @@ def main(argv=None):
         print(f"信箱源已挂：mbx={mb.mbx} 控制块 0x466E4 发送缓冲 0x{mb.buf:05X}"
               f"（样本来自固件自己的 0x{mb.sample:05X}）"
               + (f"，每 {args.msg_every} 步投一条" if args.msg_every else ""))
+    if args.cb or args.cb_tick:
+        cb = m.enable_callbacks()
+        print(f"回调槽已挂：{cb.summary()}"
+              + (f"，每 {args.cb_tick} 步扫一圈" if args.cb_tick else ""))
     if args.flow:
         m.attach_flow()
     if args.realos is not None:
@@ -245,9 +255,10 @@ def main(argv=None):
             Monitor(m, out=print).run(sys.stdin)
         return 0
 
-    if args.msg_every:
+    if args.msg_every or args.cb_tick:
         n = 0
-        batch = max(1000, min(args.msg_every, 20000))
+        every = args.msg_every or args.cb_tick or 20000
+        batch = max(1000, min(every, 20000))
         while n < args.max_steps:
             n += m.run(min(batch, args.max_steps - n), spin_guard=False)
             m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
@@ -255,7 +266,10 @@ def main(argv=None):
                 m.raise_irq(v)
             if m.cpu.halted or m.fault:
                 break
-            if m.msg is not None and m.msg.task5_state()["kind"] == "msg":
+            if args.cb_tick and m.cb is not None:
+                m.cb.tick(1)
+            if args.msg_every and m.msg is not None and \
+                    m.msg.task5_state()["kind"] == "msg":
                 m.msg.send()
     else:
         n = m.run(args.max_steps)
