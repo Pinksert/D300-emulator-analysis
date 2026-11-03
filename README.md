@@ -131,7 +131,7 @@ D300-emulator-analysis/
 │   │                       / icu / machine / monitor / snapshot / trace / cli
 │   ├── frbox_selftest.py   540 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              65 个取证脚本（见 probe/README.md）
+│   └── probe/              66 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
