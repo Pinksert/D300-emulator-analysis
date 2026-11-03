@@ -5,7 +5,7 @@ frbox 线的原始输出
 
 文件                    生成命令
 ----------------------  ---------------------------------------------------------------
-selftest.txt            cd emu && python frbox_selftest.py              （475 条断言）
+selftest.txt            cd emu && python frbox_selftest.py              （484 条断言）
 cpu-selftest.txt        cd emu && python fr_selftest.py                 （63 条 CPU 断言）
 realos-chain.txt        cd emu && python probe/exp_realos_chain.py      （启动链 + 13 条记录 + 初始上下文）
 realos-tcb.txt          cd emu && python probe/exp_realos_tcb.py        （TCB 布局 + 队列归属）
@@ -41,6 +41,7 @@ cb-dispatch.txt        cd emu && python probe/exp_dispatch.py            （V18 
 cb-chain.txt           cd emu && python probe/exp_cb_chain.py            （V18 只 tick 240 次的门控节奏）
 cb-full.txt            cd emu && python probe/exp_cb_full.py             （V18 A–E 五场景总账 +246 / +507）
 isr2b.txt              cd emu && python probe/exp_isr2b.py              （V19 A–H 八段：向量表 / 61 开关 / +2053 / 第 9 次卡住）
+tick.txt               cd emu && python probe/exp_tick.py               （V20 A–H 八段：0x174 归属 / 时基分水岭 / 605 步 / 只读 0x186 15 次）
 
 关键读数
 --------
