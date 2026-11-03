@@ -76,6 +76,11 @@ def build_parser():
     p.add_argument("--irq2b", dest="irq2b", type=int, default=None, metavar="N",
                    help="V19：接上 INT 0x2B（0x80588 的位分派器）并请求 N 次。"
                         "配合 --cb 看两个回调槽如何自己往前走")
+    p.add_argument("--auto-irq2b", dest="auto_irq2b", type=int, default=None,
+                   metavar="CYCLES", nargs="?", const=1024,
+                   help="V21：给 INT 0x2B 配周期时钟（默认 1024 周期，=4 个 tick 一次），"
+                        "挂在设备时基上自动拉线，跑 fast/c 时中断自己来；"
+                        "同一向量已有待决请求时会合并。可与 --irq2b 分开用")
     p.add_argument("--answer", dest="answer", action="store_true",
                    help="V20：在 0x9C97A 上硬写 0x174 的完成位（V19 的做法，留作对照）。"
                         "默认不写 —— 由 XferHandshake 设备模型自己置完成位")
@@ -189,15 +194,18 @@ def main(argv=None):
         print(f"信箱源已挂：mbx={mb.mbx} 控制块 0x466E4 发送缓冲 0x{mb.buf:05X}"
               f"（样本来自固件自己的 0x{mb.sample:05X}）"
               + (f"，每 {args.msg_every} 步投一条" if args.msg_every else ""))
-    if args.cb or args.cb_tick or args.irq2b:
+    if args.cb or args.cb_tick or args.irq2b or args.auto_irq2b is not None:
         cb = m.enable_callbacks()
         print(f"回调槽已挂：{cb.summary()}"
               + (f"，每 {args.cb_tick} 步扫一圈" if args.cb_tick else ""))
-    if args.irq2b:
+    if args.irq2b or args.auto_irq2b is not None:
         h = m.enable_isr2b()
         print(f"INT 0x2B 已挂：entry=0x{h.state()['entry']:05X} "
               f"ICR=0x{h.state()['icr']:02X} 待办标志 {h.pending() or '（空）'}"
               + ("，硬写完成位（对照）" if args.answer else "，完成位由设备模型给"))
+    if args.auto_irq2b is not None:
+        clk = m.enable_auto_irq2b(period=args.auto_irq2b)
+        print(f"INT 0x2B 周期时钟已挂：每 {clk.period} 周期一次（{clk.summary()}）")
     if args.flow:
         m.attach_flow()
     if args.realos is not None:
