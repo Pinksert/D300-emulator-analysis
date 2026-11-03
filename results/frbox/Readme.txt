@@ -139,3 +139,6 @@ V11 起的三件大事（详见 realos-sched.txt）
    （任务 1 / 任务 5 / 空闲任务）。其余 11 个的上下文要靠 sta_tsk 去建，
    而触发 sta_tsk 的硬件事件（按键 / 拨盘 / 存储卡 / 时钟）我们还没有。
 autoirq.txt            cd emu && python probe/exp_autoirq.py           （V21 周期时钟：频率扫描 + 长跑）
+bboot.txt              cd emu && python probe/exp_bboot.py           （V22 B 段：boot 191,520 步到空闲任务、任务 2 上 CPU +217、42 条真 ISR 向量扫描）
+                       ⚠️ 探针 boot() 多跑 2,000 步空闲（193,520 = 191,520+2,000，覆盖 1,241→1,242）
+pendbits.txt           cd emu && python probe/exp_pendbits.py       （V22 A 段：位分派器 61 位逐位点亮 25/61、最强位 ×64 +2,822、位间状态耦合）
