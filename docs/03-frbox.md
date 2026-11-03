@@ -1,4 +1,4 @@
-# frbox 0.20.0 —— D300 的全系统模拟器
+# frbox 0.21.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
@@ -1367,4 +1367,93 @@ cd emu
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240 -c "irq2b"
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer
 python probe/exp_tick.py > ../results/frbox/tick.txt
+```
+
+---
+
+## V21：自动节拍 —— 给 INT 0x2B 配周期时钟
+
+V19/V20 的中断都是手动拉线（`--irq2b N` 一次一次请求，每次跑到 reti，
+中断被串行化）。V21 挂一个**周期时钟**（`frbox/dev_irq2b.py`）到设备时基上：
+每 `period` 个 CPU 周期 raise 一次 vec 0x2B，`fast N` / `c` 里中断自己来 ——
+包括在任务代码里、内核里被拉起来。
+
+### 1. 设备与四口径
+
+`Irq2BClock` 关键设计是**合并**：CPU 的受理规则是 `lvl < ILM`，被挡住的
+请求留在 `cpu.irq_pending` 里重试；时钟挂请求前先看这条向量是否已有待决，
+有就跳过（计进 `coalesced`），等价于「电平触发的线已经拉高」—— 不然
+风暴档会把队列灌满，ILM 一放开就洪水连发。
+
+另一个门是 **ICR 未配置就不拉**（计进 `skipped`）：ICR 的 level 还是 0 时
+`raise_irq` 会强制 0x1F，而 `0x1F < ILM(0x1F)` 永不成立 —— 请求会永久
+卡在待决队列把后面的到点全合并掉（boot 前挂钟实测：修复前 fired 1 /
+coalesced 139 / accepted 0）。修复后 skipped=2、accepted=99、终态覆盖
+与挂钟在后一致。
+
+计数四口径（全文通用）：`fired`（挂到 ICU）/ `coalesced`（合并掉）/
+`skipped`（ICR 未配置跳过）/ `accepted`（真受理进 ISR，`cpu.irq_log` 里
+vec=0x2B 的条数）。自洽式：`fired − 待决 = accepted`。
+
+### 2. 频率不是中性参数（固定 10 万步，基线 1,443）
+
+| period | accepted | coalesced | 覆盖+ | 服务+ | 任务6 |
+|---|---|---|---|---|---|
+| 256 | 196 | 193 | 2053 | 3 | ready |
+| 512 | 191 | 3 | 2117 | 3 | ready |
+| **1024** | **97** | 0 | **2418** | 10 | **flag** |
+| 2048 | 48 | 0 | 1868 | 1 | dormant |
+| 4096 | 24 | 0 | 1761 | 0 | dormant |
+
+**1024 是峰值档**：中断次数只有风暴档一半，覆盖反多 365。次数拉平
+（accepted 都是 97）：风暴 +1,992 vs 从容 +2,418；给风暴 3 倍步数
+（597 次）也只有 +2,056。太密 → 固件拿不到中断间的执行时间；
+太疏 → 10 万步内回调链推不完、任务 6 没被拉起。
+
+### 3. 多出来的覆盖从任务 6 的入口开始
+
+`cov.diff`：1024 档比 256 档多执行 545 个地址（15 段），第一段
+`0xA6A30–0xA6A56` = **任务 6 入口**；反向只有 109。时间线上 +541
+一跳全部落在第 6–7 万步（accepted 58→68）—— 回调链第三站
+`sta_tsk(6)` 拉起任务 6 的那一下。
+
+受理现场（`cpu.irq_log` 记着每次被打断的 PC）：
+
+- 风暴档 196 次**全部**落在空闲任务 `0xFE510` 上；
+- 从容档 97 次里 93 次在空闲任务、**4 次直接打断任务 6 函数体**
+  （`0xA6E6C` / `0xA6E76` / `0xA6F18` / `0xA7FC4`）。
+
+### 4. 等价性与饱和
+
+- 手动 240 次（+2053/+3）与自动风暴 accepted=246（+2053/+3）**完全一样**：
+  手动模式「每次跑到 reti」的串行化效果 = 每 tick 一次的风暴。
+  两种模式下固件都没拿到中断间的执行时间，V19/V20 口径由此无缝对照。
+- period=1024 跑 100 万步：accepted 976 次，覆盖 20 万步后趋平
+  （终值 +2,482）—— 再往下要**新事件源**，不是更多中断。
+
+### 5. 新增
+
+- `dev_irq2b.py`：`Irq2BClock`（period / 合并 / ICR 门 / 四口径视图）
+- `Machine.enable_auto_irq2b()`；CLI `--auto-irq2b CYCLES`；monitor `autoirq [P|off]`
+- 探针 `exp_autoirq.py`（A–H 八段）；results `autoirq.txt`
+- 自检 **510/510** + 63/63；版本 **0.21.0**
+
+### 6. 边界与口径
+
+可报：中断可挂周期时钟并合并待决；频率不是中性参数（97 次 +2,418 >
+196 次 +2,053）；多出的地址从任务 6 入口开始；97 次里 4 次打断任务 6
+函数体；手动模式 ≡ 风暴模式；覆盖 20 万步饱和。
+不可报：真机这条中断的实际频率（period 是模型参数）；任务 6 对应什么
+功能（只知道入口和它等一个 flag）；「相机跑起来了」。
+
+⚠️ 口径与 V19/V20 同（预热 12×5000 不注入事件，基线 1,443），
+`+2053` 可直接对照；fired / coalesced / skipped / accepted 不可混用。
+
+### 复现
+
+```bash
+cd emu
+python -m frbox -M d300-a --realos 1 --cov --cb --auto-irq2b 1024 \
+       -monitor none -c "fast 100000; autoirq; tasks"
+python probe/exp_autoirq.py > ../results/frbox/autoirq.txt
 ```
