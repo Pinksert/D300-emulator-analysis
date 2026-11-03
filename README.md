@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.16.0** | NikonEmulator 驱动 |
+| | **frbox 0.17.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -41,6 +41,8 @@ python -m frbox -M d300-a --realos 1 --events 4096 --cov \
        -monitor none -c "fast 120000; cov 96; readyq"    # 覆盖率 + 就绪队列（V15）
 python -m frbox -M d300-a --boot 2 --realos 1 --events 4096 --cov \
        -monitor none -c "fast 80000; unlock 2; tasks"    # 让 REALOS 自己建任务 2，看它的轨迹（V16）
+python -m frbox -M d300-a --realos 1 --msg --flow \
+       -c "fast 60000; msg send; flow 12; tasks"         # 借固件内核投一条消息（V17）
 
 python frbox_selftest.py     # 396/396
 python fr_selftest.py        # 63/63
@@ -104,7 +106,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.16.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.17.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -118,12 +120,12 @@ D300-emulator-analysis/
 │   │                       / icu / machine / monitor / snapshot / trace / cli
 │   ├── frbox_selftest.py   396 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              49 个取证脚本（见 probe/README.md）
+│   └── probe/              57 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
 │   ├── 03-frbox.md         ★ 模拟器设计与命令参考
-│   └── reports/            28 份报告（HTML，01–13 NikonEmulator 线，14–28 frbox 线）
+│   └── reports/            16 份报告（HTML，14–29 号，frbox 线）
 ├── drivers/                18 个 NikonEmulator 驱动（Java，放上游对应目录）
 ├── patches/
 │   └── upstream-changes.md 对上游的 5 处修改
@@ -162,6 +164,10 @@ D300-emulator-analysis/
 | 任务 1 跑完整条启动链 | 35,573 步 / 56 次服务 / 10 次 `sta_tsk` / 13 个握手事件 / `sys_ext_tsk` 退出 |
 | 快照体积 | B 段 191,517 步时 1,312,632 字节 |
 | REALOS 原生派发 | 复位 → 派发点 `0x0FE4E6` 43,428 步；30 万步 1,888 次陷阱全部由固件内核处理（A 模式） |
+| 单信箱架构（V17） | A 段 `int #0x40` 1,008 处，`rcv_msg` **只有 1 处**（`0x0A6324`，任务 5）、`snd_msg` 15 处且 R4 全是 1；信箱 id 1 ↔ 控制块 `0x466E4` |
+| 任务 5 的真相（V17） | 不是死锁是没人再发：步 43622 等 → 44433 任务 1 发 → 51963 又等；投递用固件内核（`eit(0x40)`，err=0 / 219 步） |
+| 消息 = 回调注册（V17） | 消息 `+0x10` 存代码指针（`0x0008225E`），任务 5 整条抄到 `0x3FE48` 再 `set_flg(2,0x4000)` / `set_flg(3,0x2000)`，首尾同一处 `rcv_msg`（11 次服务） |
+| 投递 N 条的收益（V17） | 投 0/1/8 条：服务 40→51→128，执行地址 6,382→6,382→6,382；与 flag 通道叠加 24,170→24,170（投 11 条）—— **换原语也不涨** |
 | 任务启动实验（V16） | 任务表 `+0x0C` 最高位 = 复位就激活；置 1 后 REALOS 自己建任务，7 个 dormant 任务全都能跑起来；全开时 7/10/12 被高优先级压住 |
 | 代码覆盖（V15） | 20 万步踩到 2,764–6,119 个指令地址；**7 个任务入口从没执行过**，其中 6 个落在 18.8 万字节那段没跑过的代码里 |
 | 任务 4 解冻（V15） | 与任务 8 同优先级排队被忙等饿死；放行 `0x90.bit1` 后任务 8 转 sleep，任务 4 跑完并 `ext_tsk` 退出（执行地址 2,764 → 6,382） |
@@ -169,7 +175,7 @@ D300-emulator-analysis/
 | 调度请求 / 编码查询 | 7 / 7，位图为 0 的次数 0 |
 | 调度器 | `vec 0x3F → 0x000FE776`；就绪位图 `0x45984` / 就绪队列 `0x45988`（13×8B）/ 派发请求 `0x459F0` |
 | 事件位图（V14） | `0x41A56`，全段 13 处操作（7 置位 / 6 判定）；5 个回调槽里 3 个靠它判断 |
-| 两路齐才启动 | 位图 bit4 **且** bit8 → vec 0x19 回调里 `ref_tsk` → `sta_tsk(8)`（入口 `0x0ACB2C`）；单喂任一位无效 |
+| 任务 8 的创建点 | vec 0x19 回调里 `ref_tsk` → `sta_tsk(8)`；入口 `0x0ACC32`（`0x0ACB2C`/`0x0ACC16` 是调用点）。V15 更正：**「bit4 且 bit8 必须同时置」不成立**，只打 vec 0x13/0x19 固件自己就会 `sta_tsk(8)` |
 | 任务 8 之后 | 卡在直接页 `0x90` 轮询环 `0x0AD64E`；逐位实测只有 **bit1** 放行（反汇编写的是 `btstl #2`） |
 
 ### 老线统计（NikonEmulator，仅供对照）
