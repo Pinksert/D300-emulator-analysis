@@ -210,7 +210,17 @@ V19 翻向量表发现它是 <b>INT 0x2B 的处理函数</b>（向量表第 <cod
 任务 4 拿到了 <code>ready</code>。这条只能说明「在注入的中断节拍下它不再饿」，
 不能反推真机上的调度顺序。</p>
 
-<h2>6. 新的一道墙：0x174 的握手</h2>
+<h2>6. 一道「墙」—— <span class="tag t-fix">V20 已更正</span></h2>
+
+<div class="fixbox">
+<b>本节结论已被 V20 推翻。</b>所谓「第 9 次中断一去不回」不是缺外设，是这一版探针
+<code>raise_once()</code> 用 <code>cpu.step()</code> 单步，<b>绕过了 <code>Machine.step()</code>
+的设备时基分发</b>，握手模型的 <code>tick()</code> 拿不到节拍，完成位永远不出现。
+<code>0x174</code> 从一开始就归 <code>XferHandshake</code>（<code>D300_A_TABLE</code> 里
+<code>0x174:(0x02,0x40)</code>），<code>boot_realos()</code> 还无条件调了 <code>enable_xfer()</code>。
+改走设备时基后，第 9 次中断 605 步就走完，<b>不需要替它写任何一个字节</b>。
+详见 <code>reports/32</code>。下面保留原文以便对照。
+</div>
 
 <p>不替外设答话，第 9 次中断就会一去不回。卡点在 <code>0x9C94A</code> 这个函数里
 （ISR 里的 <code>0x80782</code> 和别处的 <code>0x81538</code> 都调它）：</p>
@@ -225,10 +235,11 @@ V19 翻向量表发现它是 <b>INT 0x2B 的处理函数</b>（向量表第 <cod
 <code>beq -4</code> 自转 —— 前 8 次能过，是因为走到这条分支上还需要别的把手凑齐。</p>
 
 <div class="warnbox">
-<b>所以 <code>--no-answer</code> 才是诚实的默认观测</b>：它把「卡在第 9 次」这个事实摆出来。
-<code>answer=True</code>（默认）会在 <code>0x9C97A</code> 那一条上往 <code>0x174</code> 写 <code>0x40</code>，
-即<b>假装外设答了一句「好了」</b>。这一句是人替它答的，报告里必须写清楚，
-不能读成「固件自己能过」。
+<b>当时的取舍</b>：这一版把「卡在第 9 次」当成事实摆了出来，所以默认 <code>answer=True</code>
+（在 <code>0x9C97A</code> 上往 <code>0x174</code> 写 <code>0x40</code>），并使用
+<code>--no-answer</code> 看卡点。
+<span class="tag t-fix">V20 已翻转</span>默认改成不硬写、由设备模型答话，硬写降级为
+<code>--answer</code> 对照组。
 </div>
 
 <h2>7. 怎么用</h2>
@@ -236,8 +247,8 @@ V19 翻向量表发现它是 <b>INT 0x2B 的处理函数</b>（向量表第 <cod
 <pre># 接上 INT 0x2B 跑 240 次，同时在 monitor 里看槽
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240
 
-# 不替外设答话：看它卡在哪一条
-python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --no-answer
+# V20：同一件事的对照 —— 硬写完成位（V19 的做法）
+python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer
 
 # monitor 里
 irq2b            # 接线情况：向量项 / ICR / 14 个待办标志
@@ -262,7 +273,7 @@ irq2b off 20     # 请求 20 次，但不答话</pre>
 <tr class="good"><td>结构</td><td>14 字节待办标志块 + 61 个位开关 + 57 个处理函数；两个回调派发器各占一格</td></tr>
 <tr class="good"><td>行为</td><td>接上这条线，回调链<b>不用手动 tick</b> 就走完四站并注销；全开任务时服务调用 57 → 301</td></tr>
 <tr class="bad"><td>不能报</td><td>真机上这条线多久来一次（固件里没有节拍器模型，请求频率是人定的）</td></tr>
-<tr class="bad"><td>不能报</td><td><code>0x174</code> 那个握手背后是什么器件 —— 只知道是「发请求 + 等应答」</td></tr>
+<tr class="bad"><td>不能报</td><td><code>0x174</code> 那个握手背后是什么器件 —— 只知道是「发请求 + 等应答」（V20 补：它已有 <code>XferHandshake</code> 模型，但模型是近似，不是逆向出来的语义）</td></tr>
 <tr class="bad"><td>不能报</td><td>「相机跑起来了」。这依然是<b>注入</b>：中断是我们请求的、握手是我们替它答的</td></tr>
 </table>
 
