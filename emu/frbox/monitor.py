@@ -18,6 +18,7 @@
     flow [N]            最近 N 条服务调用流水（被动记录，不改执行）
     events [PERIOD]     挂/看「完成位 + 中断」事件源（默认周期 4096）
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
+    msg [send [W0..W7]|sample|queue]  信箱：借固件内核投一条消息（V17）
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
     boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
@@ -528,6 +529,57 @@ class Monitor:
         for d in devs:
             self.out("位图源：" + "  ".join("%s=%s" % (k, v) for k, v in d.state().items()))
         self.out("位图现值 0x41A56 = 0x%04X" % m.bus.rd(0x41A56, 2))
+        return True
+
+    def cmd_msg(self, arg=""):
+        """msg [send [W0..W7]|sample|queue] —— 信箱：借固件内核投一条消息（V17）
+
+        `msg`              看信箱状态（投了几条 / 任务 5 在等什么 / 队列头）
+        `msg send`         按样本投一条（样本 = 固件自己在 0x417DC 造的那条）
+        `msg send 8000 0 c0 2000`  覆写前 4 个半字再投
+        `msg queue`        沿控制块 +0x00 的消息链走一遍
+        """
+        m = self.m
+        mb = getattr(m, "msg", None)
+        a = arg.split()
+        if not a:
+            if mb is None:
+                self.out("没有信箱源（msg send 会顺手挂一个）—— 需要 --realos 起来之后才行")
+                return True
+            st = mb.state()
+            self.out("信箱 #%s  控制块 0x%05X  发送缓冲 0x%05X"
+                     % (st["mbx"], 0x466E4, mb.buf))
+            self.out("  已投 %d 条；任务 5 现在 %s" % (st["sent"], st["task5"]))
+            q, tail = mb.queue()
+            self.out("  队列头 %s（尾部 0x%05X）"
+                     % (", ".join("0x%05X" % p for p in q) or "空", tail))
+            return True
+        if mb is None:
+            mb = m.enable_msgs()
+        sub = a[0]
+        if sub == "send":
+            words = [self._num(x) for x in a[1:9]]
+            if words and any(w is None for w in words):
+                self.out("用法：msg send 8000 0 c0 2000   （十六进制半字，最多 8 个）")
+                return True
+            r = mb.send(words or None)
+            t5 = mb.task5_state() or {}
+            self.out("snd_msg(mbx=%d, 0x%05X) → err=%s（%s 步）；任务 5 现在 %s pc=0x%08X"
+                     % (mb.mbx, mb.buf, r.get("err"), r.get("steps"),
+                        t5.get("kind"), t5.get("pc", 0)))
+            return True
+        if sub == "sample":
+            ok = mb.load_sample()
+            self.out("样本 0x%05X → 缓冲 0x%05X（%s）"
+                     % (mb.sample, mb.buf, "已抄" if ok else "样本区不可用"))
+            self.out("  " + " ".join("%08X" % w for w in mb.read_back()))
+            return True
+        if sub == "queue":
+            q, tail = mb.queue()
+            self.out("消息链：" + (" → ".join("0x%05X" % p for p in q) or "空")
+                     + ("  （尾部 0x%05X）" % tail))
+            return True
+        self.out("用法：msg [send [W..]|sample|queue]")
         return True
 
     def cmd_readyq(self, arg=""):
