@@ -152,6 +152,7 @@ class Machine:
         self.event = None                # 完成位+中断事件源（见 enable_events / frbox.dev_evt）
         self.cov = None                  # 覆盖率（见 enable_cov / frbox.cover，V15）
         self.msg = None                  # 信箱源（见 enable_msgs / frbox.mailbox，V17）
+        self.cb = None                   # 回调槽（见 enable_callbacks / frbox.callback，V18）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -514,12 +515,68 @@ class Machine:
         from .mailbox import attach as attach_msg
         return attach_msg(self, **kw)
 
+    def enable_callbacks(self):
+        """挂上两个回调槽（见 callback.py，V18）。
+
+        A 段有一对「登记—倒计时—派发」链：全局单槽存一个代码指针 + 一个倒计时，
+        每 tick 计数减 1，减到 0 才 `call [槽]`。两套槽的派发器分别在 0x8223A /
+        0x822CE，唯一的引用点都在主循环 0x80588 那张分派表里。
+
+        ⚠️ 主循环在模拟器里**一次都没跑过**（静态上也找不到调用者），所以槽里虽然
+        早就登记好了回调，却永远等不到派发。`Machine.cb.tick()` 就是手动替主循环
+        转一圈 —— 这是「注入外部 tick」，不是「相机自己在跑」。
+        """
+        from .callback import attach as attach_cb
+        return attach_cb(self)
+
     def enable_cov(self, label=""):
         """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
         from .cover import attach as attach_cov
         cov = attach_cov(self, label)
         self.cov = cov
         return cov
+
+    def call_function(self, entry, r4=0, r5=0, r6=0, r7=0, max_steps=100000,
+                      ret_pc=None, restore=True):
+        """像 `call` 那样把 `entry` 当普通子程序跑一遍，回来时把寄存器复原（V18）。
+
+        跟 `realos.kernel_call` 是同一套思路，区别只有一个：
+
+        * `kernel_call` 走 `eit(0x40)` → 陷阱入口 → 内核分发表（**系统调用**）；
+        * `call_function` 直接设 RP 跳进去（**普通子程序**），不经过内核。
+
+        FR 的返回地址放在专用寄存器 RP（dr[1]）里、不压栈（见 fr_emu 的 call 实现），
+        所以这里只要把 RP 设成停机桩 `ret_pc`，跑完再复原全部寄存器即可。
+
+        ⚠️ 三条边界：
+          ① 这是「替固件调用一个函数」，不是「固件自己跑到这里」——
+             调进来的函数看到的是当前任务的栈和寄存器现场，报告里不能写成
+             「相机执行了这个回调」；
+          ② `entry` 若是 `call r0` 这类间接调用的目标，调用方必须先确认指针非 0，
+             否则会跳到 0 地址跑飞；
+          ③ 默认 `restore=True` 复原现场，好让探针能连续调多个入口做对照。
+
+        返回 `{"steps":…, "ret":…, "halted":…, "pc":…}`。
+        """
+        c = self.cpu
+        safe = ret_pc if ret_pc is not None else 0x00081338   # `bra -1` 停机桩
+        saved = (list(c.r), list(c.dr), c.ps, c.pc, c.delay, c.halted)
+        c.r[4], c.r[5], c.r[6], c.r[7] = r4, r5, r6, r7
+        c.dr[1] = safe
+        c.pc = entry & 0xFFFFFFFF
+        c.halted = False
+        n = 0
+        while n < max_steps and not c.halted:
+            c.step()
+            n += 1
+            self.step_count += 1
+            if c.pc == safe and n > 1:
+                break
+        out = {"steps": n, "ret": c.dr[1], "halted": c.halted,
+               "pc": c.pc, "r0": c.r[0]}
+        if restore:
+            c.r[:], c.dr[:], c.ps, c.pc, c.delay, c.halted = saved
+        return out
 
     def enable_dispatch(self):
         """打开直接页 0x44 的「请求调度」建模（见 dev_dispatch.py）。
