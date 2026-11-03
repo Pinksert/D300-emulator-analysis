@@ -1418,6 +1418,89 @@ def cov_words(m):
     return m.cov.words() if getattr(m, "cov", None) else 0
 
 
+def test_isr2b():
+    """V19：0x80588 是 INT 0x2B 的处理函数，不是「没有调用者的主循环」。"""
+    print("\n[25 中断 0x2B（V19）]")
+    from frbox import isr2b
+
+    m = create("d300-a")
+    check("默认不挂 INT 0x2B 驱动", m.isr2b, None)
+    m.load()
+    m.reset()
+    m.enable_cov()
+    m.boot_realos(1)
+    m.attach_flow()
+    m.enable_callbacks()
+    h = m.enable_isr2b()
+    check("挂上之后是 Irq2B", isinstance(h, isr2b.Irq2B), True)
+    check("Machine.isr2b 指向同一个对象", m.isr2b is h, True)
+    check("向量表第 0xD4 项 = 0x80588", m.vector(0x2B), 0x00080588)
+    check("这条线已接线", h.installed(), True)
+
+    vec = isr2b.vectors(m)
+    check("向量表真接线 46 条", len(vec), 46)
+    check("0x2B 在里面", 0x2B in vec, True)
+    check("兜底向量 0x000FE250 不算里", 0x000FE250 in vec.values(), False)
+    check("ICR 里固件配过级别（0x1A）", m.irq_level(0x2B), 0x1A)
+
+    # 边界：入口是压栈序言、出口是 reti
+    check("入口第一条是 stm0", TABLE.decode(m.fetch_bytes(isr2b.ENTRY, 8), 0)[0], "stm0")
+    check("0x80968 是 reti", TABLE.decode(m.fetch_bytes(isr2b.RETI, 8), 0)[0], "reti")
+    check("尾声子程序收在 ret:d",
+          TABLE.decode(m.fetch_bytes(isr2b.TAIL_END, 8), 0)[0], "ret:d")
+
+    rows = isr2b.table(m)
+    check("位分派表 61 条", len(rows), 61)
+    check("覆盖 14 个标志字节", len({r[0] for r in rows}), 14)
+    check("指向 57 个不同处理函数", len({r[4] for r in rows}), 57)
+    pair = {(r[0], r[1], r[4]) for r in rows}
+    check("0x3F404 bit1 → 0x8223A（槽0）",
+          (0x0003F404, 0x02, 0x0008223A) in pair, True)
+    check("0x3F40D bit2 → 0x822CE（槽1）",
+          (0x0003F40D, 0x04, 0x000822CE) in pair, True)
+
+    for _ in range(12):
+        m.run(max_steps=5000, spin_guard=False)
+    check("基线：0x80588 一次都没执行", m.cov.visited(isr2b.ENTRY), False)
+    st = m.cb.slots[0].state()
+    check("基线：槽0 已经登记好 0x8225E", st["cb"], 0x0008225E)
+
+    r = h.raise_once()
+    check("请求一次就进了 ISR", r["entered"], True)
+    check("跑到 reti 回来了", r["cut"], False)
+    check("0x80588 从此被执行过", m.cov.visited(isr2b.ENTRY), True)
+    check("这一条中断带来新覆盖", r["delta"] > 100, True)
+    check("槽0 指针这一趟不变", m.cb.slots[0].state()["cb"], 0x0008225E)
+
+    ev, _last = h.burst(30)
+    check("30 次之内槽0 换成下一站 0x82278",
+          m.cb.slots[0].state()["cb"], 0x00082278)
+    check("派发器 0x8223A 被执行过", m.cov.visited(0x0008223A), True)
+    check("派发调用点 0x80606 被执行过", m.cov.visited(0x00080606), True)
+
+    # 不替外设答话：第 9 次会卡在 0x174 bit6 的轮询上
+    m2 = create("d300-a")
+    m2.load()
+    m2.reset()
+    m2.enable_cov()
+    m2.boot_realos(1)
+    m2.attach_flow()
+    m2.enable_callbacks()
+    h2 = m2.enable_isr2b()
+    for _ in range(12):
+        m2.run(max_steps=5000, spin_guard=False)
+    stuck = None
+    for k in range(1, 21):
+        r2 = h2.raise_once(answer=False, max_steps=4000)
+        if r2["cut"]:
+            stuck = (k, m2.cpu.pc)
+            break
+    check("不答话时第 9 次回不来", stuck and stuck[0], 9)
+    # 停下时 PC 落在那三指令的循环里（ldi / btsth / beq），位置取决于步数用尽的那一刻
+    check("卡在 0x174 bit6 的轮询循环里",
+          bool(stuck) and 0x0009C974 <= stuck[1] <= 0x0009C97E, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1444,6 +1527,7 @@ def main():
     test_taskboot()
     test_msgs()
     test_callbacks()
+    test_isr2b()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
