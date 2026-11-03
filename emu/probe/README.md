@@ -78,3 +78,16 @@
 | `exp_task_boot.py` | 单任务对照：每次只把 1 个 dormant 任务的「复位就激活」位置 1，看固件自己建不建 | V16 §2（7 个全都能起来；全开时 3 个被压住） |
 | `exp_unlock_chain.py` | 逐任务轨迹：跑一段→看它在等哪个 flag 的哪几位→用内核置位→再跑 | V16 §3（`unlock-chain.txt` / `unlock-live.txt`） |
 | `exp_all13.py` | A 原始 / B 全开 / C 全开+解锁 三场景总账 | V16 §2（`all13.txt`：5 → 9 → 11 / 12） |
+
+### V17：信箱
+
+| 脚本 | 做什么 | 出处在 |
+|---|---|---|
+| `exp_msg_static.py` | 线性扫 1,008 处 `int #0x40`，回溯 `ldi r12` 取服务号；数 `snd_msg` / `rcv_msg` 的处数与实参 | V17 §2（1 处 rcv / 15 处 snd，R4 全 1） |
+| `exp_mbx_live.py` | 跑真内核到任务 5 停住，抓 `rcv_msg` / `snd_msg` 的实参、TCB、控制块内存 | V17 §1（步 43622 / 44433 / 51963 三行） |
+| `exp_mbx_probe.py` | 试 `kernel_call(-63)` 代投，对比「给编号」与「给地址」两种 R4 | V17 §3（`err=0` / 219 步） |
+| `exp_msg_frame.py` | 停在任务 1 那处 `snd_msg`，把固件自己造的消息字节抄下来 | V17 §5（`+0x10` 是代码指针） |
+| `exp_msg_slot.py` | 投一条样本，对比 `0x3F000–0x3F100` 前后快照 + 新增服务调用 | V17 §4（11 次调用的处理链） |
+| `exp_msg_matrix.py` | 消息内容矩阵：12 个首字命令码 + 3 种第二字，看轨迹是否分流 | V17 §7（否证「首字=命令码」） |
+| `exp_msg_chain.py` | A–E 五场景：投 0 / 1 / 8 条 + 空转 + 全开 | V17 §6（`msg-chain.txt`：6,382 不变） |
+| `exp_msg_full.py` | 与 flag 通道叠加：复现 V16-C → 加投递 → 二次扫描 | V17 §6（`msg-full.txt`：24,170 不变） |
