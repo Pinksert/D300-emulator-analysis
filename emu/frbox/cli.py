@@ -61,6 +61,12 @@ def build_parser():
     p.add_argument("--bits", default=None, metavar="MASK[:VECS[:PERIOD]]",
                    help="V14：挂「事件位图 0x41A56 + 中断」源，例如 0x0110:0x13,0x19:2048"
                         "（只给 MASK 时向量默认 0x13,0x19、周期 2048）")
+    p.add_argument("--msg", action="store_true",
+                   help="V17：挂信箱源（借固件内核投递消息）。配合 --realos 用，"
+                        "之后 monitor 里 msg send 投一条")
+    p.add_argument("--msg-every", dest="msg_every", type=int, default=None,
+                   metavar="N",
+                   help="V17：每 N 步自动投一条消息（隐含 --msg），最大步数按 --max-steps 分批跑")
     p.add_argument("--flow", action="store_true",
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--cov", action="store_true",
@@ -164,6 +170,11 @@ def main(argv=None):
         dev = m.enable_bits(mask=mask, vecs=vecs, period=period)
         print(f"事件位图源已挂：0x41A56 |= 0x{mask:04X} → "
               f"{','.join('0x%02X' % v for v in vecs)}，周期 {period}")
+    if args.msg or args.msg_every:
+        mb = m.enable_msgs()
+        print(f"信箱源已挂：mbx={mb.mbx} 控制块 0x466E4 发送缓冲 0x{mb.buf:05X}"
+              f"（样本来自固件自己的 0x{mb.sample:05X}）"
+              + (f"，每 {args.msg_every} 步投一条" if args.msg_every else ""))
     if args.flow:
         m.attach_flow()
     if args.realos is not None:
@@ -234,7 +245,20 @@ def main(argv=None):
             Monitor(m, out=print).run(sys.stdin)
         return 0
 
-    n = m.run(args.max_steps)
+    if args.msg_every:
+        n = 0
+        batch = max(1000, min(args.msg_every, 20000))
+        while n < args.max_steps:
+            n += m.run(min(batch, args.max_steps - n), spin_guard=False)
+            m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
+            for v in (0x13, 0x19):
+                m.raise_irq(v)
+            if m.cpu.halted or m.fault:
+                break
+            if m.msg is not None and m.msg.task5_state()["kind"] == "msg":
+                m.msg.send()
+    else:
+        n = m.run(args.max_steps)
     print(f"\n执行 {n:,} 步后停：PC=0x{m.cpu.pc:08X}"
           + (f"（{m.cpu.halt_reason}）" if m.cpu.halted else "（到达步数上限）"))
     print(m.bus.mtree())
