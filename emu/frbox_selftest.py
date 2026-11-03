@@ -1274,6 +1274,83 @@ def test_taskboot():
     check("任务 11 清过 flag1 与 flag5 的位", {1, 5} <= {x[3] for x in clr}, True)
 
 
+def test_msgs():
+    """V17：信箱 —— 借固件自己的内核投一条消息，看任务 5 转不转。"""
+    print("\n[23 信箱投递（V17）]")
+    from frbox import mailbox
+
+    m = create("d300-a")
+    check("默认不挂信箱", m.msg, None)
+    m.load()
+    m.reset()
+    m.enable_cov(); m.boot_realos(1); m.enable_events(period=4096); m.attach_flow()
+    mb = m.enable_msgs()
+    check("挂上之后是 Mailbox", isinstance(mb, mailbox.Mailbox), True)
+    check("Machine.msg 指向同一个对象", m.msg is mb, True)
+    check("默认信箱号是 1（全固件只有这一个）", mb.mbx, 1)
+    check("发送缓冲与固件自己的样本区不同址", mb.buf != mb.sample, True)
+
+    # 静态事实：全段只有一处 rcv_msg、15 处 snd_msg
+    check("rcv_msg 只有一处（0x000A6324）", mailbox.RCV_SITE, 0x000A6324)
+    check("任务 5 落地缓冲 0x3FE48 就是消息体抄过去的地址", mailbox.TASK5_BUF, 0x3FE48)
+
+    # 跑起来，任务 5 会自己走到 rcv_msg 上停住
+    for _ in range(24):
+        m.run(max_steps=5000, spin_guard=False)
+        m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
+        for v in (0x13, 0x19):
+            m.raise_irq(v)
+    t5 = mb.task5_state()
+    check("预热后任务 5 在等消息", t5["kind"], "msg")
+    check("停在全段唯一的 rcv_msg 后面那条", t5["pc"], 0x000A6326)
+
+    # 样本：固件自己在 0x417DC 造的那条，必须含一个代码指针。
+    # ⚠️ 读的是**样本区**而不是发送缓冲 —— 固件处理完消息会把缓冲清成 0。
+    samp = [m.bus.rd(mb.sample + i * 4, 4) for i in range(8)]
+    check("样本首两个字是 0", samp[:2], [0, 0])
+    check("样本 +0x08 = 0x80000000（发送侧 r3）", samp[2], 0x80000000)
+    check("样本 +0x10 是指向代码区的回调指针",
+          0x80000 <= samp[4] < 0x100000, True)
+    mb.load_sample()
+    check("抄到发送缓冲后首字仍然一致", mb.read_back()[2], samp[2])
+
+    n_rcv = sum(1 for c in m.flow.calls if c[2] == -61)
+    n_words = cov_words(m)
+    r = mb.send()
+    check("投递成功（err=0）", r.get("err"), 0)
+    check("投递后任务 5 不再等消息", mb.task5_state()["kind"] != "msg", True)
+    check("读数 +1", mb.sent, 1)
+
+    # 让它把这条消息处理完（实测 11 次服务调用后回到 rcv_msg）
+    for _ in range(6):
+        m.run(max_steps=5000, spin_guard=False)
+        m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
+        for v in (0x13, 0x19):
+            m.raise_irq(v)
+    check("处理完之后又回到 rcv_msg", mb.task5_state()["kind"], "msg")
+    check("rcv_msg 至少被调用了一次以上（循环转起来了）",
+          sum(1 for c in m.flow.calls if c[2] == -61) > n_rcv, True)
+    check("投递本身不带来任何新覆盖（V17 的核心否定结论）",
+          cov_words(m) - n_words, 0)
+
+    r2 = mb.send()
+    check("第二条也能投（不是一次性的）", r2.get("err"), 0)
+    check("累计两条", mb.sent, 2)
+    for _ in range(6):
+        m.run(max_steps=5000, spin_guard=False)
+        m.bus.wr(0x90, 1, m.bus.rd(0x90, 1) | 0x02)
+        for v in (0x13, 0x19):
+            m.raise_irq(v)
+    msgs = [c for c in m.flow.calls if c[2] == -61]
+    check("两次投递 → 任务 5 两次 rcv_msg", len(msgs) >= n_rcv + 2, True)
+    check("第二次处理完也回到 rcv_msg", mb.task5_state()["kind"], "msg")
+    check("历史记录里两条都带回来码 0", [h[1] for h in mb.history], [0, 0])
+
+
+def cov_words(m):
+    return m.cov.words() if getattr(m, "cov", None) else 0
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1298,6 +1375,7 @@ def main():
     test_bits()
     test_cov()
     test_taskboot()
+    test_msgs()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
