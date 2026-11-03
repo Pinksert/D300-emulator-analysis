@@ -18,7 +18,8 @@
    ② 「请求一次中断」是我们拿 ICR 里固件自己配的级别 0x1A 去请求，等价于
       「外设拉了一下这条线」；请求频率是我们定的，固件里没有节拍器模型。
    ③ `answer=True` 是替外设往直接页 0x174 写 0x40 —— 这是**假装硬件答话**，
-      不是固件行为、更不是「相机跑起来了」。
+      不是固件行为、更不是「相机跑起来了」。⚠️ V20 起 `answer` 默认 False，
+      靠 XferHandshake 自己答；本脚本为了复现 V19 的现场，G 段显式用 run_tick=False。
 """
 import os
 import sys
@@ -199,19 +200,21 @@ def sec_f():
 # ------------------------------------------------------------------ G
 def sec_g():
     head("G 不替外设答话：卡在哪一条")
+    print("⚠️ V20 更正：这一段现在**不会**卡住了。`0x174` 归 XferHandshake，")
+    print("   它的 tick() 会把 bit6 置起来。本段改用 run_tick=False 来复现 V19 的现场。")
     m, h = base()
     c0 = m.cov.words()
     for k in range(1, 21):
-        r = h.raise_once(answer=False, max_steps=4000)
+        r = h.raise_once(answer=False, max_steps=4000, run_tick=False)
         if r["cut"]:
             print("第 %d 次中断就回不来了：%d 步后停在 0x%05X，覆盖 +%d"
                   % (k, r["steps"], m.cpu.pc, m.cov.words() - c0))
             print("\n  卡住的地方：")
             print(m.disasm_at(isr2b.POLL_PC - 6, 5))
             print("\n  说明：0x174 是直接页里的一个握手寄存器，代码先置它的 bit1、"
-                  "再等 bit6。我们的模型里没有这个外设，bit6 永远是 0 → `beq -4` 自转。")
-            print("  前 %d 次能过，是因为那条分支要等到更后面的把手才被走到。"
-                  % (k - 1))
+                  "再等 bit6。run_tick=False 让设备 tick 不跑，bit6 永远不出现 → `beq -4` 自转。")
+            print("  前 %d 次能过，是因为那条分支要等到更后面的把手才被走到。" % (k - 1))
+            print("\n  V20 的修法：改走 Machine.step(1)，设备模型自己答话（见 exp_tick.py）。")
             return k
         print("  第 %2d 次：%5d 步  覆盖+%d" % (k, r["steps"], r["delta"]))
     print("20 次都没卡住")
