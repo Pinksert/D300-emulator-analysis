@@ -5,7 +5,7 @@ frbox 线的原始输出
 
 文件                    生成命令
 ----------------------  ---------------------------------------------------------------
-selftest.txt            cd emu && python frbox_selftest.py              （484 条断言）
+selftest.txt            cd emu && python frbox_selftest.py              （510 条断言）
 cpu-selftest.txt        cd emu && python fr_selftest.py                 （63 条 CPU 断言）
 realos-chain.txt        cd emu && python probe/exp_realos_chain.py      （启动链 + 13 条记录 + 初始上下文）
 realos-tcb.txt          cd emu && python probe/exp_realos_tcb.py        （TCB 布局 + 队列归属）
@@ -138,3 +138,4 @@ V11 起的三件大事（详见 realos-sched.txt）
 三、别把「任务切换跑通了」读成「相机跑起来了」。13 个任务里只有 3 个上场
    （任务 1 / 任务 5 / 空闲任务）。其余 11 个的上下文要靠 sta_tsk 去建，
    而触发 sta_tsk 的硬件事件（按键 / 拨盘 / 存储卡 / 时钟）我们还没有。
+autoirq.txt            cd emu && python probe/exp_autoirq.py           （V21 周期时钟：频率扫描 + 长跑）
