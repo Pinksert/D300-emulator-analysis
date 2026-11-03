@@ -76,9 +76,11 @@ def build_parser():
     p.add_argument("--irq2b", dest="irq2b", type=int, default=None, metavar="N",
                    help="V19：接上 INT 0x2B（0x80588 的位分派器）并请求 N 次。"
                         "配合 --cb 看两个回调槽如何自己往前走")
+    p.add_argument("--answer", dest="answer", action="store_true",
+                   help="V20：在 0x9C97A 上硬写 0x174 的完成位（V19 的做法，留作对照）。"
+                        "默认不写 —— 由 XferHandshake 设备模型自己置完成位")
     p.add_argument("--no-answer", dest="no_answer", action="store_true",
-                   help="V19：不替外设答话（不写直接页 0x174 bit6）——"
-                        "会看到路径卡在 0x9C976 的轮询上")
+                   help=argparse.SUPPRESS)   # V19 旧开关，V20 起默认就是这样
     p.add_argument("--flow", action="store_true",
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--cov", action="store_true",
@@ -195,7 +197,7 @@ def main(argv=None):
         h = m.enable_isr2b()
         print(f"INT 0x2B 已挂：entry=0x{h.state()['entry']:05X} "
               f"ICR=0x{h.state()['icr']:02X} 待办标志 {h.pending() or '（空）'}"
-              + ("，不替外设答话" if args.no_answer else ""))
+              + ("，硬写完成位（对照）" if args.answer else "，完成位由设备模型给"))
     if args.flow:
         m.attach_flow()
     if args.realos is not None:
@@ -274,7 +276,7 @@ def main(argv=None):
                   f"服务+{r['svc']}  {r['cb']}"
                   + ("  （卡在轮询，没回到 reti）" if r["cut"] else ""))
 
-        h.burst(args.irq2b, answer=not args.no_answer, on_event=_ev)
+        h.burst(args.irq2b, answer=args.answer, on_event=_ev)
         n = m.step_count
     elif args.msg_every or args.cb_tick:
         n = 0
