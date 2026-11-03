@@ -151,6 +151,7 @@ class Machine:
         self.flow = None                 # 服务调用流水（见 attach_flow / frbox.flow）
         self.event = None                # 完成位+中断事件源（见 enable_events / frbox.dev_evt）
         self.cov = None                  # 覆盖率（见 enable_cov / frbox.cover，V15）
+        self.msg = None                  # 信箱源（见 enable_msgs / frbox.mailbox，V17）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -499,6 +500,19 @@ class Machine:
         dev = attach_bits(self, **kw)
         dev.trace = self.trace
         return dev
+
+    def enable_msgs(self, **kw):
+        """挂一个信箱源（见 mailbox.py，V17）。
+
+        与 `enable_bits` / `enable_events` 的区别是：那两条都是**伪造状态位**再打中断，
+        这一条是**借固件自己的内核**执行一次 `snd_msg` —— 消息挂链、等待方唤醒
+        全由固件代码完成，我们只当一个「外部来了一条消息」的设备。
+
+        A 段 1.11 只有一个信箱（id 1 ↔ 控制块 0x466E4），全段唯一的 `rcv_msg`
+        在 0x0A6324（任务 5）。投递入口是 `Machine.msg.send()`。
+        """
+        from .mailbox import attach as attach_msg
+        return attach_msg(self, **kw)
 
     def enable_cov(self, label=""):
         """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
