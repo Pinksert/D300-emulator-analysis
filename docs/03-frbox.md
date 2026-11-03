@@ -1,7 +1,7 @@
-# frbox 0.19.0 —— D300 的全系统模拟器
+# frbox 0.20.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
-> [`02-findings.md`](02-findings.md) 和 `reports/14`–`31`。想直接跑，跳到第二节。
+> [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
 
 ---
 
@@ -1278,4 +1278,93 @@ cd emu
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240 -c "irq2b"
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --no-answer
 python probe/exp_isr2b.py > ../results/frbox/isr2b.txt
+```
+
+---
+
+## V20：那道墙是假的
+
+V19 结尾留了一道「新墙」：不替外设答话，第 9 次中断死等 `0x174` 的 bit6。
+V20 查下去发现墙不存在 —— `0x174` 一直有模型，问题出在探针自己没走设备时基。
+
+### 1. 归属
+
+| | |
+|---|---|
+| 表项 | `dev_xfer.D300_A_TABLE` 里 `0x174: (0x02, 0x40)`（启动位 bit1 / 完成位 bit6） |
+| 挂载 | `Machine.boot_realos()` 头两行就是 `enable_xfer()` + `enable_dispatch()` |
+| 运行期 | `dp.owner(0x174)` = `XferHandshake`，且在 `m.devices` 里 |
+| 同表其它项 | `0x0AF:(0x02,0x80)`、`0x524:(0x02,0x40)`、`0x534:(0x02,0x40)` |
+
+⚠️「静态找不到 `call`」和「缺器件」是两件事。V19 在后者上滑了一步。
+
+### 2. 分水岭：`cpu.step()` vs `m.step()`
+
+`Machine.step()` 每 `cycles_per_tick`（256）步分发一次 `d.tick()`，`cpu.step()` 不会。
+`XferHandshake.tick()` 就是靠这一分发把完成位置起来的（`delay=64`，一次 tick 就够）。
+
+| 口径 | 第 9 次中断 | `0x9C97A` 上自旋 | 终点 PC | `[0x174]` |
+|---|---|---|---|---|
+| `cpu.step()` | 两万步超时 | 6,519 次 | `0x9C97A` | `0x02` |
+| `m.step(1)` | 605 步，正常 `reti` | 14 次 | `0xFE510` | `0x00` |
+
+访存监视看得很清楚：`0x9C97A` 一共读 14 次，前 13 次返回 `0x02`，第 14 次返回 `0x42`
+（`0x02 | 0x40`）—— **没有一行代码写过 `0x40`**。
+
+### 3. 改成默认走设备时基
+
+- `raise_once` / `burst` 加 `run_tick=True`（默认），内部用 `Machine.step(1)`
+- `answer` 默认改 `False`：靠模型答话，不硬写
+- CLI：`--no-answer` 退役（`argparse.SUPPRESS`），新增 `--answer` 作对照
+- monitor：`irq2b off N` → `irq2b answer N`
+- `run_tick=False` 可稳定复现 V19 的自旋，自检里有这条反向断言
+
+| 口径 | 请求 | 硬写 | 覆盖 | 结果 |
+|---|---|---|---|---|
+| V19（`answer=True`） | 240 | 15 次 | +2053 | 全部 `reti` |
+| V20（设备模型） | 240 | **0 次** | +2053 | 全部 `reti` |
+
+覆盖一样，因为固件拿到 bit6 之后的走法一样；区别只在「谁给的位」。
+
+### 4. 顺带摸清的两组结果寄存器
+
+`0x8A500` 附近是一个按通道号选寄存器的大 switch，静态解出两组：
+
+| 组 | 结果寄存器 | 位宽 | 个数 | 配套握手 |
+|---|---|---|---|---|
+| 10 位组 | `0x178` `0x17A` … `0x18E`（步长 0x2） | `& 0x3FF` | 12 | `0x174` |
+| 12 位组 | `0x528` `0x52A` `0x52C` `0x52E` `0x538` `0x53A` `0x53C` `0x53E` | `& 0xFFF` | 8 | `0x524` / `0x534` |
+
+12 位组在 `0x52E` 之后跳到 `0x538`，中间 `0x530`–`0x536` 不在表里。
+
+240 次中断的访存统计：`0x174` 读 616 / 写 60，`0x176` 与 `0x177` 各写 15，
+`0x186` 读 15，其余 11 路 0 次。也就是**只走 15 趟、只取第 8 路**。
+
+给 12 路灌全 0 / 0x200 / 0x3FF / 渐变，覆盖全是 **+2053** —— 这些值只被搬运，不参与分支。
+与 V15「事件越多 ≠ 覆盖越广」同理：**换输入 ≠ 换路径**。
+
+### 5. 新增
+
+- `isr2b.py`：`run_tick` 参数、`answer` 默认翻转、头部 §5 重写
+- 探针 `exp_tick.py`（A–H 八段）；results `tick.txt`；报告 `docs/reports/32`
+- 自检 **484/484** + 63/63；版本 **0.20.0**
+- `reports/31` 第 6 节加更正框；`KNOWN_ISSUES` #86 改 `[FIXED → V20]`、补 #87/#88
+
+### 6. 边界与口径
+
+可报：`0x174` 归 `XferHandshake`、`boot_realos()` 无条件 `enable_xfer()`、
+V19 的卡死是时基 bug、240 次不硬写也能过、两组通道的地址与位宽。
+不可报：它就是 A/D 转换器（软件签名像，器件身份未证）、各通道接什么物理量、
+真机上这条中断多久来一次、转换耗时多少（`delay=64` 是近似值）。
+
+⚠️ 口径：V20 沿用 V19 预热（12×5000 步、不注入 vec 0x13/0x19，基线 1,443）；
+V18 是 40×5000 + 喂事件（基线 6,382）。**两套数字不能相减。**
+
+### 复现
+
+```bash
+cd emu
+python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240 -c "irq2b"
+python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer
+python probe/exp_tick.py > ../results/frbox/tick.txt
 ```
