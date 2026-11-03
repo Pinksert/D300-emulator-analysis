@@ -64,6 +64,17 @@ V18 把前者查到底了：A 段有<b>两套完全对称的单槽</b>，槽里�
 回调链就一站站往前走，覆盖涨了 507 个地址。
 </div>
 
+<div class="fixbox" style="margin-top:22px">
+<b>V19 补正（本页第 4 节那段「主循环没有调用者」的结论）：</b>
+<code>0x80588</code> 不是主循环，是 <b>INT 0x2B 的处理函数</b> —— 向量表
+<code>TBR = 0x000FFC00</code> 的第 <code>0xD4</code> 项正好指向它（<code>0xFFF50: 00080588</code>），
+固件自己还把它的 ICR（<code>0x45B</code>）配成了 <code>0x1A</code>。
+所以「静态上找不到调用者」是对的（中断处理函数不需要 <code>call</code>），
+但「它从来没有被接进系统」是错的：只要请求一次 INT 0x2B，两个回调槽就会自己往前走。
+本页其余观测（槽地址、倒计时门控、四站链、手动 tick 的覆盖增量）都成立，
+只是入口的名字该换个叫法。详见 <code>31-frbox-v19-isr2b.html</code>。
+</div>
+
 <h2>1. 先更正 V17 的一处读法</h2>
 
 <p>V17 说「消息体 <code>+0x10</code> 是个代码指针，任务 5 整条抄到 <code>0x3FE48</code>，
