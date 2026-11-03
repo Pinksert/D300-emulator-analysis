@@ -70,3 +70,11 @@
 | `exp_coverage.py` | 四场景覆盖率、未执行区间、13 个任务入口是否被执行 | V15 §3（`results/frbox/coverage.txt`） |
 | `exp_ready_queue.py` | 就绪位图 / 13 个优先级槽 / TCB 对表 | V15 §4 |
 | `exp_task4_unblock.py` | 0x90 逐位 vs 任务 4 是否真被派发 | V15 §4（2,764 → 6,382） |
+
+### V16：任务启动与轨迹
+
+| 脚本 | 做什么 | 出处在 |
+|---|---|---|
+| `exp_task_boot.py` | 单任务对照：每次只把 1 个 dormant 任务的「复位就激活」位置 1，看固件自己建不建 | V16 §2（7 个全都能起来；全开时 3 个被压住） |
+| `exp_unlock_chain.py` | 逐任务轨迹：跑一段→看它在等哪个 flag 的哪几位→用内核置位→再跑 | V16 §3（`unlock-chain.txt` / `unlock-live.txt`） |
+| `exp_all13.py` | A 原始 / B 全开 / C 全开+解锁 三场景总账 | V16 §2（`all13.txt`：5 → 9 → 11 / 12） |
