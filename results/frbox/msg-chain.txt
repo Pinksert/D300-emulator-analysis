@@ -1,0 +1,95 @@
+========================================================================================
+A 基线（不投递）   步数 243428   执行地址 6382   服务 40   投递 0 条   跑过的任务 5/12
+任务     跑过       在等       要的位        PC
+1      是        flag     0x400      0x0008157E
+2      **没**    dormant  0xFFFFFFFF 0x00000000
+3      **没**    dormant  0xFFFFFFFF 0x00000000
+4      是        dormant  0xFFFFFFFF 0x00000000
+5      是        msg      0xFFFFFFFF 0x000A6326
+6      **没**    dormant  0xFFFFFFFF 0x00000000
+7      **没**    dormant  0xFFFFFFFF 0x00000000
+8      是        sleep    0xFFFFFFFF 0x000ACE86
+9      是        flag     0x4000     0x000ADE74
+10     **没**    dormant  0xFFFFFFFF 0x00000000
+11     **没**    dormant  0xFFFFFFFF 0x00000000
+12     **没**    dormant  0xFFFFFFFF 0x00000000
+========================================================================================
+B 投 1 条   步数 283647   执行地址 6382   服务 51   投递 1 条   跑过的任务 5/12
+任务     跑过       在等       要的位        PC
+1      是        flag     0x400      0x0008157E
+2      **没**    dormant  0xFFFFFFFF 0x00000000
+3      **没**    dormant  0xFFFFFFFF 0x00000000
+4      是        dormant  0xFFFFFFFF 0x00000000
+5      是        msg      0xFFFFFFFF 0x000A6326
+6      **没**    dormant  0xFFFFFFFF 0x00000000
+7      **没**    dormant  0xFFFFFFFF 0x00000000
+8      是        sleep    0xFFFFFFFF 0x000ACE86
+9      是        flag     0x4000     0x000ADE74
+10     **没**    dormant  0xFFFFFFFF 0x00000000
+11     **没**    dormant  0xFFFFFFFF 0x00000000
+12     **没**    dormant  0xFFFFFFFF 0x00000000
+========================================================================================
+C 每 2 万步投 1 条 × 8   步数 565180   执行地址 6382   服务 128   投递 8 条   跑过的任务 5/12
+任务     跑过       在等       要的位        PC
+1      是        flag     0x400      0x0008157E
+2      **没**    dormant  0xFFFFFFFF 0x00000000
+3      **没**    dormant  0xFFFFFFFF 0x00000000
+4      是        dormant  0xFFFFFFFF 0x00000000
+5      是        msg      0xFFFFFFFF 0x000A6326
+6      **没**    dormant  0xFFFFFFFF 0x00000000
+7      **没**    dormant  0xFFFFFFFF 0x00000000
+8      是        sleep    0xFFFFFFFF 0x000ACE86
+9      是        flag     0x4000     0x000ADE74
+10     **没**    dormant  0xFFFFFFFF 0x00000000
+11     **没**    dormant  0xFFFFFFFF 0x00000000
+12     **没**    dormant  0xFFFFFFFF 0x00000000
+========================================================================================
+D C 之后再空转 20 万步   步数 765180   执行地址 6382   服务 128   投递 8 条   跑过的任务 5/12
+任务     跑过       在等       要的位        PC
+1      是        flag     0x400      0x0008157E
+2      **没**    dormant  0xFFFFFFFF 0x00000000
+3      **没**    dormant  0xFFFFFFFF 0x00000000
+4      是        dormant  0xFFFFFFFF 0x00000000
+5      是        msg      0xFFFFFFFF 0x000A6326
+6      **没**    dormant  0xFFFFFFFF 0x00000000
+7      **没**    dormant  0xFFFFFFFF 0x00000000
+8      是        sleep    0xFFFFFFFF 0x000ACE86
+9      是        flag     0x4000     0x000ADE74
+10     **没**    dormant  0xFFFFFFFF 0x00000000
+11     **没**    dormant  0xFFFFFFFF 0x00000000
+12     **没**    dormant  0xFFFFFFFF 0x00000000
+========================================================================================
+E 全开 dormant + 投 8 条   步数 565848   执行地址 10685   服务 222   投递 8 条   跑过的任务 9/12
+任务     跑过       在等       要的位        PC
+1      是        flag     0x8000     0x0008C80A
+2      是        flag     0x4000     0x00089818
+3      是        dormant  0xFFFFFFFF 0x00000000
+4      是        flag     0x2000     0x0008EB7C
+5      是        flag     0x4000     0x000A635A
+6      是        dormant  0xFFFFFFFF 0x00000000
+7      **没**    dormant  0xFFFFFFFF 0x00000000
+8      是        sleep    0xFFFFFFFF 0x000ACE86
+9      是        flag     0x4000     0x000ADE74
+10     **没**    dormant  0xFFFFFFFF 0x00000000
+11     是        flag     0x1        0x000DB8E2
+12     **没**    dormant  0xFFFFFFFF 0x00000000
+========================================================================================
+总表
+场景                         步数         执行地址       服务       跑过任务       任务 5
+A 基线（不投递）                  243428     6382       40       5/12       msg @0x000A6326
+B 投 1 条                    283647     6382       51       5/12       msg @0x000A6326
+C 每 2 万步投 1 条 × 8          565180     6382       128      5/12       msg @0x000A6326
+D C 之后再空转 20 万步            765180     6382       128      5/12       msg @0x000A6326
+E 全开 dormant + 投 8 条       565848     10685      222      9/12       flag @0x000A635A
+
+新增的服务调用点（相对场景 A）
+  B 投 1 条                    0 处：
+  C 每 2 万步投 1 条 × 8          0 处：
+  D C 之后再空转 20 万步            0 处：
+  E 全开 dormant + 投 8 条       56 处：0x000896B8 0x000897FE 0x00089816 0x0008B2E8 0x0008BF6A 0x0008BF74 0x0008BF86 0x0008C66E 0x0008C696 0x0008C6F0
+
+覆盖率相对 A 的增量
+  B 投 1 条                    Δ地址 +0     Δ服务 +11  
+  C 每 2 万步投 1 条 × 8          Δ地址 +0     Δ服务 +88  
+  D C 之后再空转 20 万步            Δ地址 +0     Δ服务 +88  
+  E 全开 dormant + 投 8 条       Δ地址 +4303  Δ服务 +182 
