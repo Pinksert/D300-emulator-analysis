@@ -1556,6 +1556,119 @@ def test_isr2b():
     check("0x186 只读 15 次（= 15 次转换）", hits.get(0x186), 15)
 
 
+def test_autoirq():
+    """V21：给 INT 0x2B 配周期时钟 —— 中断自己来，节奏比次数重要。"""
+    print("\n[26 自动节拍 INT 0x2B（V21）]")
+    from frbox import realos, dev_irq2b
+
+    m = create("d300-a")
+    m.load()
+    m.reset()
+    m.enable_cov()
+    m.boot_realos(1)
+    m.attach_flow()
+    m.enable_callbacks()
+    m.enable_isr2b()
+    check("默认不挂周期时钟", m.irq2b_clock, None)
+    for _ in range(12):
+        m.run(max_steps=5000, spin_guard=False)
+    clk = m.enable_auto_irq2b(period=256)
+    check("挂上之后是 Irq2BClock", isinstance(clk, dev_irq2b.Irq2BClock), True)
+    check("挂时钟顺带接上 INT 0x2B 驱动", m.isr2b is not None, True)
+    check("时钟在 m.devices 里", clk in m.devices, True)
+    m.run(max_steps=30000, spin_guard=False)
+    st = clk.state()
+    check("风暴档 3 万步：fired=59（确定性）", st["fired"], 59)
+    check("风暴档：ISR 期间的到点被合并 58 次", st["coalesced"], 58)
+    check("风暴档：accepted=58", st["accepted"], 58)
+    check("口径自洽：fired - 待决 = accepted",
+          st["fired"] - st["pending"], st["accepted"])
+
+    # 从容档：97 次中断 +2,418，任务 6 被拉起且入口被执行过
+    m2 = create("d300-a")
+    m2.load()
+    m2.reset()
+    m2.enable_cov()
+    m2.boot_realos(1)
+    m2.attach_flow()
+    m2.enable_callbacks()
+    m2.enable_isr2b()
+    for _ in range(12):
+        m2.run(max_steps=5000, spin_guard=False)
+    c0 = m2.cov.words()
+    s0 = len(m2.flow.calls)
+    clk2 = m2.enable_auto_irq2b(period=1024)
+    m2.run(max_steps=100000, spin_guard=False)
+    check("从容档 10 万步：accepted=97", clk2.accepted(), 97)
+    check("从容档：一次都没合并", clk2.coalesced, 0)
+    check("从容档：覆盖 +2,418", m2.cov.words() - c0, 2418)
+    check("从容档：服务 +10", len(m2.flow.calls) - s0, 10)
+    t6 = {t["id"]: t["wait_kind"] for t in realos.states(m2)}
+    check("从容档：任务 6 走到 flag 等待", t6.get(6), "flag")
+    check("从容档：任务 6 入口 0xA6A30 被执行过", m2.cov.visited(0x000A6A30), True)
+    n6 = sum(1 for rec in m2.cpu.irq_log
+             if rec[0] == 0x2B and 0x000A6000 <= rec[2] < 0x000A8000)
+    check("有中断落在任务 6 函数体里（0xA6xxx）", n6, 4)
+
+    # 等价性：手动 240 次 = 风暴 accepted≥240，都是 +2053/+3
+    m3 = create("d300-a")
+    m3.load()
+    m3.reset()
+    m3.enable_cov()
+    m3.boot_realos(1)
+    m3.attach_flow()
+    m3.enable_callbacks()
+    m3.enable_isr2b()
+    for _ in range(12):
+        m3.run(max_steps=5000, spin_guard=False)
+    c0 = m3.cov.words()
+    s3 = len(m3.flow.calls)
+    m3.isr2b.burst(240, max_steps=60000)
+    check("手动 240 次：+2053", m3.cov.words() - c0, 2053)
+    check("手动 240 次：服务 +3", len(m3.flow.calls) - s3, 3)
+    m4 = create("d300-a")
+    m4.load()
+    m4.reset()
+    m4.enable_cov()
+    m4.boot_realos(1)
+    m4.attach_flow()
+    m4.enable_callbacks()
+    m4.enable_isr2b()
+    for _ in range(12):
+        m4.run(max_steps=5000, spin_guard=False)
+    c0 = m4.cov.words()
+    s4 = len(m4.flow.calls)
+    clk4 = m4.enable_auto_irq2b(period=256)
+    while clk4.accepted() < 240 and m4.step_count < 10 ** 7:
+        m4.run(max_steps=5000, spin_guard=False)
+    check("风暴档 accepted≥240（实为 246）", clk4.accepted(), 246)
+    check("风暴档：也是 +2053（与手动完全等价）",
+          m4.cov.words() - c0, 2053)
+    check("风暴档：服务也同为 +3", len(m4.flow.calls) - s4, 3)
+
+    # 摘掉
+    dev_irq2b.detach(m4)
+    check("detach 之后时钟不在设备表里", clk4 in m4.devices, False)
+    check("detach 之后 irq2b_clock 置空", m4.irq2b_clock, None)
+
+    # 回归：boot 之前挂钟 —— ICR 未配置时线不拉（否则 level=0x1F 的请求
+    # 永久卡在待决队列，把后面的到点全合并掉，accepted 恒为 0）
+    m5 = create("d300-a")
+    m5.load()
+    m5.reset()
+    m5.enable_cov()
+    m5.attach_flow()
+    m5.enable_callbacks()
+    m5.enable_isr2b()
+    clk5 = m5.enable_auto_irq2b(period=1024)      # boot_realos 之前
+    m5.boot_realos(1)
+    m5.run(max_steps=100000, spin_guard=False)
+    check("boot 前挂钟：ICR 未配置的到点被跳过 2 次", clk5.skipped, 2)
+    check("boot 前挂钟：中断照常被受理（99 次）", clk5.accepted(), 99)
+    check("boot 前挂钟：没有卡死的待决请求", clk5.pending_now(), 0)
+    check("boot 前挂钟：终态覆盖 3,861（与挂钟在后一致）", m5.cov.words(), 3861)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1583,6 +1696,7 @@ def main():
     test_msgs()
     test_callbacks()
     test_isr2b()
+    test_autoirq()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
