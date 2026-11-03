@@ -21,6 +21,8 @@
     msg [send [W0..W7]|sample|queue]  信箱：借固件内核投一条消息（V17）
     cb [tick [N]|chain [N]]          回调槽：替主循环扫一圈（V18）
     irq2b [N|answer N]  接上 INT 0x2B（0x80588）：请求 N 次，派发器自己往前走（V19/V20）
+    autoirq [P|off]     给 INT 0x2B 配周期时钟（V21）：每 P 周期自动拉线，
+                        跑 fast/c 时中断自己来；off 摘掉
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
     boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
@@ -695,6 +697,45 @@ class Monitor:
 
         h.burst(n, answer=answer, on_event=on_ev)
         self.out("  " + h.info())
+        return True
+
+    def cmd_autoirq(self, arg=""):
+        """autoirq [P|off] —— 给 INT 0x2B 配周期时钟（V21）
+
+        `autoirq`       看时钟状态：周期 / fired / coalesced / skipped / accepted / 待决
+        `autoirq P`     挂上（P = CPU 周期，默认 1024；256 = 每 tick 一次）
+        `autoirq off`   摘掉
+
+        与 `irq2b N` 的区别：那是**手动拉 N 次线**，每次都跑到 reti、中断被串行化；
+        这一条把线挂到设备时基上，`fast N` / `c` 里中断自己来 —— 包括在任务
+        代码里、内核里被拉起来。同一向量已有待决请求时时钟会合并，
+        不会把 cpu.irq_pending 灌满（那不是任何真实硬件的行为）。
+        周期是模型参数：真机频率未知（V20 已声明），实验里做频率扫描用。
+        """
+        m = self.m
+        a = arg.split()
+        clk = getattr(m, "irq2b_clock", None)
+        if not a:
+            if clk is None:
+                self.out("INT 0x2B 周期时钟未挂（autoirq P 挂上，P=周期数，默认 1024）")
+            else:
+                self.out("INT 0x2B 周期时钟：" + clk.summary())
+            return True
+        if a[0] == "off":
+            from frbox.dev_irq2b import detach
+            gone = detach(m)
+            self.out("已摘掉周期时钟" if gone else "本来就没挂")
+            return True
+        p = self._num(a[0]) if a else 0
+        if not p or p < 1:
+            self.out("周期要 ≥ 1（CPU 周期；256 = 每 tick 一次）")
+            return True
+        if clk is not None:
+            clk.period = p
+            self.out("周期改成 %d：%s" % (p, clk.summary()))
+        else:
+            clk = m.enable_auto_irq2b(period=p)
+            self.out("已挂：%s" % clk.summary())
         return True
 
     def cmd_readyq(self, arg=""):
