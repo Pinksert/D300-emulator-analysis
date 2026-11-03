@@ -99,19 +99,24 @@ def sec_b():
         m, h = base()
         m.bus.watch.add(0x174)
         m.bus.access_log.clear()
-        lo, hi = m.cov.words(), 0
         stuck = None
+        steps9 = None
         for k in range(1, 13):
+            t0 = m.step_count
             r = h.raise_once(max_steps=20000, run_tick=run_tick)
+            if k == 9:
+                steps9 = m.step_count - t0
             if r["cut"]:
-                stuck = (k, m.cpu.pc)
+                stuck = (k, m.cpu.pc, r["steps"])
                 break
         spins = sum(1 for kind, a, _n, _v, pc in m.bus.access_log
                     if kind == "R" and a == 0x174 and pc == isr2b.POLL_PC)
-        print("%-14s %-10s %-10d 0x%05X    0x%02X"
+        print("%-14s %-16s %-10d 0x%05X    0x%02X"
               % (tag,
                  ("第 %d 次卡死" % stuck[0]) if stuck else "全部 reti",
                  spins, m.cpu.pc, m.bus.rd(0x174, 1)))
+        print("               第 9 次用了 %s 步"
+              % (("%d（超时上限 20000）" % stuck[2]) if stuck else str(steps9)))
     print("\n同一条中断线、同一台机器，唯一的差别是「谁在单步」：")
     print("  cpu.step 不跑设备 tick → XferHandshake.tick() 永不调用 → 完成位不来")
     print("  m.step   每 cycles_per_tick 步分发一次 tick → 完成位到点自己起来")
@@ -141,7 +146,8 @@ def sec_c():
               % ("wr" if kind == "W" else "rd", pc, v, mark))
     n_ok = sum(1 for kind, v, pc in log if kind == "R" and pc == isr2b.POLL_PC and v & 0x40)
     n_poll = sum(1 for kind, v, pc in log if kind == "R" and pc == isr2b.POLL_PC)
-    print("\n0x9C97A 上一共读了 %d 次，其中 %d 次带回 bit6。" % (n_poll, n_ok))
+    print("\n9 次中断累计只经过 0x9C97A %d 次（全在第 9 次那趟），其中 %d 次带回 bit6。"
+          % (n_poll, n_ok))
     print("固件在 0x9C960 写 0（清寄存器）→ 0x9C974 置 bit1 → 0x9C97A 等 bit6。")
     print("模型在写 bit1 时把完成位清掉、过 64 个周期再置起来 —— 所以第 1 次读是 0x02，")
     print("第 14 次已经是 0x42。**整个过程中没有任何一行代码替硬件写过字节。**")
