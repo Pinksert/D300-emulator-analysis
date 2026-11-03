@@ -19,6 +19,7 @@
     events [PERIOD]     挂/看「完成位 + 中断」事件源（默认周期 4096）
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
     msg [send [W0..W7]|sample|queue]  信箱：借固件内核投一条消息（V17）
+    cb [tick [N]|chain [N]]          回调槽：替主循环扫一圈（V18）
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
     boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
@@ -580,6 +581,66 @@ class Monitor:
                      + ("  （尾部 0x%05X）" % tail))
             return True
         self.out("用法：msg [send [W..]|sample|queue]")
+        return True
+
+    def cmd_cb(self, arg=""):
+        """cb [tick [N]|chain [N]] —— 两个回调槽：替主循环扫一圈（V18）
+
+        `cb`              看两个槽的指针 / 倒计时 / 标志位
+        `cb tick [N]`     替主循环扫 N 圈（默认 1），打印真正执行了回调的那几圈
+        `cb chain [N]`    一直扫到没有槽还装着指针（最多 N 圈，默认 240）
+
+        ⚠️ 主循环 0x80588 自己从来没被执行过 —— 它没有任何调用者。这里不是
+        「让固件跑起来」，是**外部注入 tick**，代替那块缺失的调度。
+        """
+        m = self.m
+        a = arg.split()
+        cb = getattr(m, "cb", None)
+        if not a:
+            if cb is None:
+                self.out("没有回调槽：先 cb tick 1，或启动时加 --cb / --cb-tick N")
+                return True
+            self.out("主循环 0x%05X 覆盖=%s（它没有调用者）"
+                     % (cb.MAIN_LOOP if hasattr(cb, "MAIN_LOOP") else 0x80588,
+                        m.cov.visited(0x80588) if getattr(m, "cov", None) else "?"))
+            for st in cb.state():
+                self.out("  %s 指针=0x%08X 倒计时=0x%04X 标志[0x%05X]=0x%02X%s"
+                         % (st["name"], st["cb"], st["count"], st["flag_addr"],
+                            st["flag"], "  *挂起*" if st["pending"] else ""))
+            self.out("  已扫 %d 圈" % cb.ticks)
+            return True
+        if cb is None:
+            cb = m.enable_callbacks()
+        if getattr(m, "cov", None) is None:
+            m.enable_cov()          # 没有覆盖率就看不出「哪一圈真的执行了回调」
+        sub = a[0]
+        if sub == "tick":
+            n = self._num(a[1]) if len(a) > 1 else 1
+            if not n:
+                n = 1
+            got = cb.tick(n)
+            if not got:
+                self.out("扫了 %d 圈：门控都没到点（倒计时还在减），没有回调被执行" % n)
+            for t, name, r in got:
+                self.out("  第 %-4d 圈 %s 执行 0x%05X：%d 步，覆盖 +%d%s → 下一站 0x%05X"
+                         % (t, name, r["cb"], r["steps"], r["delta"],
+                            "（没回停机桩：交权给调度器）" if r["cut"] else "",
+                            r["next"]))
+            self.out("  " + cb.summary())
+            return True
+        if sub == "chain":
+            n = self._num(a[1]) if len(a) > 1 else 240
+            if not n:
+                n = 240
+            ev = cb.chain(n)
+            if not ev:
+                self.out("链没动：没有槽挂着指针")
+            for t, name, r in ev:
+                self.out("  第 %-4d 圈 %s 0x%05X → 0x%05X（%d 步 / +%d）"
+                         % (t, name, r["cb"], r["next"], r["steps"], r["delta"]))
+            self.out("  " + cb.summary())
+            return True
+        self.out("用法：cb [tick [N]|chain [N]]")
         return True
 
     def cmd_readyq(self, arg=""):
