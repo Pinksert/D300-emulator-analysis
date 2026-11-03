@@ -20,7 +20,7 @@
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
     msg [send [W0..W7]|sample|queue]  信箱：借固件内核投一条消息（V17）
     cb [tick [N]|chain [N]]          回调槽：替主循环扫一圈（V18）
-    irq2b [N|off]       接上 INT 0x2B（0x80588）：请求 N 次，派发器自己往前走（V19）
+    irq2b [N|answer N]  接上 INT 0x2B（0x80588）：请求 N 次，派发器自己往前走（V19/V20）
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
     boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
@@ -645,11 +645,15 @@ class Monitor:
         return True
 
     def cmd_irq2b(self, arg=""):
-        """irq2b [N|off] —— 接上 INT 0x2B（V19）
+        """irq2b [N|answer N] —— 接上 INT 0x2B（V19；V20 改默认）
 
-        `irq2b`        看这条线的接线情况：向量项、ICR、14 个待办标志字节
-        `irq2b N`      请求 N 次中断，每次跑到 reti；有站推进就打印
-        `irq2b off N`  同上但不替外设答话（会卡在 0x9C976 的轮询上）
+        `irq2b`         看这条线的接线情况：向量项、ICR、14 个待办标志字节
+        `irq2b N`       请求 N 次中断，每次跑到 reti；有站推进就打印
+        `irq2b answer N`同上，但在 0x9C97A 上硬写 0x174 的完成位（V19 的做法，对照用）
+
+        V20：默认不再替外设答话 —— `0x174` 由 `XferHandshake` 建模
+        （`D300_A_TABLE` 里 `0x174:(0x02,0x40)`），`tick()` 到点会自己置完成位。
+        V19 那次「第 9 次中断卡死」是本模块绕过 `Machine.step()` 的时基分发造成的。
 
         与 `cb tick` 的区别：`cb tick` 是**我们手动替 0x80588 转一圈**；
         `irq2b` 是**把那根中断线接上**，让固件自己的分派器跑。V19 更正了 V18
@@ -670,13 +674,14 @@ class Monitor:
                      % m.cov.visited(0x80588))
             fl = " ".join("0x%05X=%02X" % (k, v) for k, v in st["flags"].items() if v)
             self.out("  待办标志 0x3F402–0x3F40F：%s" % (fl or "（全 0）"))
-            self.out("  已请求 %d 次 / 替外设答话 %d 次" % (st["count"], st["answers"]))
+            self.out("  已请求 %d 次 / 硬写完成位 %d 次（默认 0：由设备模型给）"
+                     % (st["count"], st["answers"]))
             if st["cb"]:
                 self.out("  " + st["cb"])
             return True
-        answer = True
-        if a[0] == "off":
-            answer = False
+        answer = False                      # V20：默认靠 XferHandshake 自己答话
+        if a and a[0] == "answer":
+            answer = True                   # 对照：像 V19 那样硬写 0x174 bit6
             a = a[1:]
         n = self._num(a[0]) if a else 1
         if not n:
