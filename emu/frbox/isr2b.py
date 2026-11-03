@@ -42,17 +42,33 @@ V18 把 `0x80588` 叫「主循环」，结论是「它没有调用者、在模�
 节拍是「每两次中断减一格」—— 派发器会把 `0x3F404` bit1 清掉（`0x8224C` 的
 `bandl`），再由 `0x81A1E` 的 `borl` 重新置上，而这个重新置位本身也受别的位门控。
 
-## 新的一道墙
+## 那个「卡住」是探针自己的 bug（V20 更正）
 
-不管这条路径会卡在 `0x9C976`：
+走到这里会碰上一段握手：
 
-    0x9C974  borl  r0,#2          ; 置 0x174 的 bit1（请求）
+    0x9C974  borl  r0,#2          ; 置 0x174 的 bit1（启动）
     0x9C976  ldi:20 r0,#0x174     ; ← 回来重读
-    0x9C97A  btsth @r0,#4         ; 等 0x174 的 bit6（应答）
+    0x9C97A  btsth @r0,#4         ; 等 0x174 的 bit6（完成）
     0x9C97C  beq   -4             ; 不置就一直转
 
-`answer=True` 就是在 `0x9C97A` 那一条上替外设答话（往直接页 `0x174` 写 `0x40`）。
-这不是固件行为，是**我们假装外设回了一个「好了」**，报告里必须写清楚。
+V19 把它当成「缺一个外设」，于是在 `0x9C97A` 上替硬件写 `0x40`（`answer=True`）。
+V20 查清楚了：**不需要替它答话**，`0x174` 早就被建模了 ——
+
+- `dev_xfer.D300_A_TABLE` 里明明白白写着 `0x174: (0x02, 0x40)`（启动位 bit1、完成位 bit6）
+- `Machine.boot_realos()` 无条件调用 `enable_xfer()`，所以从 V10 起所有实验都挂着它
+- `dp.owner(0x174)` 就是 `XferHandshake` 实例
+
+真正的问题在于本模块原先用 `cpu.step()` 单步，**绕过了 `Machine.step()` 里的设备时基
+分发** —— `XferHandshake.tick()` 一个节拍都拿不到，完成位自然永远不会出现。
+`run_tick=True`（默认）改走 `Machine.step(1)` 之后，第 14 次读 `0x174` 就返回 `0x42`
+（= 模型置上的 bit6），固件当场退出循环。
+
+    口径            第 9 次中断                0x9C97A 经过次数
+    cpu.step        20000 步超时，卡在自旋     6520
+    m.step          604 步，正常 reti          14
+
+所以 `answer` 默认改成 **False**：让设备模型自己答话，而不是在外面硬写一个完成位。
+`answer=True` 只留给「想复现 V19 那种做法」的对照实验。
 """
 
 from fr_emu import TABLE
@@ -65,8 +81,8 @@ TAIL = 0x0008096A           # 尾声子程序：专测 0x3F403 那 7 位（0x809
 TAIL_END = 0x000809BA       # 它的 ret:d
 FLAG_LO = 0x0003F402        # 待办标志块，14 字节（0x3F402–0x3F40F 全部用上）
 FLAG_HI = 0x0003F40F
-POLL_PC = 0x0009C97A        # 卡住的硬件轮询：btsth @r0,#4（等 0x174 的 bit6）
-POLL_REG = 0x00000174       # 轮询的直接页寄存器
+POLL_PC = 0x0009C97A        # 硬件轮询点：btsth @r0,#4（等 0x174 的 bit6）
+POLL_REG = 0x00000174       # 轮询的直接页寄存器（XferHandshake 的 0x174 那一格）
 POLL_BIT = 0x40             # 等它的 bit6
 
 __all__ = ["VEC", "TBR", "ENTRY", "RETI", "TAIL", "table", "vectors", "Irq2B",
@@ -164,11 +180,18 @@ class Irq2B:
         return st
 
     # ------------------------------------------------------------ 动作
-    def raise_once(self, answer=True, max_steps=200000):
+    def raise_once(self, answer=False, max_steps=200000, run_tick=True):
         """请求一次 INT 0x2B，跑到 reti 之后。
 
-        `answer=True` 时在 `0x9C976` 那条轮询上替外设写 `0x174 |= 0x40`。
-        `cut=True` 表示没走到 reti —— 要么卡在轮询上，要么路上交权给了调度器。
+        `answer=False`（默认）：靠设备模型自己答话。`boot_realos()` 会挂上
+        `XferHandshake`，它的 `tick()` 到点把 `0x174` 的 bit6 置起来，固件就退出轮询。
+        `answer=True`：在 `0x9C97A` 上硬写 `0x174 |= 0x40`，即 V19 的做法，留作对照。
+        `cut=True` 表示没走到 reti —— 要么真卡在轮询上，要么路上交权给了调度器。
+
+        ⚠️ V20 更正：本方法原先直接 `cpu.step()`，**绕过了 `Machine.step()` 里的
+        设备时基分发**，于是「启动位」能置上、「完成位」永远来不了
+        （`XferHandshake.tick()` 拿不到节拍）—— V19 那道「新墙」就是这么来的。
+        `run_tick=True` 改走 `Machine.step(1)`，让设备模型跟着中断一起走时间。
         """
         m = self.machine
         c = m.cpu
@@ -183,8 +206,11 @@ class Irq2B:
         answered = 0
         cut = False
         while steps < max_steps:
-            c.step()
-            m.step_count += 1
+            if run_tick:
+                m.step(1)
+            else:
+                c.step()
+                m.step_count += 1
             steps += 1
             if c.pc == ENTRY:
                 entered = True
@@ -193,8 +219,11 @@ class Irq2B:
                 answered += 1
                 self.answers += 1
             if c.pc == RETI:
-                c.step()
-                m.step_count += 1
+                if run_tick:
+                    m.step(1)
+                else:
+                    c.step()
+                    m.step_count += 1
                 steps += 1
                 break
         else:
@@ -211,12 +240,14 @@ class Irq2B:
         self.history.append((self.count, out["delta"], out["cb"]))
         return out
 
-    def burst(self, n, answer=True, max_steps=200000, on_event=None):
+    def burst(self, n, answer=False, max_steps=200000, on_event=None,
+              run_tick=True):
         """连请求 n 次；回调槽有变化（有站推进 / 注销）时记一条。"""
         events = []
         last = None
         for _ in range(n):
-            r = self.raise_once(answer=answer, max_steps=max_steps)
+            r = self.raise_once(answer=answer, max_steps=max_steps,
+                                run_tick=run_tick)
             if r["changed"] or r["cut"] or r["svc"]:
                 events.append(r)
                 if on_event:
