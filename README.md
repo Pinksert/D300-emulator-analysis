@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.20.0** | NikonEmulator 驱动 |
+| | **frbox 0.21.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -17,7 +17,7 @@
 而按键、存储卡、测光这些外设模型还没有。
 它是一份**逆向过程的记录**：哪些链路已经走通、卡在哪一位上、踩过哪些坑。
 
-**仓库里没有任何 HTML 文件。** 32 份报告全部只留在本机（根目录中文名），
+**仓库里没有任何 HTML 文件。** 33 份报告全部只留在本机（根目录中文名），
 仓库只留文末那张「报告索引」表 ——
 每份报告的主题和结论都写在表里，读表就够；要细节再回本地开原文。
 
@@ -51,9 +51,11 @@ python -m frbox -M d300-a --realos 1 --cb --flow \
        -c "fast 60000; cb; cb tick 13; cb"               # 替 0x80588 手动扫一圈回调槽（V18）
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 240 \
        -c "irq2b"                                        # 接上 INT 0x2B，回调链自己走（V19/V20）
+python -m frbox -M d300-a --realos 1 --cov --cb --auto-irq2b 1024 \
+       -monitor none -c "fast 100000; autoirq; tasks"    # 周期时钟：中断自己来（V21）
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer  # 硬写完成位（V19 对照）
 
-python frbox_selftest.py     # 484/484
+python frbox_selftest.py     # 510/510
 python fr_selftest.py        # 63/63
 ```
 
@@ -115,7 +117,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.20.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.21.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -127,9 +129,9 @@ D300-emulator-analysis/
 │   ├── fr_selftest.py      63 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   484 条断言
+│   ├── frbox_selftest.py   510 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              63 个取证脚本（见 probe/README.md）
+│   └── probe/              64 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
@@ -160,7 +162,7 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 484 条（frbox）+ 63 条（CPU），全绿 |
+| 自检 | 510 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8` |
 | 中断向量 | 48 槽 = 39 真 ISR + 8 未用（兜底 `0xFE250`）+ 1 特殊（`0x3F`） |
@@ -188,6 +190,9 @@ D300-emulator-analysis/
 | 不硬写也能过（V20） | 240 次中断全部 `reti`、覆盖 **+2053**、硬写 **0 次**（V19 硬写了 15 次）；`answer` 默认改 `False`，`--answer` 只作对照 |
 | 两组结果寄存器（V20） | 10 位组 12 路 `0x178`–`0x18E`（步长 2）+ 12 位组 8 路 `0x528`–`0x53E`；两组都是「bit1 启动 / bit6 完成」同一套协议 |
 | 只取第 8 路（V20） | 240 次里只有 15 次走完整流程，且只读 `0x186`；给 12 路灌全 0 / 0x200 / 0x3FF / 渐变，覆盖都是 +2053 —— **换输入 ≠ 换路径** |
+| 周期时钟（V21） | INT 0x2B 挂上 `Irq2BClock`（同一向量待决时合并），`fast N` 里中断自己来，可在任务代码里被受理 |
+| ⭐节奏比次数重要（V21） | 从容档（1024 周期）97 次 **+2,418**；风暴档（256）196 次只有 +2,053（与手动 240 次完全等价）；多出的 545 个地址从任务 6 入口 `0xA6A30` 开始；97 次里 4 次直接打断任务 6 函数体 |
+| 长跑饱和（V21） | period=1024 跑 100 万步：accepted 976 次，覆盖 20 万步后趋平（终值 +2,482）—— 再往下要新事件源，不是更多中断 |
 | 倒计时门控（V18） | 每 tick 计数减 1，归零才 `call [槽]`；槽0 计数 12、链式；槽1 计数 8、一次性（跑完注销） |
 | 回调链四站（V18） | `0x8225E` → `0x82278`（`set_flg(9,0x400)`）→ `0x82298`（`sta_tsk(6,1)`）→ `0x822B6`（`set_flg(9,0x200)`，终点） |
 | 手动 tick 的收益（V18） | 只 tick +246 卡第 3 站；全开 dormant + tick **+507**、链走完四站、活任务 4→8（任务 6 从 `sta_tsk` 起来）—— **换路径才涨** |
@@ -326,11 +331,11 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 
 ---
 
-## 报告索引（32 份 · 都留在本机）
+## 报告索引（33 份 · 都留在本机）
 
 **HTML 报告一律不入库。** 两个原因：GitHub 的 blob 视图不渲染 HTML，点开只有源码；单份 1–2 MB，改一版就多一版二进制快照，把提交历史淹掉。所以仓库里只留这张表 —— 每份报告的结论都写在这里，要细节再回本地开原文。
 
-本地只留根目录这一份中文名副本；表里的编号沿用报告产出时的序号（01–32），方便指代和排序，不再对应任何入库文件名。01–13 是 NikonEmulator 线，14–32 是 frbox 线（V 号 = 编号 − 12，14→V2、32→V20）。
+本地只留根目录这一份中文名副本；表里的编号沿用报告产出时的序号（01–32），方便指代和排序，不再对应任何入库文件名。01–13 是 NikonEmulator 线，14–33 是 frbox 线（V 号 = 编号 − 12，14→V2、33→V21）。
 
 | # | 本地文件 | 主题 | 核心结论 |
 |---|---|---|---|
@@ -366,6 +371,7 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 | 30 | `D300固件-仿真台V18-回调槽.html` | V18 回调槽 | 登记是活的、派发器从没跑过；接上以后四站回调链走完 |
 | 31 | `D300固件-仿真台V19-中断2B.html` | V19 那条没人拉的中断线 | `0x80588` = INT 0x2B 的处理函数；接上后 240 次中断 +2053 个执行地址 |
 | 32 | `D300固件-仿真台V20-时基.html` | V20 那道墙是假的 | 卡死是探针自己 `cpu.step()` 绕过了设备时基；改 `m.step(1)` 605 步正常 `reti`，硬写 0 次 |
+| 33 | `D300固件-仿真台V21-自动节拍.html` | V21 中断自己来了，节奏比次数重要 | 周期时钟下从容档 97 次 +2,418 > 风暴 196 次 +2,053（=手动 240 次）；多出的地址从任务 6 入口开始；覆盖 20 万步饱和 |
 
 ---
 
