@@ -20,6 +20,7 @@
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
     msg [send [W0..W7]|sample|queue]  信箱：借固件内核投一条消息（V17）
     cb [tick [N]|chain [N]]          回调槽：替主循环扫一圈（V18）
+    irq2b [N|off]       接上 INT 0x2B（0x80588）：请求 N 次，派发器自己往前走（V19）
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
     boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
@@ -590,8 +591,9 @@ class Monitor:
         `cb tick [N]`     替主循环扫 N 圈（默认 1），打印真正执行了回调的那几圈
         `cb chain [N]`    一直扫到没有槽还装着指针（最多 N 圈，默认 240）
 
-        ⚠️ 主循环 0x80588 自己从来没被执行过 —— 它没有任何调用者。这里不是
-        「让固件跑起来」，是**外部注入 tick**，代替那块缺失的调度。
+        ⚠️ V19 更正：0x80588 不是主循环，是 INT 0x2B 的处理函数（`irq2b` 才是
+        把它接上的用法）。这里的 tick 是**手动替它转一圈**，等价于「外部注入一次
+        分派」，不代表固件自己走过。
         """
         m = self.m
         a = arg.split()
@@ -600,9 +602,8 @@ class Monitor:
             if cb is None:
                 self.out("没有回调槽：先 cb tick 1，或启动时加 --cb / --cb-tick N")
                 return True
-            self.out("主循环 0x%05X 覆盖=%s（它没有调用者）"
-                     % (cb.MAIN_LOOP if hasattr(cb, "MAIN_LOOP") else 0x80588,
-                        m.cov.visited(0x80588) if getattr(m, "cov", None) else "?"))
+            self.out("0x80588（INT 0x2B 的处理函数）覆盖=%s"
+                     % (m.cov.visited(0x80588) if getattr(m, "cov", None) else "?"))
             for st in cb.state():
                 self.out("  %s 指针=0x%08X 倒计时=0x%04X 标志[0x%05X]=0x%02X%s"
                          % (st["name"], st["cb"], st["count"], st["flag_addr"],
@@ -641,6 +642,54 @@ class Monitor:
             self.out("  " + cb.summary())
             return True
         self.out("用法：cb [tick [N]|chain [N]]")
+        return True
+
+    def cmd_irq2b(self, arg=""):
+        """irq2b [N|off] —— 接上 INT 0x2B（V19）
+
+        `irq2b`        看这条线的接线情况：向量项、ICR、14 个待办标志字节
+        `irq2b N`      请求 N 次中断，每次跑到 reti；有站推进就打印
+        `irq2b off N`  同上但不替外设答话（会卡在 0x9C976 的轮询上）
+
+        与 `cb tick` 的区别：`cb tick` 是**我们手动替 0x80588 转一圈**；
+        `irq2b` 是**把那根中断线接上**，让固件自己的分派器跑。V19 更正了 V18
+        「0x80588 是没有调用者的主循环」这个说法 —— 它是 INT 0x2B 的处理函数。
+        """
+        m = self.m
+        a = arg.split()
+        h = getattr(m, "isr2b", None)
+        if getattr(m, "cov", None) is None:
+            m.enable_cov()
+        if h is None:
+            h = m.enable_isr2b()
+        if not a:
+            st = h.state()
+            self.out("INT 0x2B → 0x%05X（向量表 0x%05X 第 0xD4 项）  ICR[0x45B]=0x%02X"
+                     % (st["entry"], 0x000FFC00, st["icr"]))
+            self.out("  处理函数范围 0x80588–0x80968，收尾 reti；覆盖=%s"
+                     % m.cov.visited(0x80588))
+            fl = " ".join("0x%05X=%02X" % (k, v) for k, v in st["flags"].items() if v)
+            self.out("  待办标志 0x3F402–0x3F40F：%s" % (fl or "（全 0）"))
+            self.out("  已请求 %d 次 / 替外设答话 %d 次" % (st["count"], st["answers"]))
+            if st["cb"]:
+                self.out("  " + st["cb"])
+            return True
+        answer = True
+        if a[0] == "off":
+            answer = False
+            a = a[1:]
+        n = self._num(a[0]) if a else 1
+        if not n:
+            n = 1
+        answered = [0]
+
+        def on_ev(r):
+            self.out("  第%4d 次：%6d 步  覆盖+%d 服务+%d%s  %s"
+                     % (r["n"], r["steps"], r["delta"], r["svc"],
+                        "  （没回到 reti）" if r["cut"] else "", r["cb"]))
+
+        h.burst(n, answer=answer, on_event=on_ev)
+        self.out("  " + h.info())
         return True
 
     def cmd_readyq(self, arg=""):
