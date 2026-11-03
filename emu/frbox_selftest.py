@@ -1478,27 +1478,82 @@ def test_isr2b():
     check("派发器 0x8223A 被执行过", m.cov.visited(0x0008223A), True)
     check("派发调用点 0x80606 被执行过", m.cov.visited(0x00080606), True)
 
-    # 不替外设答话：第 9 次会卡在 0x174 bit6 的轮询上
+    # V20：0x174 由 XferHandshake 建模，不替它答话也能过（V19 的「墙」是探针 bug）
     m2 = create("d300-a")
     m2.load()
     m2.reset()
     m2.enable_cov()
-    m2.boot_realos(1)
+    m2.boot_realos(1)          # 它内部会 enable_xfer()，0x174 归 XferHandshake
     m2.attach_flow()
     m2.enable_callbacks()
     h2 = m2.enable_isr2b()
     for _ in range(12):
         m2.run(max_steps=5000, spin_guard=False)
+    check("boot_realos 之后 0x174 归 XferHandshake",
+          type(m2.dp.owner(0x174)).__name__, "XferHandshake")
+    x2 = m2.dp.owner(0x174)
+    check("0x174 的启动位/完成位 = 0x02/0x40",
+          x2.table.get(0x174), (0x02, 0x40))
     stuck = None
+    steps9 = None
+    base = m2.step_count
     for k in range(1, 21):
-        r2 = h2.raise_once(answer=False, max_steps=4000)
+        t0 = m2.step_count
+        r2 = h2.raise_once(max_steps=4000)      # 不硬写，靠设备模型
+        if k == 9:
+            steps9 = m2.step_count - t0
         if r2["cut"]:
             stuck = (k, m2.cpu.pc)
             break
-    check("不答话时第 9 次回不来", stuck and stuck[0], 9)
-    # 停下时 PC 落在那三指令的循环里（ldi / btsth / beq），位置取决于步数用尽的那一刻
+    check("不替外设答话，20 次全部回到 reti", stuck, None)
+    check("硬写完成位的次数为 0", h2.answers, 0)
+    check("设备模型自己置过完成位", x2.completions > 0, True)
+    check("第 9 次 605 步就走完（V19 是 20000 步超时）", steps9, 605)
+    check("20 次累计 9815 步", m2.step_count - base, 9815)
+
+    # 对照：绕过设备时基（run_tick=False）就会重现 V19 的自旋
+    m3 = create("d300-a")
+    m3.load()
+    m3.reset()
+    m3.enable_cov()
+    m3.boot_realos(1)
+    m3.attach_flow()
+    m3.enable_callbacks()
+    h3 = m3.enable_isr2b()
+    for _ in range(12):
+        m3.run(max_steps=5000, spin_guard=False)
+    stuck3 = None
+    for k in range(1, 13):
+        r3 = h3.raise_once(max_steps=4000, run_tick=False)
+        if r3["cut"]:
+            stuck3 = (k, m3.cpu.pc)
+            break
+    check("run_tick=False 时第 9 次卡住（复现 V19）", stuck3 and stuck3[0], 9)
     check("卡在 0x174 bit6 的轮询循环里",
-          bool(stuck) and 0x0009C974 <= stuck[1] <= 0x0009C97E, True)
+          bool(stuck3) and 0x0009C974 <= stuck3[1] <= 0x0009C97E, True)
+
+    # 结果寄存器：240 次里只有 15 次走到转换流程，且只碰通道 0x186
+    m4 = create("d300-a")
+    m4.load()
+    m4.reset()
+    m4.enable_cov()
+    m4.boot_realos(1)
+    m4.attach_flow()
+    m4.enable_callbacks()
+    h4 = m4.enable_isr2b()
+    for _ in range(12):
+        m4.run(max_steps=5000, spin_guard=False)
+    for a in range(0x170, 0x190):
+        m4.bus.watch.add(a)
+    m4.bus.access_log.clear()
+    h4.burst(240, max_steps=60000)
+    hits = {}
+    for kind, a, _n, _v, _pc in m4.bus.access_log:
+        if 0x178 <= a <= 0x18F:
+            hits[a] = hits.get(a, 0) + 1
+    check("结果寄存器里只有 0x186 被读过（其余 7 个通道 0 次）",
+          [hex(x) for x in sorted(hits)], ["0x186"])
+    check("0x186 只读 15 次（= 15 次转换）", hits.get(0x186), 15)
 
 
 def main():
