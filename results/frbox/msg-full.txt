@@ -1,0 +1,58 @@
+====================================================================================
+P V16-C 复现：全开 + 逐任务解锁   步数 619408   执行地址 24170   服务 342   投递 0   跑过 11/12
+  任务 12 **没跑过**   dormant
+  未上场：[12]
+====================================================================================
+Q P + 消息投递   步数 662576   执行地址 24170   服务 471   投递 11   跑过 11/12
+  任务 12 **没跑过**   dormant
+  未上场：[12]
+====================================================================================
+R Q + 二次扫描   步数 750864   执行地址 24170   服务 498   投递 12   跑过 11/12
+  任务 12 **没跑过**   dormant
+  未上场：[12]
+====================================================================================
+场景                             步数         执行地址       服务       投递       跑过任务
+P V16-C 复现：全开 + 逐任务解锁          619408     24170      342      0        11/12
+Q P + 消息投递                     662576     24170      471      11       11/12
+R Q + 二次扫描                     750864     24170      498      12       11/12
+
+各场景末态
+  P V16-C 复现：全开 + 逐任务解锁
+    任务 1  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 2  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 3  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 4  跑过       sleep    pat=0x2000     pc=0x0008C574
+    任务 5  跑过       msg      pat=0x4000     pc=0x000A6326
+    任务 6  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 7  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 8  跑过       sleep    pat=0xFFFFFFFF pc=0x000ACE86
+    任务 9  跑过       flag     pat=0x2800     pc=0x000ADECA
+    任务 10 跑过       ready    pat=0xFFFFFFFF pc=0x000CA904
+    任务 11 跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 12 **没**    dormant  pat=0xFFFFFFFF pc=0x00000000
+  Q P + 消息投递
+    任务 1  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 2  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 3  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 4  跑过       sleep    pat=0x2000     pc=0x0008C574
+    任务 5  跑过       msg      pat=0x4000     pc=0x000A6326
+    任务 6  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 7  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 8  跑过       sleep    pat=0xFFFFFFFF pc=0x000ACE86
+    任务 9  跑过       flag     pat=0x2800     pc=0x000ADECA
+    任务 10 跑过       ready    pat=0xFFFFFFFF pc=0x000CA8F4
+    任务 11 跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 12 **没**    dormant  pat=0xFFFFFFFF pc=0x00000000
+  R Q + 二次扫描
+    任务 1  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 2  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 3  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 4  跑过       sleep    pat=0x2000     pc=0x0008C574
+    任务 5  跑过       msg      pat=0x4000     pc=0x000A6326
+    任务 6  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 7  跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 8  跑过       sleep    pat=0xFFFFFFFF pc=0x000ACE86
+    任务 9  跑过       flag     pat=0x2800     pc=0x000ADECA
+    任务 10 跑过       ready    pat=0xFFFFFFFF pc=0x000CA8FA
+    任务 11 跑过       dormant  pat=0xFFFFFFFF pc=0x00000000
+    任务 12 **没**    dormant  pat=0xFFFFFFFF pc=0x00000000
