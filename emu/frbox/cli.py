@@ -65,6 +65,9 @@ def build_parser():
                    help="挂服务调用流水记录器（配合 --realos，事后用 monitor 的 flow 看）")
     p.add_argument("--cov", action="store_true",
                    help="记录覆盖率（monitor 的 cov 看；找「一次都没跑过的代码段」用）")
+    p.add_argument("--boot", metavar="TASKS", default=None,
+                   help="把任务表「复位就激活」位置 1（2,3,6 / dormant / all）——"
+                        " 让 REALOS 初始化自己创建这些任务（V16）")
     p.add_argument("--realos", type=lambda x: int(x, 0), default=None,
                    metavar="TASKID",
                    help="V10：跑固件自带的 REALOS 并把首次派发改给这个任务号（如 --realos 1）。"
@@ -139,6 +142,15 @@ def main(argv=None):
     except Exception as e:                                   # noqa: BLE001
         print(f"固件加载失败：{e}", file=sys.stderr)
         return 2
+    if args.boot:
+        from . import taskboot
+        spec = args.boot.strip()
+        if spec in ("dormant", "all"):
+            done = taskboot.activate(m, spec)
+        else:
+            done = taskboot.activate(m, [int(x, 0) for x in spec.replace(",", " ").split()])
+        print("任务表「复位就激活」已开：%s（这是改配置做的实验，真实固件这些位是 0）"
+              % (", ".join("任务%d" % t for t in done) or "（无变化）"))
     if args.cov:
         m.enable_cov()
     if args.events is not None:
