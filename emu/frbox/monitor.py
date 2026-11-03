@@ -20,6 +20,8 @@
     bits [MASK[:VECS[:PERIOD]]]  挂/看「事件位图 0x41A56 + 中断」源（V14）
     cov [MINLEN]        覆盖率：还差哪些从没执行过的代码段（V15）
     readyq            就绪位图 + 13 个优先级槽的队列（V15）
+    boot [TASKS|dormant] / boot off TASKS   改任务表「复位就激活」位（V16）
+    unlock TASK [ROUNDS]                    一站一站把任务往下推（V16）
     wake FLAG BITS      用固件自己的 sys_set_flg 置位（注入一个外部事件）
     kcall SVC [r4..r7]  直接调一次固件系统调用（服务号用负数，如 -48 = set_flg）
     realos [TASKID]     固件自带 REALOS：13 条记录 / 让内核原生调度某任务
@@ -545,6 +547,50 @@ class Monitor:
             mark = "（空）" if empty else ""
             self.out("  槽 %-2d head=0x%06X(任务%s) tail=0x%06X(任务%s) %s"
                      % (p, head, tcb2id.get(head, "?"), tail, tcb2id.get(tail, "?"), mark))
+        return True
+
+    def cmd_boot(self, arg=""):
+        """boot [TASK,TASK…|dormant|all] / boot off TASK… —— 改「复位就激活」位（V16）
+
+        改的是任务表记录 `+0x0C` 的最高位。改完要 `reset` 再走 REALOS 才生效。
+        """
+        from . import taskboot
+        m = self.m
+        a = arg.replace(",", " ").split()
+        if not a:
+            act = [r["id"] for r in taskboot.records(m) if r["state"] & taskboot.ACTIVE_BIT]
+            dor = taskboot.dormant(m)
+            self.out("复位就激活：%s" % (", ".join(str(t) for t in act) or "无"))
+            self.out("休眠（开机不建）：%s" % (", ".join(str(t) for t in dor) or "无"))
+            self.out("用法：boot 2,3,6 / boot dormant / boot all / boot off 2,3")
+            return True
+        off = a[0] in ("off", "0", "-")
+        pool = a[1:] if off else a
+        if not pool:
+            self.out("boot off 后面要跟任务号")
+            return True
+        if len(pool) == 1 and pool[0] in ("dormant", "all"):
+            done = taskboot.activate(m, pool[0], on=not off)
+        else:
+            done = taskboot.activate(m, [self._num(x) for x in pool], on=not off)
+        self.out("已改 %s：%s" % ("关" if off else "开",
+                                 ", ".join("任务%d" % t for t in done) or "（没有变化）"))
+        self.out("⚠️ 这是改配置做的实验：要 reset 之后再走 REALOS 才生效")
+        return True
+
+    def cmd_unlock(self, arg=""):
+        """unlock TASK [ROUNDS] —— 一站一站把任务往下推（V16）"""
+        from . import unlock
+        a = arg.split()
+        if not a:
+            self.out("用法：unlock TASK [ROUNDS]   —— 跑一段→看它等哪个 flag 的哪几位→置位→再跑")
+            return True
+        tid = self._num(a[0])
+        rounds = self._num(a[1]) if len(a) > 1 else 12
+        cov = getattr(self.m, "cov", None) or self.m.enable_cov()
+        self.m.attach_flow()
+        st = unlock.trace(self.m, tid, rounds=rounds, cov=cov)
+        unlock.print_trace(st, out=self.out)
         return True
 
     def cmd_cov(self, arg=""):
