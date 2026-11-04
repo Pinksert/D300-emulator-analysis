@@ -1,4 +1,4 @@
-# frbox 0.21.0 —— D300 的全系统模拟器
+# frbox 0.23.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 345 条断言
+python frbox_selftest.py                      # 570 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -65,15 +65,16 @@ emu/
 │   ├── dev_clk.py       时钟/复位寄存器组 0x480–0x48F
 │   ├── dev_serial.py    串口 0x60–0x67
 │   ├── dev_timer.py     重载定时器 0x10–0x17
+│   ├── dev_hwcnt.py     B 段自由运行计数器 0x5C003000（V23，未标定频率）
 │   ├── icu.py           中断控制器：设备线 → 向量
 │   ├── machine.py       机器模型：内存映射 + 复位向量 + 运行循环 + 任务启动
 │   ├── monitor.py       HMP 式命令行
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    345 条断言
+├── frbox_selftest.py    570 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
-└── probe/               61 个取证脚本（见 probe/README.md）
+└── probe/               68 个取证脚本（见 probe/README.md）
 ```
 
 分层的唯一目的是让「CPU 会算」变成「机器能跑」：`Fr` 只要求宿主对象有 `rd/wr`，
@@ -594,7 +595,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 345 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / 自旋 2 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 任务启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待与服务流水 42 / **事件源与等待原因 20** |
+| `frbox_selftest.py` | 570 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -1553,4 +1554,101 @@ A 段 25/61 位可点亮、最强位 +2,822；位间状态耦合。
 cd emu
 python probe/exp_bboot.py > ../results/frbox/bboot.txt
 python probe/exp_pendbits.py > ../results/frbox/pendbits.txt
+```
+
+---
+
+## V23：墙拆了 —— 任务 2 跑完开机装配
+
+### 0. 起点
+
+V22 三道口子：任务 2 卡 `0x14E86x` SDRAM 扫描；任务表 +0x0C 域与 TCB
+「错位一格」；A 段 61 位剩 36 位单点定性没做。
+
+### 1. 墙 1：扫描起点在 ROM 指针表，扫描区在镜像之外
+
+`0x14E834` 函数开头 `ldi:32 r13,#0x1C2A98` 装的是**扫描起点指针表**：
+r4=0 → `0x740000`、r4=1 → `0x750000`。7 MB 镜像尾部 0xFFFF 填充 + 2 字节 CRC
+到 `0x740000` 截止 —— 两块扫描区（标定/参数区）都在镜像之外。扫描逐半字比对
+`0xFFFF`（终止符）/`0xAA55`（记录头）；未映射区读回 0，两种都不是，
+`r5` 一路爬到 `0x754EB0`（对照实验：摘掉建模 4 轮派发只 +4）。
+
+**拆法**：按擦除态 flash（全 0xFF）建 1 MB `extra_rom`（`flash-erased`）。
+第一半字即命中终止符干净退出。⚠️ 擦除态是「出厂未写入」假设，真实数据没提取到。
+
+### 2. 墙 2：0x5C003000 是硬件计数器
+
+墙 1 拆后任务 2 落进 `0x125A0A`：连读两次 `[0x5C003034]` 等差值 ≥ 容差 ——
+时间的安全读法。定性证据：固件 33 处 `0x5C003000` 立即数全在任务 2 代码区
+`0x120xxx–0x12Exxx`；`0x120C8E` 初始化写周期 `0x813`@+0x30、控制
+`0xFFFFFFFF`@+0x38；+0x34 = 当前计数。
+
+**拆法**：`frbox/dev_hwcnt.py` 的 `FreeRunCounter`（每 tick/256 步 +1，
+支持任意 size 整块读 —— 普通 IO 区是整块传 off+size，不是逐字节）。
+⚠️ 只保证会走字；0x813 对应频率未标定，延时比例不代表真实时长。
+
+### 3. 开机装配全程
+
+一次 INT 0x3F 派发（200k 步）：**覆盖 +1349**、结束 PC `0x4068A`；
+再跑 80 万步覆盖饱和（调用 6,774 次）。动作序列：`set_tim(-83)` →
+sem 握手 ×3 对（对象 1/16/20/21，wai/sig 成对）→ **11 次 `sys_sta_tsk`**
+（拉起 26/5/17/4/9/27/28/1/21/7/16）→ `sys_chg_pri(0,7)` →
+主事件循环稳态（3,373 对 clr_flg/wai_flg，全部等 flag 3，
+样例 r6=0x200000、r7=2）。
+
+### 4. 任务表真实基址 0x54C00（#92 破案）
+
+装配跑完 dump TCB 数组：每个 `TCB+0x24` 背指 `0x54C00+k*0x1C`。
+V22 的 `0x54C10` 偏了 0x10，旧「错位一格」由 0x10 位移读串相邻表项完全解释。
+新布局：+0x00 TCB 指针（=0x6800013C+k*0x2C，与内核对齐）/ +0x04 任务号对
+（高 16 位任务号；低 16 位疑似优先级组，未证）/ +0x0C 激活标志
+（位 30 常见；位 31 只有任务 2 和空闲）/ +0x10 入口 / +0x14 栈顶。
+空闲任务 = 表后第 29 条 `@0x54F10`（入口 0x407DC、TCB 0x6800060C）——
+派发序列读的 `[0x54F10]` 就是这条表项的 +0x00。
+
+### 5. A 段 61 位干净机单点全定性
+
+`exp_pendbits2.py`：一位一台新机器（基线 1,443 同口径）。
+**18 位 A 类**（目标函数真执行，+299~+369，前三 `[0x3F402]&0x40` +369、
+`[0x3F403]&0x20` +341、`[0x3F403]&0x01`/`&0x04` +333）、**48 位 C 类**
+（call 点都没执行，+299 只算分派器骨架）、**0 位 B 类**。
+C 类不是死位 —— 是需要前置状态的位（与 V22「位间耦合」互证）。
+
+### 6. 全开 28 任务：4 个上过场
+
+墙拆后重跑全开（28 任务 sta_tsk + 8 轮派发）：任务 2 跑完装配进 `wai_flg`
+阻塞让位 → **任务 2/3/4/5 四个入口都执行过**（V22 只有任务 2），
+总覆盖 1,241 → 3,151（**+1910**，V22 同口径 +264），结束 PC `0x40CEE`。
+任务 5（入口 `0x12DFAE`）= 老线认定的显示任务。
+
+### 7. 新增
+
+- `frbox/dev_hwcnt.py`（FreeRunCounter）；`machine.py` 新增 `extra_rom` /
+  `hw_counter_base`（`_map_extra_rom()` 在 `_build()` 和 `load()` 后都挂）
+- `brealos.py`：表基址改 `0x54C00`、`IDLE_ENTRY=0x54F10`、字段重排、
+  `records()` 支持空闲第 29 条
+- 探针 `exp_bwall.py`（A–F 六段）、`exp_pendbits2.py`；
+  `exp_bboot.py` 按新表基址刷新
+- 自检新增 `test_bwall` 22 条 + `test_pendbits` 3 条 V23 单点断言；
+  **570/570** + 63/63；版本 **0.23.0**
+
+### 8. 边界与口径
+
+可报：两道墙的完整定性拆除；任务 2 跑完开机装配（11 次 sta_tsk）；
+表基址 0x54C00；A 段 61 位全定性；全开 4 任务上过场。
+不可报：flag 3 位 0x200000 的置位者；`wai_flg mode=2` 立即返回 E_OK 的
+语义（r13=0x305 来源未证）；+0x04 低半字含义；擦除态 flash 的真实数据；
+「相机跑起来了」。
+
+⚠️ 覆盖有两个口径：+1349（派发起算）/ +1391（boot 起算，含 sta_tsk
+内核路径 +42）—— 报数写明口径。A 段 61 位表是干净机单点口径，
+与顺序扫描表不可混比。
+
+### 复现
+
+```bash
+cd emu
+python probe/exp_bwall.py > ../results/frbox/bwall.txt
+python probe/exp_pendbits2.py > ../results/frbox/pendbits2.txt
+python probe/exp_bboot.py > ../results/frbox/bboot.txt
 ```
