@@ -16,7 +16,10 @@
     SP=0x68000BE8、S=1 —— B 段 REALOS 内核活了。
 
 A 基线自洽 / B 任务表解码 / C 向量扫描 / D 串口喂字节 / E 周期候选 / F 长跑
-G sys_sta_tsk+派发（任务 2 上 CPU）/ H 全开 27 任务
+G sys_sta_tsk+派发（任务 2 上 CPU）/ H 全开 28 任务
+
+V23 更新：任务表基址修正为 0x54C00（见 B 段）；G/H 的数字随两道墙
+拆除而换口径 —— 任务 2 不再卡 0x14E86x，改跑完开机装配（见 exp_bwall.py）。
 """
 import os
 import sys
@@ -90,18 +93,21 @@ def sec_a():
 
 
 def sec_b():
-    head("B 任务表 @0x54C10（28 条 × 0x1C）解码")
+    head("B 任务表 @0x54C00（28 条 × 0x1C + 空闲第 29 条；V23 修正基址）")
     m = create("d300-b")
     m.load()
     data = open(m.fw_path, "rb").read()
-    off = 0x54C10 - m.rom_base
-    print("字段：+0x00 入口  +0x04 栈顶(0x9F8xxxxx)  +0x0C TCB(0x68000xxx)")
-    print("      +0x10 (优先级<<16|编号?)  +0x18 激活标志")
-    for i in range(28):
+    off = 0x54C00 - m.rom_base
+    print("字段：+0x00 TCB(0x68000xxx)  +0x04 任务号对  +0x0C 激活标志")
+    print("      +0x10 入口  +0x14 栈顶(0x9F8xxxxx)")
+    print("（V22 用的基址 0x54C10 偏了 0x10 —— 旧 +0x0C 域读到的是下一项的 TCB，")
+    print("  也就是「错位一格」的来源；表头 0x54BFC 的 0x001C001C 是步长标记）")
+    for i in range(29):
         e = data[off + i * 0x1C: off + (i + 1) * 0x1C]
         w = struct.unpack(">7I", e)
-        print("  %2d: 入口 0x%08X  栈 0x%08X  TCB 0x%08X  域4 0x%08X  激活 0x%08X"
-              % (i + 1, w[0], w[1], w[3], w[4], w[6]))
+        tag = "空闲" if i == 28 else "%2d" % (i + 1)
+        print("  %s: TCB 0x%08X  号 0x%08X  激活 0x%08X  入口 0x%08X  栈 0x%08X"
+              % (tag, w[0], w[1], w[3], w[4], w[5]))
 
 
 def sec_c():
@@ -215,22 +221,23 @@ def sec_g():
     print("一次 INT 0x3F 派发：覆盖 +%d，结束 PC=0x%08X（当前 TCB=0x%08X）"
           % (dc, pc, m.bus.rd(brealos.CUR_TCB_SLOT, 4)))
     print("任务 2 入口 0x1200AC 执行过：%s" % m.cov.visited(0x1200AC))
-    print("跑起来之后卡在 0x14E86x —— 扫描 SDRAM 半字表比对 0xFFFF/0xAA55 的循环")
-    print("（B 段新墙，定性见报告；0x14E846 ldi:32 r10,#0x9F58F348）")
+    print("V22 时这里卡在 0x14E86x 的 SDRAM 半字表扫描；V23 起两道墙拆除")
+    print("（0x740000 擦除态 flash + 0x5C003034 硬件计数器），任务 2 跑完")
+    print("开机装配（11 次 sta_tsk + set_tim + 信号量握手）—— 见 exp_bwall.py）")
 
 
 def sec_h():
-    head("H 全开：27 个任务 sys_sta_tsk + 8 轮派发")
+    head("H 全开：28 个任务 sys_sta_tsk + 8 轮派发")
     m = brealos.boot()
     base = m.cov.words()
     errs = []
     for r in brealos.records(m):
-        if r["idx"] == 28:
+        if r["idx"] == 29:      # include_idle=False 时不会出现，保险
             continue
         e = brealos.sta_tsk(m, r["idx"])
         errs.append((r["idx"], e["err"]))
     bad = [(i, e) for i, e in errs if e != 0]
-    print("sta_tsk(1..27) 返回码：%d 个非零：%s"
+    print("sta_tsk(1..28) 返回码：%d 个非零：%s"
           % (len(bad), bad if bad else "无"))
     for rnd in range(8):
         dc, pc = brealos.request_dispatch(m, max_steps=60000)
