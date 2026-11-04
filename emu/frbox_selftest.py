@@ -1693,16 +1693,23 @@ def test_bboot():
     check("B 当前 TCB=空闲任务 0x6800060C",
           b.bus.rd(brealos.CUR_TCB_SLOT, 4), 0x6800060C)
 
-    # 任务表：28 条，字段实测
+    # 任务表：28 条，V23 修正基址 0x54C00（V22 的 0x54C10 偏了 0x10）
     recs = brealos.records(b)
-    check("B 任务表 28 条", len(recs), 28)
+    check("B 任务表 28 条（+空闲第 29 条）", len(recs), 28)
     r2 = [r for r in recs if r["idx"] == 2][0]
     check("任务 2 入口 0x1200AC", r2["entry"], 0x1200AC)
     check("任务 2 栈顶 0x9F800AA4", r2["stack"], 0x9F800AA4)
-    check("任务 2 的 +0x0C 域 = 0x68000194（表域与内核 TCB 错位一格，对应关系未定）",
-          r2["tcb"], 0x68000194)
-    r28 = [r for r in recs if r["idx"] == 28][0]
-    check("任务 28（空闲）TCB 0x6800060C", r28["tcb"], 0x6800060C)
+    check("任务 2 的 TCB=0x68000168（V23 修正基址后表域与内核 TCB 一致）",
+          r2["tcb"], 0x68000168)
+    check("任务 2 激活标志 0xC0000000（位 31：复位就激活）",
+          r2["flags"], 0xC0000000)
+    r1 = [r for r in recs if r["idx"] == 1][0]
+    check("任务 1 的 TCB=0x6800013C（TCB[0]，背指表项基址 0x54C00）",
+          r1["tcb"], 0x6800013C)
+    idle = [r for r in brealos.records(b, include_idle=True) if r["idx"] == 29][0]
+    check("空闲任务=表后第 29 条：入口 0x407DC", idle["entry"], 0x000407DC)
+    check("空闲任务 TCB 0x6800060C（派发读的 [0x54F10]）", idle["tcb"], 0x6800060C)
+    check("空闲任务标志 0x80000000（位 31）", idle["flags"], 0x80000000)
 
     # 任务 2 的初始帧在 boot 时已建好（栈区 RAM 建好后才存得住）
     check("任务 2 帧 [0x9F800AA4]=入口 0x1200AC",
@@ -1722,12 +1729,75 @@ def test_bboot():
     r = brealos.sta_tsk(b, 2)
     check("sys_sta_tsk(2) err=-63（帧已在 boot 建好）", r["err"], -63)
     dc, pc = brealos.request_dispatch(b)
-    check("一次派发覆盖 +217（确定性）", dc, 217)
+    check("一次派发覆盖 +1349（V23：两道墙拆掉后跑完开机装配）", dc, 1349)
     check("任务 2 入口 0x1200AC 执行过", b.cov.visited(0x1200AC), True)
     check("当前 TCB 切到任务 2 (0x68000168)",
           b.bus.rd(brealos.CUR_TCB_SLOT, 4), 0x68000168)
-    check("任务 2 跑进 0x14E8xx（SDRAM 扫描循环）",
-          0x14E800 <= pc <= 0x14E8FF, True)
+    sta = [r4 for _, _, svc, r4, *_ in b.flow.calls if svc == -23]
+    check("任务 2 发起 11 次 sys_sta_tsk（开机装配拉起任务家族）", len(sta), 11)
+    return b
+
+
+def test_bwall(b=None):
+    """V23：B 段两道墙拆掉 —— 任务 2 跑完开机装配、进主事件循环。"""
+    print("\n[29 B 段墙拆除 + 开机装配（V23）]")
+    from frbox import brealos
+    from collections import Counter
+
+    # 墙 1 的定性：0x740000 起按擦除态 flash 建模（ROM 区、读回 0xFFFF）
+    m0 = brealos.boot()
+    r = m0.bus.find(0x740000)
+    check("0x740000 起挂了擦除态 flash（ROM 区）", r.kind, "rom")
+    check("擦除态读回 0xFFFF（扫描的终止符）", m0.bus.rd(0x740000, 2), 0xFFFF)
+    check("ROM 镜像 [0x73FFFE] 之后就是 flash-erased",
+          m0.bus.find(0x740002).name, "flash-erased")
+    check("扫描起点指针表 [0x1C2A98]=0x740000", m0.bus.rd(0x1C2A98, 4), 0x740000)
+    check("第二遍扫描起点 [0x1C2A9C]=0x750000", m0.bus.rd(0x1C2A9C, 4), 0x750000)
+
+    # 墙 2 的定性：0x5C003034 硬件自由运行计数器
+    check("0x5C003000 硬件计数器已挂", m0.hw_counter is not None, True)
+    m0.hw_counter.count = 0x12345678
+    check("计数器 +0x34 大端 4 字节读回自身",
+          m0.bus.rd(0x5C003034, 4), 0x12345678)
+    m0.hw_counter.count = 0x000000AB
+    check("计数器 +0x37 读回最低字节", m0.bus.rd(0x5C003037, 1), 0xAB)
+
+    # 开机装配全程：复用 test_bboot 的机器（boot → sta_tsk → 200k 派发）
+    if b is None:
+        b = brealos.boot()
+        brealos.sta_tsk(b, 2)
+        brealos.request_dispatch(b)
+    cov0 = b.cov.words() - 1349          # 派发前的覆盖（1241）
+    b.run(max_steps=800000, spin_guard=False)
+    calls = b.flow.calls
+    dist = dict(sorted(Counter(svc for _, _, svc, *_ in calls).items()))
+    check("长跑后总调用 6774（确定性）", len(calls), 6774)
+    check("覆盖停在 +1349（装配完不再涨：主循环是已覆盖代码）",
+          b.cov.words() - cov0, 1349)
+    check("服务分布与 V23 口径一致", dist,
+          {-83: 1, -55: 6, -53: 6, -48: 3, -47: 3373, -46: 3373,
+           -27: 1, -23: 11})
+    sta = [r4 for _, _, svc, r4, *_ in calls if svc == -23]
+    check("sta_tsk 拉起的 11 个任务号", sta,
+          [26, 5, 17, 4, 9, 27, 28, 1, 21, 7, 16])
+    check("sys_set_tim 恰 1 次（装配里设系统时钟）",
+          sum(1 for _, _, s, *_ in calls if s == -83), 1)
+    check("sys_chg_pri 恰 1 次", sum(1 for _, _, s, *_ in calls if s == -27), 1)
+    sems = [r4 for _, _, s, r4, *_ in calls if s in (-53, -55)]
+    check("信号量握手对象：16/20/1/21 各 wai+sig 一对",
+          sorted(set(sems)), [1, 16, 20, 21])
+    # 终点：主事件循环在 flag 3 上轮询（clr_flg+wai_flg 各 3373 次）
+    wai = [c for c in calls if c[2] == -46]
+    check("wai_flg 全部等 flag 3", sorted(set(c[4] for c in wai)), [3])
+    check("主循环 wai_flg 样例（p_flgptn=0x9F800AD8）", wai[-1][3], 0x9F800AD8)
+    check("主循环调用点 0x1203BE 执行过", b.cov.visited(0x1203BE), True)
+    check("装配函数 0x1200AC 执行过", b.cov.visited(0x1200AC), True)
+    check("任务 2 之外没有任务上过 CPU（都在等事件）",
+          [t["idx"] for t in brealos.states(b) if t["ran"]], [2])
+    # 计时器真的被读过（等待循环依赖它走字）
+    check("0x5C003034 读过（等走字循环）",
+          b.bus.io_reads.get(0x5C003034, 0) > 0, True)
+    check("hw_counter 在走字（>0）", b.hw_counter.count > 0, True)
 
 
 def test_pendbits():
@@ -1770,6 +1840,28 @@ def test_pendbits():
     check("单点 [0x3F404]&0x80：目标 0xAF64C 未执行",
           m.cov.visited(0xAF64C), False)
 
+    # V23：61 位干净机单点全定性（exp_pendbits2）——18 位 A 类 / 48 位 C 类。
+    # 这里固化 3 个代表性数字（每条一位一台新机器）。
+    m, h = fresh()
+    b = m.cov.words()
+    m.bus.wr(0x3F403, 1, 0x20, m.cpu.pc)
+    h.raise_once()
+    m.run(max_steps=2000, spin_guard=False)
+    check("单点 [0x3F403]&0x20：覆盖 +341（A 类，目标 0x875C2 执行）",
+          m.cov.words() - b, 341)
+    check("单点 [0x3F403]&0x20：目标 0x875C2 执行过",
+          m.cov.visited(0x875C2), True)
+
+    m, h = fresh()
+    b = m.cov.words()
+    m.bus.wr(0x3F40C, 1, 0x20, m.cpu.pc)
+    h.raise_once()
+    m.run(max_steps=2000, spin_guard=False)
+    check("单点 [0x3F40C]&0x20：覆盖 +299（C 类，只走分派器骨架）",
+          m.cov.words() - b, 299)
+    check("单点 [0x3F40C]&0x20：目标 0x84900 干净机未执行（需前置状态）",
+          m.cov.visited(0x84900), False)
+
 
 def main():
     print("frbox 自检")
@@ -1799,7 +1891,8 @@ def main():
     test_callbacks()
     test_isr2b()
     test_autoirq()
-    test_bboot()
+    b = test_bboot()
+    test_bwall(b)
     test_pendbits()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
