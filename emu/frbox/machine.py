@@ -87,6 +87,13 @@ class Machine:
     clk_lock_ticks = 8                   # 时钟寄存器 0x482 位7 就绪所需 tick 数
     # 额外区域：[(基址, 长度, 名字)]，给「固件实际访问到、但我们一开始没建模」的窗口留口子
     extra_ram = []
+    # 额外 ROM：[(基址, 长度, 名字)]，全 0xFF（擦除态）填充 —— 给「镜像没提取到、
+    # 但固件会去扫」的窗口留口子（V23：0x740000 起的标定/参数区）。load() 会
+    # 清掉所有 ROM 区再装主镜像，所以这里挂的每条都要在 load() 之后重挂。
+    extra_rom = []
+    # 硬件自由运行计数器基址（0 = 不建）。V23：B 段 0x5C003000 窗口,
+    # +0x34 计数器,任务 2 的「等走字」循环靠它出坑。
+    hw_counter_base = 0
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
@@ -162,10 +169,22 @@ class Machine:
         self.reset()
 
     # ------------------------------------------------------------------ 构建
+    def _map_extra_rom(self):
+        for base, size, name in self.extra_rom:
+            self.bus.map_rom(base, b"\xFF" * size, name)
+
     def _build(self):
         self.bus.map_io(0x0000, 0x1000, self.dp, "direct-page")
         self.bus.map_ram(self.ram_base, self.ram_size, "ram")
         self.bus.load_rom(self.rom_base, b"\xFF" * self.rom_size)
+        self._map_extra_rom()
+        self.hw_counter = None
+        if self.hw_counter_base:
+            from .dev_hwcnt import FreeRunCounter
+            self.hw_counter = FreeRunCounter(self, base=self.hw_counter_base)
+            self.bus.map_io(self.hw_counter_base, 0x100, self.hw_counter,
+                            self.hw_counter.name)
+            self.devices.append(self.hw_counter)
         for base, size, name in self.extra_ram:
             self.bus.map_ram(base, size, name)
         self.dp.attach(0x10, 0x18, self.timer)
@@ -231,6 +250,7 @@ class Machine:
         if not self.fw_crc_ok:
             self.trace.log("guest", f"CRC16 不符：文件 0x{crc:04X} / 计算 0x{calc:04X}")
         self.bus.load_rom(self.rom_base, data)
+        self._map_extra_rom()          # load_rom 会清掉全部 ROM 区,extra_rom 重挂
         if len(data) != self.rom_size + 2 and len(data) != self.rom_size:
             self.trace.log("guest", f"镜像大小 {len(data)} 与机器配置 {self.rom_size + 2} 不符")
         self.reset()
@@ -894,6 +914,17 @@ class D300B(Machine):
                  # 落不了地、派发读回 0 就跳 0。按 256KB 建，覆盖最高栈顶
                  # 0x9F8222A4 之下的全部区域（栈向下生长，不会越出上界）。
                  (0x9F800000, 0x00040000, "ram-taskstack")]
+    # ROM 之外的擦除态 flash（V23 实测定性）：任务 2 的开机装配会扫
+    # 0x740000（指针表 0x1C2A98[0]）和 0x750000（[1]）两块半字表 ——
+    # 0xAA55=记录头、0xFFFF=终止符。我们的 7MB 镜像正好到 0x740000 截止
+    # （尾部 FFFF 填充 + CRC），这两块是镜像没提取到的标定/参数区。按
+    # 擦除态（全 0xFF）建模：扫描立刻命中终止符干净退出 —— 「无记录」
+    # 也是合法的机器状态。
+    extra_rom = [(0x740000, 0x00100000, "flash-erased")]
+    # 0x5C003000 硬件定时器（V23）：+0x30 周期 0x813、+0x38 控制域
+    # （0x120C8E 初始化写入）、+0x34 自由运行计数器（0x125A0A 的
+    # 「读两次等走字」循环在等它）。
+    hw_counter_base = 0x5C003000
     # 0x68000xxx 窗口（V22 实测定性）：boot 期间固件往 0x68000000–0x6800B984
     # 写了 3746 次；REALOS 把 TCB 链表和任务用户栈都放在这里 ——
     #   * TCB@0x6800060C：+0x00 自指链、+0x10 优先级、+0x18 保存的用户栈指针
