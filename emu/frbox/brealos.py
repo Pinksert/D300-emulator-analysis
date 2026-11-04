@@ -30,18 +30,28 @@ TRAP_VEC = 0x40             # int #0x40 陷阱（→ 0x40668）
 DISPATCH_VEC = 0x3F         # 调度请求中断（→ 0x40D32 内联派发）
 IDLE_PC = 0x000407DC
 
-TASK_TABLE = 0x00054C10     # 任务表（28 条 × 0x1C）
-TASK_COUNT = 28
+TASK_TABLE = 0x00054C00     # 任务表真实基址（V23 修正：V22 用的 0x54C10 偏了 0x10）
+TASK_COUNT = 28             # 正常任务 28 条；空闲任务是表后第 29 条（IDLE_ENTRY）
+IDLE_ENTRY = 0x00054F10     # 空闲任务表项：+0x10 入口 0x407DC、+0x14 栈 0x68000B98
 TCB_BASE = 0x6800013C       # TCB 数组（步长 0x2C；0x6800013C 起实测自指）
 TCB_STRIDE = 0x2C
 CUR_TCB_SLOT = 0x68000000   # 当前任务 TCB 槽（派发序列写 [0x68000000]=r14）
 
-# 任务表字段（V22 实测，ROM @0x54C10）
-F_ENTRY = 0x00
-F_STACK = 0x04
-F_TCB = 0x0C
-F_PRIO = 0x10               # 高 16 位：优先级+1；低 16 位：任务号
-F_FLAGS = 0x18              # 激活标志（语义未证：位 31/30 的分工没做对照实验）
+# 任务表字段（V23 修正后的布局，表头 0x54BFC 的 0x001C001C = 步长标记）：
+#   entry[k] @ 0x54C00 + k*0x1C（k=0..27，任务号 = (+0x04>>16)）
+#     +0x00  TCB 指针（0x6800013C + k*0x2C）—— 与 TCB+0x24 背指表项基址互为双向链
+#     +0x04  任务号对（高 16 位 = 1 基任务号；低 16 位含义未定，不是纯序号）
+#     +0x0C  激活标志：位 30 常见，位 31 只有任务 2（0xC0000000）和空闲（0x80000000）
+#     +0x10  入口
+#     +0x14  栈顶
+#   派发序列读的 [0x54F10] 就是空闲任务表项的 +0x00（idle TCB）。
+# V22 的「表 +0x0C 域与 TCB 错位一格」其实是基址偏 0x10 读串了相邻表项：
+# 旧 +0x0C 落在新表下一项的 +0x00（下一任务的 TCB），所以旧读数恒差一条。
+F_TCB = 0x00
+F_IDS = 0x04
+F_FLAGS = 0x0C
+F_ENTRY = 0x10
+F_STACK = 0x14
 
 # μITRON 服务号（负数，32 位补码进 R12 —— V17 的口径）
 SVC_STA_TSK = -23
@@ -112,18 +122,21 @@ def boot(m=None, idle_extra=0):
     return m
 
 
-def records(m):
-    """读任务表 28 条：入口 / 栈顶 / TCB / 优先级 / 标志。"""
+def records(m, include_idle=False):
+    """读任务表：TCB / 任务号 / 标志 / 入口 / 栈顶。
+
+    include_idle=True 时把表后第 29 条（空闲任务 @0x54F10）也带上一并返回。
+    """
     out = []
-    raw = m.fetch_bytes(TASK_TABLE, TASK_COUNT * 0x1C)
-    for i in range(TASK_COUNT):
+    n = TASK_COUNT + (1 if include_idle else 0)
+    raw = m.fetch_bytes(TASK_TABLE, n * 0x1C)
+    for i in range(n):
         e = raw[i * 0x1C:(i + 1) * 0x1C]
-        f = [int.from_bytes(e[j:j + 4], "big") for j in (0, 4, 12, 16, 24)]
-        out.append({"id": f[3] & 0xFFFF or i + 1,
+        f = [int.from_bytes(e[j:j + 4], "big") for j in (0, 4, 12, 16, 20)]
+        out.append({"id": (f[1] >> 16) & 0xFFFF or i + 1,
                     "idx": i + 1,
-                    "entry": f[0], "stack": f[1], "tcb": f[2],
-                    "prio": (f[3] >> 16) & 0xFFFF,
-                    "flags": f[4],
+                    "tcb": f[0], "ids": f[1],
+                    "flags": f[2], "entry": f[3], "stack": f[4],
                     "addr": TASK_TABLE + i * 0x1C})
     return out
 
