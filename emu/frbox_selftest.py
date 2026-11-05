@@ -1946,6 +1946,60 @@ def test_bflag():
     check("wai_flg 等的是 flag 3 的 0x200000", (w[4], w[5], w[6]), (3, 0x200000, 2))
 
 
+def test_bgate():
+    """V25：主循环的门字节、它的写者、开门之后；内核 RAM 扩到 128KB。"""
+    print("\n[31 门字节与开门实验（V25）]")
+    from frbox import brealos, bflag, bgate
+
+    m = create("d300-b")
+    m.load()
+
+    # 1) 门字节的引用与写者
+    check("0x9F58D08F 的立即数引用 19 处", len(bgate.refs(m, bgate.GATE)), 19)
+    check("写点 0x12F180 是 stb", "stb" in m.disasm_at(bgate.GATE_WRITER, 1), True)
+    check("写者后面紧跟 set_flg(3,0x200000) 的 int",
+          "int" in m.disasm_at(bgate.SET_FLG_200000, 1), True)
+    check("主循环读点 0x120176 是 ldub", "ldub" in m.disasm_at(0x120176, 1), True)
+
+    # 2) 门字节的开关工具
+    check("boot 后门字节为 0", bgate.gate(m), 0)
+    bgate.open_gate(m)
+    check("open_gate() 后门字节为 1", bgate.gate(m), 1)
+    check("is_open() 为真", bgate.is_open(m), True)
+    bgate.close_gate(m)
+    check("close_gate() 后门字节为 0", bgate.gate(m), 0)
+
+    # 3) 内核 RAM 扩到 128KB（任务 4 的拷贝写到 0x6801DE84）
+    check("0x6801FFFF 已映射为 RAM", m.bus.find(0x6801FFFF).kind, "ram")
+    m.bus.wr(0x6801DE80, 4, 0x12345678)
+    check("0x6801DE80 写得进、读得回", m.bus.rd(0x6801DE80, 4), 0x12345678)
+
+    # 4) 开门实验：主循环走进干活分支
+    s = brealos.boot()
+    brealos.sta_tsk(s, 2)
+    s.raise_irq(0x3F)
+    s.run(max_steps=200000, spin_guard=False)
+    s.run(max_steps=800000, spin_guard=False)
+    c0 = s.cov.words()
+    bgate.open_gate(s)
+    s.run(max_steps=1000000, spin_guard=False)
+    check("开门后覆盖 +102（确定性）", s.cov.words() - c0, 102)
+    check("干活分支 0x120184 执行过", s.cov.visited(0x120184), True)
+    check("调进显示区 0x12E6F8", s.cov.visited(0x12E6F8), True)
+    check("仍未到 0x12E630（0x80 的置位点）", s.cov.visited(0x12E630), False)
+    check("门字节保持 1（没人清它）", bgate.gate(s), 1)
+    check("flag6 置上 0x20", bflag.pattern(s, 6), 0x20)
+    check("flag12 置上 0x800000", bflag.pattern(s, 12), 0x800000)
+
+    # 5) 显示任务用的服务 -170 未实现
+    t = brealos.service_handler(brealos.boot(), brealos.SVC_TWAI_FLG)
+    check("-170 的处理函数 0x41BEA", t, 0x00041BEA)
+    r = brealos.kernel_call(brealos.boot(), brealos.SVC_TWAI_FLG,
+                            r4=0x9F58D0F0, r5=3, r6=0x200000, r7=2, r13=0x64,
+                            max_steps=5000)
+    check("-170 返回 E_NOSPT(-17)", r["err"], -17)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1978,6 +2032,7 @@ def main():
     test_bwall(b)
     test_pendbits()
     test_bflag()
+    test_bgate()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
