@@ -2334,6 +2334,71 @@ def test_bsem():
     check("反向走一致", blist.back_walk(m3, HEADW), [0x9F58D100, 0x9F58D200])
 
 
+def test_blist():
+    """V34：链表四件套（init / is_empty / insert / unlink）与表头语义。"""
+    print("\n[39 链表四件套与表头语义（V34）]")
+    import os as _os
+    from frbox import bsem, blist, brealos
+
+    check("四件套地址",
+          (blist.LIST_INIT, blist.LIST_IS_EMPTY, blist.LIST_INSERT, blist.LIST_UNLINK),
+          (0x000124F46, 0x000124F4E, 0x000124F5A, 0x000124F7A))
+
+    H, NA, NB, NC = 0x9F58D000, 0x9F58D100, 0x9F58D200, 0x9F58D300
+
+    def build(nodes):
+        mm = create("d300-b")
+        mm.load()
+        mm.reset()
+        blist.init_model(mm, H)
+        for x in nodes:
+            blist.insert_model(mm, H, x)
+        return mm
+
+    m0 = build([])
+    check("空表 is_empty_rom 返回 1", blist.is_empty_rom(m0, H), 1)
+    m1 = build([NA, NB, NC])
+    snap = m1.fetch_bytes(H, 8)
+    check("非空 is_empty_rom 返回 0", blist.is_empty_rom(m1, H), 0)
+    check("is_empty_rom 不改内存", m1.fetch_bytes(H, 8), snap)
+    check("三节点链的走向（头插）", blist.walk(m1, H), [NC, NB, NA])
+
+    blist.unlink_model(m1, NB)
+    check("摘中间节点后 forward", blist.walk(m1, H), [NC, NA])
+    check("摘中间节点后 backward", blist.back_walk(m1, H), [NA, NC])
+
+    m2 = build([NA, NB])
+    m2.bus.wr(H + 8 + 9, 1, 0x80)          # 槽位 0 的 +9
+    m2.bus.wr(H + 8 + 0x0C + 9, 1, 0xC0)   # 槽位 1 的 +9
+    blist.clear_model(m2, H)
+    check("clear_model 后是空表", blist.is_empty(m2, H), True)
+    check("clear_model 清掉槽位标志",
+          [m2.bus.rd(H + 8 + i * 0x0C + 9, 1) for i in (0, 1, 69)], [0, 0, 0])
+
+    # 表头语义：两张表互证
+    mb = brealos.boot()
+    check("信号量表首项 +0 = 0x00280010（40 | 16）", mb.bus.rd(bsem.SEM_TABLE, 4), 0x00280010)
+    check("标志表首项 +0 = 0x00110010（17 | 16）", mb.bus.rd(0x551B0, 4), 0x00110010)
+    check("sem 14 的上限在 slot 15 的低半字 = 7",
+          mb.bus.rd(bsem.table_addr(15), 4) & 0xFFFF, 7)
+    check("sem 27 / 29 的上限 = 255 / 255",
+          (mb.bus.rd(bsem.table_addr(28), 4) & 0xFFFF,
+           mb.bus.rd(bsem.table_addr(30), 4) & 0xFFFF), (255, 255))
+    counting = [i for i in range(1, 41)
+                if (mb.bus.rd(bsem.table_addr(i + 1) if i < 40 else bsem.TAIL_PAD, 4) & 0xFFFF) != 1]
+    check("非二值的只有 14 / 27 / 29", counting, [14, 27, 29])
+
+    # 调用点计数（扫立即数）
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    rom = open(_os.path.join(_root, "data", "B3000111.bin"), "rb").read()
+    check("0x124F46 的立即数引用 44 处",
+          rom.count((0x000124F46).to_bytes(4, "big")), 44)
+    check("0x124F5A 的立即数引用 88 处",
+          rom.count((0x000124F5A).to_bytes(4, "big")), 88)
+    check("0x124F7A 的立即数引用 43 处",
+          rom.count((0x000124F7A).to_bytes(4, "big")), 43)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2371,6 +2436,7 @@ def main():
     test_bqueue()
     test_bdispchain()
     test_bsem()
+    test_blist()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
