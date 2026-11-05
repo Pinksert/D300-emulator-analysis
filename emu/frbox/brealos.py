@@ -164,6 +164,41 @@ def sta_tsk(m, tid):
     return kernel_call(m, SVC_STA_TSK, r4=tid, r5=1)
 
 
+#: 直接调固件函数时用的临时栈顶（任务栈区 9F800000..9F83FFFF 的顶部）
+CALL_STACK = 0x9F83F000
+#: 裸 `bra -1` 兜底自旋：跑进这里说明函数没有正常返回
+STUCK_PC = 0x000404E0
+
+
+def call_fn(m, addr, r4=0, r5=0, r6=0, r7=0, max_steps=200000, ret=None):
+    """直接调用一个固件函数，跑到它 `ret` 回到哨兵为止。
+
+    ⚠️ **FR 的 `ret` 读返回地址寄存器 DR1（RP），不读栈**（V38 更正）：
+        c.dr[1] = RET              # ← 正确
+        m.bus.wr(sp - 4, 4, RET)   # ← 无效，栈上那个字根本没人看
+
+    用栈法也不是"跑不完"——函数体内若有 `call`，DR1 会被子调用的返回地址
+    覆盖，于是结尾的 `ret` 回到"子调用之后"，再往下撞进 `0x404E0` 的
+    兜底自旋。看上去跑了上万步，其实一次都没返回（KI#152）。
+
+    返回 {'steps', 'pc', 'ret'}；`ret` 为 False 表示没回到哨兵。
+    """
+    c = m.cpu
+    ret = SAFE_PC if ret is None else ret
+    c.dr[1] = ret
+    c.r[15] = CALL_STACK
+    c.r[4], c.r[5], c.r[6], c.r[7] = r4, r5, r6, r7
+    c.i = 0
+    c.pc = addr
+    n = 0
+    while n < max_steps and not c.halted and c.pc != ret:
+        if c.pc == STUCK_PC:
+            break
+        m.step(1)
+        n += 1
+    return {"steps": n, "pc": c.pc, "ret": c.pc == ret}
+
+
 def request_dispatch(m, max_steps=200000):
     """请求一次调度（INT 0x3F），跑到派发完成或步数用尽。
 
