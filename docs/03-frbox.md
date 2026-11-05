@@ -1,4 +1,4 @@
-# frbox 0.23.0 —— D300 的全系统模拟器
+# frbox 0.24.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 570 条断言
+python frbox_selftest.py                      # 601 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -65,16 +65,17 @@ emu/
 │   ├── dev_clk.py       时钟/复位寄存器组 0x480–0x48F
 │   ├── dev_serial.py    串口 0x60–0x67
 │   ├── dev_timer.py     重载定时器 0x10–0x17
-│   ├── dev_hwcnt.py     B 段自由运行计数器 0x5C003000（V23，未标定频率）
+│   ├── dev_hwcnt.py     B 段自由运行计数器 0x5C003000（V23，可标定速率）
+│   ├── bflag.py         B 段事件标志对象与 wai/set/clr 语义（V24）
 │   ├── icu.py           中断控制器：设备线 → 向量
 │   ├── machine.py       机器模型：内存映射 + 复位向量 + 运行循环 + 任务启动
 │   ├── monitor.py       HMP 式命令行
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    570 条断言
+├── frbox_selftest.py    601 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
-└── probe/               68 个取证脚本（见 probe/README.md）
+└── probe/               69 个取证脚本（见 probe/README.md）
 ```
 
 分层的唯一目的是让「CPU 会算」变成「机器能跑」：`Fr` 只要求宿主对象有 `rd/wr`，
@@ -595,7 +596,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 570 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 |
+| `frbox_selftest.py` | 601 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 / **服务分发表 + 事件标志 31（V24）** |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -1651,4 +1652,110 @@ cd emu
 python probe/exp_bwall.py > ../results/frbox/bwall.txt
 python probe/exp_pendbits2.py > ../results/frbox/pendbits2.txt
 python probe/exp_bboot.py > ../results/frbox/bboot.txt
+```
+
+---
+
+## V24：内核的门 —— 服务分发表、事件标志、主循环的真身
+
+### 0. 起点
+
+V23 留了两条未证：flag 3 位 0x200000 / 0x80 的置位者；`wai_flg` mode=2
+「立即返回 E_OK」的语义（r13=0x305 来源）。这一版两条都追到底，
+顺带发现主循环的「门」根本不在 `wai_flg` 上。
+
+### 1. 服务分发表：动态抓，不要静态读
+
+陷阱 `0x40668` 看起来是查表派发（`0x406A6` 装 `0x40660`、`0x406AC` 用它取
+16 位偏移、`0x406B2` `call r12`），但 `0x40660` 那段是代码（`ret:d`），
+静态按表读会读到「代码当偏移」。正确做法：在 `0x406B2` 抓 `call r12` 的目标。
+
+```
+set_tim(-83) 0x40EDE   sta_tsk(-23) 0x414C8   ter_tsk(-25) 0x415A0
+chg_pri(-27) 0x4167C   sig_sem(-55) 0x418C0   wai_sem(-53) 0x41902
+set_flg(-48) 0x41A48   clr_flg(-47) 0x41AE2   wai_flg(-46) 0x41B0A
+snd_msg(-63) 0x41CDE   rcv_msg(-61) 0x41D38
+slp_tsk(-41) 0x40660   ext_tsk(-45) 0x40664    ← 空桩 ret:d
+```
+
+`slp_tsk`/`ext_tsk` 是空桩：这个内核支持「等」，不支持「睡」和「自己退出」。
+
+### 2. flag 对象布局
+
+```
+对象 0x680008B8 + (N-1)*0x10   （17 个）
+  +0x00 自指 / +0x04 等待 TCB / +0x08 32 位位模式 / +0x0C 表项背指（表项 +4）
+对象表 0x551B0，每项 16 字节：+0x4 对象指针、+0x8 id<<16
+例：flag 3 → 表项 0x551D0（指针在 0x551D4）→ 对象 0x680008D8 → 位模式 0x680008E0
+```
+
+工具：`frbox/bflag.py`。
+
+### 3. wfmode 语义（与教科书相反）
+
+mode 只有低 2 位有效（>3 → E_PAR）：
+
+* **bit1 (2) = OR 等待**（任一位成立即可）；否则 AND 等待（全都要成立）
+* **bit0 (1) = 满足后清位**
+
+实测步数：满足 ≈100–104、不满足 ≈147–150（差值来自「登记等待 → 请求一次重调度 →
+复查」的兜底路径）。`r12` 恒 0 —— 只表示受理，不代表等到；V23 的 `r13=0x305`
+是调用方缓冲区内容，不是错误码。
+
+### 4. 主循环的真身
+
+```
+0x12016C  clr_flg(3, ~0x200000)      ← 先清自己要等的位（边沿触发写法）
+0x120178  cmp byte[0x9F58D08F], 0    ← 真正的门
+0x1203BE  wai_flg(3, 0x200000, 2)    ← 只是让出点，返回值没人用
+0x1203C8  jmp 0x120160               ← 无条件跳回
+```
+
+5 万步 188 圈，调用点只有 `0x12016C` / `0x1203BE` 两处。
+
+**门字节 `0x9F58D08F` 从来没人写**：boot 后 0，装配 + 100 万步主循环 0 次写入，
+再逐条注入 42 条 ISR 仍 0 次。所以「等外部事件」准确说是「缺一个会写这个字节的
+硬件」—— 不是缺中断。
+
+### 5. 谁产生 flag 3 的位
+
+静态扫 2300 个 `int #0x40`（set_flg 863 / clr_flg 473 / wai_flg 157），
+flag 3 相关 65 处：
+
+* 位 0x80 ← `0x12E630`（显示绘制路径，0x12E138 / 0x12E154 调 0x12E636）
+* 位 0x200000 ← `0x12F1A8`（0x12F0xx 组，同段还 set_flg(1,0x10000)、call 0x1263E0）
+
+动态反证：42 条 ISR 里只有 `vec 0x1B`（+0x20）和 `vec 0x2D`（+0x40）能改 flag 3，
+**没有一条能置 0x200000**。注入 0x200000 只多跑 4 个地址（0x41B72–0x41B78，
+满足分支），主循环照旧 —— 位到了也没人接。
+
+### 6. 计数器速率：一个 tick 就够
+
+`FreeRunCounter.rate` / `Machine.hw_counter_rate` 可标定。rate=1 与 rate=16 的
+总步数**完全相同** —— 等走字循环的容差是从内存读的字节（0/1 量级），
+计数器动一次就出坑。**`0x813` 不是这条路的延时参数**（V23 那句「延时比例」
+的说法在此修正）。
+
+### 7. 新增
+
+- `frbox/bflag.py`（事件标志对象 + 语义工具，WF_ANDW=0 / WF_ORW=2 / WF_CLR=1）
+- `brealos.SERVICES` / `service_handler()`（动态解分发表）
+- `dev_hwcnt` 速率参数；`machine.hw_counter_rate` 在 `load()` 时同步
+- 探针 `exp_bflag.py`（A–H 八段）→ `results/frbox/bflag.txt`
+- 自检 `test_bflag` 31 条；**601/601** + 63/63；版本 **0.24.0**
+
+### 8. 边界与口径
+
+可报：13 条服务映射、两个空桩、flag 对象布局、wfmode 语义、主循环结构、
+门字节从未被写、两个位的静态置位点、速率不影响路径。
+不可报：门字节何时被写（硬件未建模）、0x200000 对应的逻辑事件、
+0x813 的其他用途、显示任务何时到 0x12E630、「相机跑起来了」。
+
+⚠️ 所有 set/clr/wait 都是替固件调内核；wfmode 位序是 1.11 实测，换版本要重验。
+
+### 复现
+
+```bash
+cd emu
+python probe/exp_bflag.py > ../results/frbox/bflag.txt
 ```
