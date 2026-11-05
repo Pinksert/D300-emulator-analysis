@@ -97,6 +97,11 @@ class Machine:
     # 计数器每个 tick 走几个字（V24：可标定速率）。rate=1 是 V23 的默认口径；
     # 改它只改「等多久」（延时长度），不改程序路径（实测见 dev_hwcnt.py）。
     hw_counter_rate = 1
+    # B↔EXPEED 位串行从机（V28）：0 = 不建。建了之后 0x7000000A 的读
+    # 会返回器件驱动的 DATA 位，而不是「未映射读回 0」。
+    expeed_base = 0
+    expeed_regs = None        # {寄存器号: bytes}，None = 全 0
+    expeed_read_len = 5       # 主机读一次打的字节数（实测 40 个时钟）
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
@@ -189,6 +194,15 @@ class Machine:
             self.bus.map_io(self.hw_counter_base, 0x100, self.hw_counter,
                             self.hw_counter.name)
             self.devices.append(self.hw_counter)
+        self.expeed = None
+        if self.expeed_base:
+            from .dev_expeed import ExpeedLink
+            self.expeed = ExpeedLink(self, base=self.expeed_base,
+                                     regs=self.expeed_regs,
+                                     read_len=self.expeed_read_len)
+            self.bus.map_io(self.expeed_base, 0x100, self.expeed,
+                            self.expeed.name)
+            self.devices.append(self.expeed)
         for base, size, name in self.extra_ram:
             self.bus.map_ram(base, size, name)
         self.dp.attach(0x10, 0x18, self.timer)
@@ -935,6 +949,10 @@ class D300B(Machine):
     # （0x120C8E 初始化写入）、+0x34 自由运行计数器（0x125A0A 的
     # 「读两次等走字」循环在等它）。
     hw_counter_base = 0x5C003000
+    # B↔EXPEED 位串行（V28 建模）：0x70000002 = CS(bit2)、0x7000000A = CLK(bit1)
+    # /DATA(bit2)。整场固件只碰这两个偏移（实测写入 8 + 242 次）。
+    # 之前未映射 → 读回恒 0 → 主机采样到的数据位永远是 0。
+    expeed_base = 0x70000000
     # 0x68000xxx 窗口（V22 实测定性）：boot 期间固件往 0x68000000–0x6800B984
     # 写了 3746 次；REALOS 把 TCB 链表和任务用户栈都放在这里 ——
     #   * TCB@0x6800060C：+0x00 自指链、+0x10 优先级、+0x18 保存的用户栈指针
