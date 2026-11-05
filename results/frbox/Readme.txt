@@ -145,3 +145,4 @@ pendbits.txt           cd emu && python probe/exp_pendbits.py       （V22 A 段
 bwall.txt              cd emu && python probe/exp_bwall.py          （V23 B 段：两道墙的定性拆除 —— 0x1C2A98 指针表/擦除态 flash、0x5C003000 计数器；开机装配全程 11 次 sta_tsk；终点 flag 3 主事件循环）
 pendbits2.txt          cd emu && python probe/exp_pendbits2.py      （V23 A 段：61 位干净机单点全定性 —— 18 位 A 类 / 48 位 C 类 / 0 位 B 类，一位一台新机器）
 bflag.txt              cd emu && python probe/exp_bflag.py          （V24 B 段：13 条服务分发表、flag 对象布局、wfmode 语义（bit1=OR/bit0=清位）、主循环等待位 0x80、42 条 ISR 无一位能置 0x200000、计数器速率标定）
+bgate.txt              cd emu && python probe/exp_bgate.py          （V25 B 段：门字节 0x9F58D08F 的 19 处引用与唯一写点 0x12F180、开门实验 +102 地址、内核 RAM 上界 0x6801DE84、任务停点表、服务 -170 未实现）
