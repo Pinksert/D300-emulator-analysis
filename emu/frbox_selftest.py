@@ -2233,6 +2233,31 @@ def test_bqueue():
     check("挂链写进 head 的是节点地址 0x9F58D58C", logs[:1], [0x9F58D58C])
 
 
+def test_bdispchain():
+    """V32：显示队列完整链路（70 槽位 / sem 17 / set_flg(3,0x80)）。"""
+    print("\n[37 显示队列链路（V32）]")
+
+    m = create("d300-b")
+    m.load()
+
+    def line(addr):
+        out = m.disasm_at(addr, 1).splitlines()
+        return out[0] if out else ""
+
+    def has(addr, *frags):
+        t = line(addr)
+        return all(f in t for f in frags)
+
+    check("0x12E620 装 0x46（70 个槽位）", has(0x12E620, "ldi:8", "i8=0x46"), True)
+    check("0x12E626 步长 0x0C（blt 的延迟槽）", has(0x12E626, "add", "u4=0xc", "ri=0x5"), True)
+    check("0x12E62C 置位 0x80", has(0x12E62C, "ldi:8", "i8=0x80", "ri=0x5"), True)
+    check("0x12E630 是 set_flg(iset 陷阱)", has(0x12E630, "int", "u8=0x40"), True)
+    check("消费端 0x12E640 用信号量 17", has(0x12E640, "ldi:8", "i8=0x11", "ri=0x4"), True)
+    check("消费端 0x12E642 是 wai_sem(-53)", has(0x12E642, "ldi:8", "i8=0xcb", "ri=0xc"), True)
+    check("生产端 0x12E70C 也用信号量 17", has(0x12E70C, "ldi:8", "i8=0x11", "ri=0x4"), True)
+    check("生产端 0x12E712 是 wai_sem 陷阱", has(0x12E712, "int", "u8=0x40"), True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2268,6 +2293,7 @@ def main():
     test_bgate()
     test_bgate2()
     test_bqueue()
+    test_bdispchain()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
