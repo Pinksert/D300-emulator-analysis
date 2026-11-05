@@ -2116,6 +2116,15 @@ def test_bexpeed_dev():
     m_b2 = boot_with(b"\x00\xff" + b"\x00" * 4)
     check("第 2 字节不影响分支", m_b2.cpu.pc, 0x000406D6)
 
+    # V29：写 0x76 = [0x9F5A321E] + 1（初值 0 → 载荷 1），且整场只写一次
+    check("寄存器 0x76 只被写 1 次", len(d0.writes_to(0x76)), 1)
+    check("写 0x76 的载荷 = [1]", d0.writes_to(0x76)[0], [1])
+    check("寄存器 6 只被读 1 次", d0.reads_of(6), 1)
+    check("0x9F5A321E（0x76 的计数源）装配后 = 1",
+          m0.fetch_bytes(0x9F5A321E, 1), b"\x01")
+    check("bit7 置位时 0x9F5A321E 同样 = 1",
+          m_hi.fetch_bytes(0x9F5A321E, 1), b"\x01")
+
 
 def main():
     print("frbox 自检")
