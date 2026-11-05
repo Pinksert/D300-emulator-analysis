@@ -34,7 +34,8 @@ V25 实验（`probe/exp_bgate.py` C 段）：手工把门字节置 1，主循环
 import io
 
 GATE = 0x9F58D08F           # 主循环的门字节（0 = 空转，非 0 = 干活）
-STATUS = 0x9F58D450         # 干活分支读的状态字（半字）
+STATUS = 0x9F58D450         # 干活分支读的状态字（V30：字节 +0 的 bit6 是第二道门）
+STATUS_WORK_READY = 0x40     # 0x9F58D450 字节 +0 的 bit6（= 字 0x40000000）
 STATUS2 = 0x9F58D454        # 与 STATUS 一起参与分支的第二个字
 WORK_ENTRY = 0x00120184     # 干活分支入口（gate != 0 时 bne 跳到这里）
 IDLE_ENTRY = 0x00120302     # gate == 0 时跳到的等待点
@@ -99,3 +100,61 @@ def describe(m):
     return {"gate": gate(m), "open": is_open(m),
             "status": status(m), "status2": status2(m),
             "refs": len(refs(m, GATE))}
+
+
+# ---------------------------------------------------------------- V30 新增
+#: 引用分类：看某地址的每条引用后面紧跟什么指令
+TEST_MN = ("btst", "btsth", "btstl")          # 只测位，不写
+BITOP_MN = ("band", "bor", "bandh", "borh",
+            "bandl", "borl", "bandb", "borb")  # 读-改-写（内存位操作）
+STORE_MN = ("st", "stb", "sth", "stm", "stm0", "stm1")
+
+
+def access(m, addr, limit=64):
+    """把某个地址的引用分成 test / bitop / store / other 四类。
+
+    ⚠️ 判据是**紧随其后的那条指令**（固件都是「装地址 → 立刻用」）。
+    `borl`/`bandh` 这类看着像寄存器运算的，其实是**内存位操作**——
+    地址就在刚装好的那个寄存器里（V15 那条「位指令的立即数是掩码」的延伸）。
+    """
+    out = []
+    for pc in refs(m, addr, limit=limit):
+        lines = m.disasm_at(pc, 2).splitlines()
+        if len(lines) < 2:
+            out.append((pc, "other", ""))
+            continue
+        # 反汇编行格式：`0x0012018A: 8940  btsth op1=...`
+        # 去掉 "0x……: " 之后，第一个 token 是机器码，第二个才是助记符。
+        follow = lines[1].split(": ", 1)[-1].strip()
+        toks = follow.split()
+        mn = toks[1] if len(toks) > 1 else (toks[0] if toks else "?")
+        if mn in TEST_MN:
+            kind = "test"
+        elif mn in BITOP_MN:
+            kind = "bitop"
+        elif mn in STORE_MN:
+            kind = "store"
+        else:
+            kind = "other"
+        out.append((pc, kind, follow))
+    return out
+
+
+def status_a(m):
+    """0x9F58D450 当前值（字）。"""
+    return m.bus.rd(STATUS, 4)
+
+
+def set_status_a(m, val):
+    """直接改 0x9F58D450。val 是**字**；只想动字节 0 就传 0x40 这种。
+
+    V30 实测：字节 +0 的 bit6（字 0x40000000）是第二道门 —— 置上它之后
+    主循环才会走到 0x12018E 清 0x9F58D454 的 bit11 并 call 0x12E6F8。
+    """
+    m.bus.wr(STATUS, 4, val & 0xFFFFFFFF)
+    return val & 0xFFFFFFFF
+
+
+def work_ready(m):
+    """第二道门是否已开（字节 +0 的 bit6）。"""
+    return bool(m.bus.rd(STATUS, 1) & STATUS_WORK_READY)
