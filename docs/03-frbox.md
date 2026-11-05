@@ -1,4 +1,4 @@
-# frbox 0.25.0 —— D300 的全系统模拟器
+# frbox 0.26.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 620 条断言
+python frbox_selftest.py                      # 631 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -68,15 +68,16 @@ emu/
 │   ├── dev_hwcnt.py     B 段自由运行计数器 0x5C003000（V23，可标定速率）
 │   ├── bflag.py         B 段事件标志对象与 wai/set/clr 语义（V24）
 │   ├── bgate.py         B 段主循环的门字节 0x9F58D08F（V25）
+│   ├── bdisp.py         显示描述符表 / 文案池 / 结构重建图（V26）
 │   ├── icu.py           中断控制器：设备线 → 向量
 │   ├── machine.py       机器模型：内存映射 + 复位向量 + 运行循环 + 任务启动
 │   ├── monitor.py       HMP 式命令行
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    620 条断言
+├── frbox_selftest.py    631 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
-└── probe/               70 个取证脚本（见 probe/README.md）
+└── probe/               71 个取证脚本（见 probe/README.md）
 ```
 
 分层的唯一目的是让「CPU 会算」变成「机器能跑」：`Fr` 只要求宿主对象有 `rd/wr`，
@@ -597,7 +598,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 620 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 / **服务分发表 + 事件标志 31（V24）** / **门字节 + 开门实验 19（V25）** |
+| `frbox_selftest.py` | 620 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 / **服务分发表 + 事件标志 31（V24）** / **门字节 + 开门实验 19（V25）** / **显示链路 + 重建图 11（V26）** |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -1850,4 +1851,68 @@ V22 起 `ram-kernel` 只建了 64KB（到 `0x6800FFFF`）—— 这一整段写�
 ```bash
 cd emu
 python probe/exp_bgate.py > ../results/frbox/bgate.txt
+```
+
+---
+
+## V26：显示链路 —— 为什么出不了画面
+
+### 0. 问题
+
+「能不能出画面？」这一版正面回答：**不能**，并把原因量化。
+
+### 1. 三条证据
+
+**① 绘制函数不写像素。** 固件用 `0x1BC020` 的 70 条描述符维护「屏幕现状」
+（文本缓冲 / 长度 / 样式 / 绘制函数）。44 个绘制函数里 5 个是裸 `ret`，
+其余只做「读/写界面状态字节 + `set_flg(3,0x400)`」——没有一条碰像素缓冲。
+
+**② 没有帧缓冲。** 整场运行盯 SDRAM 的每次写：21,323 个半字地址被写，
+最长连续段 1,063 个半字 = **2,126 字节**；而 640×480 单色一帧要 38,400 字节连续。
+
+**③ EXPEED 总线几乎是静的。** B↔EXPEED 是位串行（`0x70000002` CS、
+`0x7000000A` CLK/DATA）。整场运行：`0x7000000A` 写 238 次 / 读 253 次，
+`0x70000002` 写 8 次 —— 按「写一次 = 半位」粗算约 **119 个时钟位**，
+而一帧要 307,200 位，差 2,500 倍。
+
+### 2. 能做的：结构重建
+
+`frbox/bdisp.py`：
+
+* `descriptors(m)` / `summary(m)` / `fn_is_noop(m, addr)` —— 描述符表解码与统计
+* `menu_items(m, "PLAYBACK")` / `split_items(blob)` —— 从 ROM 文本池（`0x3A7FC0` 起）
+  按「大写字母前跟小写/右括号/数字」的启发式切词条
+* `render(path, m, facts=...)` —— 出重建图（PIL）：左边模拟屏，右边三条证据
+
+实测统计：70 条描述符、65 条有文本、样式 0/1/2 = 41/24/5、文本总字节 1,644、
+绘制函数 44 个（5 个空实现）。文案示例：PLAYBACK = Delete / Playback folder /
+Rotate tall / Slide show / Print set (DPOF)。
+
+### 3. 要真出画面还缺什么
+
+| 缺的东西 | 说明 |
+|---|---|
+| EXPEED 显示控制器 | 命令集 + 显存组织（目前只知道「命令字节 = 寄存器号 \| 0x80」） |
+| 驱动显示的外设事件 | 门字节 `0x9F58D08F` 的写者未跑、状态字 `0x9F58D450` 位含义未证 |
+| 字库 | 固件里没有点阵数据，字形在显示控制器侧 |
+
+### 4. 新增
+
+- `frbox/bdisp.py`（描述符表 / 文案池 / 重建图）
+- 探针 `exp_bdisp.py`（A–F 六段）→ `results/frbox/bdisp.txt` + `ui-rebuild.png`
+- 自检 `test_bdisp` 11 条；**631/631** + 63/63；版本 **0.26.0**
+
+### 5. 边界与口径
+
+可报：三条量化证据、描述符表统计、文案池内容、重建图。
+不可报：真实像素画面；屏幕每个位置显示哪条文案；字体字号；
+「再跑几步就能出画面」（数据正好否掉这句）。
+
+⚠️ 重建图的像素不是固件的；菜单分段是启发式（SHOOTING 第一条会并两条）。
+
+### 复现
+
+```bash
+cd emu
+python probe/exp_bdisp.py > ../results/frbox/bdisp.txt
 ```
