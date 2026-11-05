@@ -2028,6 +2028,42 @@ def test_bdisp():
     check("重建图 PNG 生成且大于 10KB", _os.path.getsize(png) > 10000, True)
 
 
+def test_bexpeed():
+    """V27：B↔EXPEED 位串行总线的抓包解码。"""
+    print("\n[33 EXPEED 位串行解码（V27）]")
+    from frbox import bexpeed, bgate, brealos
+
+    check("CS 在 0x70000002 bit2", (bexpeed.CS_ADDR, bexpeed.CS_BIT), (0x70000002, 0x04))
+    check("CLK 在 0x7000000A bit1", (bexpeed.BUS_ADDR, bexpeed.CLK_BIT), (0x7000000A, 0x02))
+    check("DATA 在 0x7000000A bit2", bexpeed.DATA_BIT, 0x04)
+    check("LSB 先：1,0,1,0,0,0,0,0 → 0x05", bexpeed.decode_bits([1, 0, 1, 0, 0, 0, 0, 0]), [0x05])
+    check("0x86 = 读寄存器 6", bexpeed.classify(0x86), ("read", 6))
+    check("0x76 = 写寄存器 0x76", bexpeed.classify(0x76), ("write", 0x76))
+
+    m = create("d300-b")
+    tap = bexpeed.ExpeedTap().attach(m)
+    m.load()
+    m.reset()
+    n = 0
+    while not m.cpu.halted and n < 191520:
+        m.step(1)
+        n += 1
+    brealos.sta_tsk(m, 2)
+    m.raise_irq(0x3F)
+    m.run(max_steps=200000, spin_guard=False)
+    m.run(max_steps=800000, spin_guard=False)
+    bgate.open_gate(m)
+    m.run(max_steps=1000000, spin_guard=False)
+    tap.detach()
+    s = tap.summary()
+    check("整场 2 帧", s["frames"], 2)
+    check("帧位数 8 + 40", s["bits"], [8, 40])
+    check("端口配置写 6 次", s["cfg_writes"], 6)
+    cmds = s["cmds"]
+    check("第 1 帧是读寄存器 6", (cmds[0]["kind"], cmds[0]["reg"]), ("read", 6))
+    check("第 2 帧是数据相位", cmds[1]["kind"], "data")
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2062,6 +2098,7 @@ def main():
     test_bflag()
     test_bgate()
     test_bdisp()
+    test_bexpeed()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
