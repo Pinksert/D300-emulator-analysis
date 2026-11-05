@@ -2056,12 +2056,65 @@ def test_bexpeed():
     m.run(max_steps=1000000, spin_guard=False)
     tap.detach()
     s = tap.summary()
-    check("整场 2 帧", s["frames"], 2)
-    check("帧位数 8 + 40", s["bits"], [8, 40])
+    # V28 修正：按 CS 上升沿分帧 + 只数 CLK 上升沿 + 收尾帧 flush，
+    # V27 报的「2 帧 / 8+40 位 / 0 条写命令」是抓包器 bug。
+    check("整场 4 个 CS 窗口", s["frames"], 4)
+    check("帧位数 1/16/48/16", s["bits"], [1, 16, 48, 16])
     check("端口配置写 6 次", s["cfg_writes"], 6)
     cmds = s["cmds"]
-    check("第 1 帧是读寄存器 6", (cmds[0]["kind"], cmds[0]["reg"]), ("read", 6))
-    check("第 2 帧是数据相位", cmds[1]["kind"], "data")
+    check("窗口 1 = 读寄存器 6", (cmds[0]["kind"], cmds[0]["reg"]), ("read", 6))
+    check("窗口 2 = 数据相位", cmds[1]["kind"], "data")
+    check("窗口 3 = 写寄存器 0x76", (cmds[2]["kind"], cmds[2]["reg"]), ("write", 0x76))
+    check("写载荷 = 0x01", cmds[2]["payload"], b"\x01")
+
+
+def test_bexpeed_dev():
+    """V28：EXPEED 器件模型（引脚级双向）+ 寄存器 6 读回值的作用。"""
+    print("\n[34 EXPEED 器件模型与寄存器 6（V28）]")
+    from frbox import brealos, bexpeed
+
+    dev_cls = create("d300-b").expeed
+    check("D300B 默认建 EXPEED 器件", dev_cls is not None, True)
+    check("器件基址 0x70000000", dev_cls.base, 0x70000000)
+    check("默认寄存器 6 = 5 个 0 字节", dev_cls.reg_bytes(6), b"\x00" * 5)
+
+    def boot_with(reg6, steps=400000):
+        m = create("d300-b")
+        if reg6 is not None:
+            m.expeed.set_reg(6, reg6)
+        m.load()
+        m.reset()
+        m.enable_cov()
+        m.attach_flow()
+        n = 0
+        while not m.cpu.halted and n < 191520:
+            m.step(1)
+            n += 1
+        brealos.sta_tsk(m, 2)
+        m.raise_irq(0x3F)
+        m.run(max_steps=steps, spin_guard=False)
+        return m
+
+    m0 = boot_with(None)
+    d0 = m0.expeed
+    check("器件收到 2 条命令：读 6 + 写 0x76",
+          [(c["kind"], c["reg"]) for c in d0.cmds], [("read", 6), ("write", 0x76)])
+    check("读命令驱动了应答位（>0）", d0.bits_out > 0, True)
+    check("reg6=0：状态字节 0x9F5A321C = 0x00", m0.fetch_bytes(0x9F5A321C, 1), b"\x00")
+    check("reg6=0：结束在 0x406D6（内核）", m0.cpu.pc, 0x000406D6)
+
+    m_lo = boot_with(b"\x20" + b"\x00" * 5)
+    check("reg6=0x20：状态字节 = 读回字节", m_lo.fetch_bytes(0x9F5A321C, 1), b"\x20")
+
+    m_hi = boot_with(b"\x80" + b"\x00" * 5)
+    check("reg6=0x80（bit7 置位）：状态字节写成常量 0x88",
+          m_hi.fetch_bytes(0x9F5A321C, 1), b"\x88")
+    check("bit7 置位：走到 0x1203B0（主循环）", m_hi.cpu.pc, 0x001203B0)
+    check("bit7 置位：覆盖 2692", m_hi.cov.words(), 2692)
+    check("bit7 清零：覆盖 2632", m0.cov.words(), 2632)
+
+    m_b2 = boot_with(b"\x00\xff" + b"\x00" * 4)
+    check("第 2 字节不影响分支", m_b2.cpu.pc, 0x000406D6)
 
 
 def main():
@@ -2099,6 +2152,7 @@ def main():
     test_bgate()
     test_bdisp()
     test_bexpeed()
+    test_bexpeed_dev()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
