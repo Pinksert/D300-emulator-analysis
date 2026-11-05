@@ -151,7 +151,10 @@ ui-rebuild.png         （V26 重建图：左侧模拟屏 + 右侧三条证据�
 bexpeed.txt            cd emu && python probe/exp_bexpeed.py        （V27 B↔EXPEED 位串行解码：CS/CLK/DATA、LSB 先、整场 2 帧 = 读寄存器 6 + 40 位数据相位、8 次端口配置写、0 条写命令）
 bexpeed2.txt           cd emu && python probe/exp_bexpeed2.py       （V28 EXPEED 器件模型：4 个 CS 窗口 / 读 6 + 48 位 + 写 0x76=1 / 寄存器 6 存 0x9F5A321C、bit7 改路径 2632→2692）
                        ⚠️ bexpeed.txt 的「2 帧 / 0 条写命令」是 V27 抓包器 bug，V28 已修正
-bxstat.txt             cd emu && python probe/exp_bxstat.py         （V29：采样点 0x19EF5E / 7 组值全对 / 写 0x76 = [0x9F5A321E]+1 载荷 [1] / 整场只写 1 次 / 0x9F5A321E 被 0x120458 与 0x12DE08 读）\nbgate2.txt             cd emu && python probe/exp_bgate2.py         （V30 第二道门：A 30 处=26 读/1 写、B 44 处=23 位写；字节 0x40 放行、多 7 个地址；槽位 0x9F58D508 + r4*0x0C）
+bxstat.txt             cd emu && python probe/exp_bxstat.py         （V29：采样点 0x19EF5E / 7 组值全对 / 写 0x76 = [0x9F5A321E]+1 载荷 [1] / 整场只写 1 次 / 0x9F5A321E 被 0x120458 与 0x12DE08 读）
+bgate2.txt             cd emu && python probe/exp_bgate2.py         （V30 第二道门：A 30 处=26 读/1 写、B 44 处=23 位写；字节 0x40 放行、多 7 个地址；槽位 0x9F58D508 + r4*0x0C）
 bqueue.txt             cd emu && python probe/exp_bqueue.py         （V31 显示请求队列：0x12E6F8 312 处引用、签名 r4/r5、head 0x9F58D500 + 节点 0x9F58D508+n*0x0C + 头插 0x124F5A、补 r5 无增益、0x120458 静态无入口）
-bdispchain.txt         cd emu && python probe/exp_bdispchain.py     （V32 队列两端：容量 70 槽位、生产 wai_sem(17)→头插→sig_sem(17)、消费 摘head→清70槽→set_flg(3,0x80)、sem17 八处四对）\nbsem.txt               cd emu && python probe/exp_bsem.py          （V33：信号量表 0x54F2C 40 项 / 计数在对象 +8、三写者 / sem 17 = 1 / 0x124F46 init、0x124F5A 插到哨兵之后 / 节点 +0 next +4 prev / 槽位 +9 唯一写者 0x12E740）
+bdispchain.txt         cd emu && python probe/exp_bdispchain.py     （V32 队列两端：容量 70 槽位、生产 wai_sem(17)→头插→sig_sem(17)、消费 摘head→清70槽→set_flg(3,0x80)、sem17 八处四对）
+bsem.txt               cd emu && python probe/exp_bsem.py          （V33：信号量表 0x54F2C 40 项 / 计数在对象 +8、三写者 / sem 17 = 1 / 0x124F46 init、0x124F5A 插到哨兵之后 / 节点 +0 next +4 prev / 槽位 +9 唯一写者 0x12E740）
 blist.txt              cd emu && python probe/exp_blist.py         （V34：链表四件套 init/is_empty/insert/unlink、表头 [条数|项宽] 40|16 与 17|16 互证、sem 14/27/29 计数信号量上限 7/255/255、消费端清空/取首/重挂）
+btable.txt             cd emu && python probe/exp_btable.py        （V35：对象表 = 4 字节表头 + 16 字节记录、sem 表止于 0x551B0 与 flag 表首尾相接、obj+0xC 背指记录 40/40、上限只在记录 +0xC、上限检查代码未执行、槽位 +8 载荷从没被写、游标块 0x9F58DA81..84、清空唯一调用 0x12E01E、rel12 假边界 KI#134）
