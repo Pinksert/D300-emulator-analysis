@@ -2124,20 +2124,9 @@ def test_bdesc():
     check("表在 ROM（写被丢弃）", m.bus.rd(bdesc.entry_addr(1) + bdesc.F_VALUE, 4), t)
 
     # 动态：按游标取描述符 + 事件掩码
-    RET, SCRATCH = 0x00407DC, 0x9F83F000
-    c = m.cpu
-
+    # ⚠️ V38：返回地址必须设 DR1（RP），写栈无效 —— 统一走 brealos.call_fn
     def call_fn(addr, r4=0):
-        m.bus.wr(SCRATCH - 4, 4, RET)
-        c.r[15] = SCRATCH - 4
-        c.r[4] = r4
-        c.i = 0
-        c.pc = addr
-        n = 0
-        while n < 4000 and not c.halted and c.pc != RET:
-            m.step(1)
-            n += 1
-        return n
+        return brealos.call_fn(m, addr, r4=r4)
 
     def apply(slot):
         for k, val in enumerate((0x55, slot, 0, slot)):
@@ -2179,33 +2168,33 @@ def test_bdesc():
         return ow_rd(a_, sz_, pc_)
     m2.bus.rd = rd
     c2 = m2.cpu
-    m2.bus.wr(SCRATCH - 4, 4, RET)
-    c2.r[15] = SCRATCH - 4
-    c2.r[4] = 0
-    c2.i = 0
-    c2.pc = bqueue.PEEK
-    n = 0
-    while n < 3000 and not c2.halted and c2.pc != RET:
-        m2.step(1)
-        n += 1
+    # V38：整段直接调会卡在 wai_sem（非任务上下文），所以跳过它、停在 sig_sem 之前
+    def peek_from(head_addr):
+        c2.r[8] = head_addr
+        c2.dr[1] = 0x00407DC
+        c2.r[15] = brealos.CALL_STACK
+        c2.r[4], c2.r[5] = 0, 0
+        c2.i = 0
+        c2.pc = 0x0012E64A        # 0x12E63A 里 wai_sem 之后的第一步
+        n = 0
+        while n < 400 and not c2.halted and c2.pc != 0x0012E664:
+            m2.step(1)
+            n += 1
+        return c2.r[4], c2.r[5]
+
+    r4v, r5v = peek_from(head)
     m2.bus.rd = ow_rd
-    check("取首的返回值在 R4", c2.r[4], 0x5A)
+    check("非空时 r4 = is_empty 的结果（0）", r4v, 0)
+    check("载荷在 R5（取首随后 mov r4,r5）", r5v, 0x5A)
     check("取首没读 +9", node + 9 in reads, False)
     check("取首读了 +8", node + 8 in reads, True)
 
-    # 空表：head 自指 → 返回 0
+    # 空表：head 自指 → is_empty 为真
     m2.bus.wr(head, 4, head)
     m2.bus.wr(head + 4, 4, head)
-    m2.bus.wr(SCRATCH - 4, 4, RET)
-    c2.r[15] = SCRATCH - 4
-    c2.r[4] = 0
-    c2.i = 0
-    c2.pc = bqueue.PEEK
-    n = 0
-    while n < 3000 and not c2.halted and c2.pc != RET:
-        m2.step(1)
-        n += 1
-    check("空表返回 0", c2.r[4], 0)
+    r4v, r5v = peek_from(head)
+    check("空表时 r4 = 1（is_empty 真）", r4v, 1)
+    check("空表不填载荷", r5v, 0)
 
 
 def test_bhandler():
@@ -2256,21 +2245,9 @@ def test_bhandler():
     check("模式 2 的常量表", bhandler.MODE2_CONST, {15: 0x80, 68: 0x8A, 31: 0x00, 32: 0x00})
     check("模式 2 的槽位", sorted(bhandler.mode2_check(m)), [0, 15, 31, 32, 68])
 
-    # 动态：掩码值 + 掩码区布局
-    RET, SCRATCH = 0x00407DC, 0x9F83F000
-    c = m.cpu
-
+    # 动态：掩码值 + 掩码区布局（V38：返回地址设 DR1）
     def call_fn(addr, r4=0, r5=0):
-        m.bus.wr(SCRATCH - 4, 4, RET)
-        c.r[15] = SCRATCH - 4
-        c.r[4], c.r[5] = r4, r5
-        c.i = 0
-        c.pc = addr
-        n = 0
-        while n < 4000 and not c.halted and c.pc != RET:
-            m.step(1)
-            n += 1
-        return n
+        return brealos.call_fn(m, addr, r4=r4, r5=r5)
 
     def apply(slot):
         for k, val in enumerate((0x55, slot, 0, slot)):
@@ -2309,15 +2286,7 @@ def test_bhandler():
         return base_wr(addr, sz, val, pc)
 
     m2.bus.wr = spy
-    m2.bus.wr(SCRATCH - 4, 4, RET)
-    c2.r[15] = SCRATCH - 4
-    c2.r[4], c2.r[5] = 5, 0x11223344
-    c2.i = 0
-    c2.pc = bqueue.SUBMIT
-    n = 0
-    while n < 4000 and not c2.halted and c2.pc != RET:
-        m2.step(1)
-        n += 1
+    brealos.call_fn(m2, bqueue.SUBMIT, r4=5, r5=0x11223344)
     m2.bus.wr = base_wr
     check("提交的写入只落在 +0 / +4 / +9",
           sorted({addr - bqueue.slot_addr(5) for addr, _v in writes}), [0, 4, 9])
@@ -2331,6 +2300,138 @@ def test_bhandler():
     d2 = bhandler.decode_at(0x12E11C)
     check("0x12E11C = ldi r7,#2（wfmode）",
           (d2[0], d2[2].get("i8"), d2[2].get("ri")), ("ldi:8", 2, 7))
+
+
+def test_binit():
+    """V38：显示初始化 0x12E006 —— 载荷=槽位号、746 步跑通、调用者是任务 5。"""
+    print("\n[44 显示初始化与载荷（V38）]")
+    from frbox import binit, brealos, blist, bqueue, bdesc
+
+    m = brealos.boot()
+
+    # 初始化之前：什么都没做
+    check("boot 后没有初始化标志", binit.is_initialized(m), False)
+    check("boot 后队列哨兵还是 0", m.bus.rd(binit.QUEUE_HEAD, 4), 0)
+    check("boot 后 70 个槽位的 +8 全 0", set(binit.payload_map(m)), {0})
+    check("boot 后取首恒返回 0", bqueue.peek(m), 0)
+    check("describe 说的是「没跑过」", "没跑过" in binit.describe(m), True)
+
+    # 只跑队列初始化（0x12E602）
+    res = binit.queue_init(m)
+    check("0x12E602 正常返回", res["ret"], True)
+    check("0x12E602 的步数（确定性）", res["steps"], 600)
+    check("跑完哨兵自指", (m.bus.rd(binit.QUEUE_HEAD, 4),
+                        m.bus.rd(binit.QUEUE_HEAD + 4, 4)),
+          (binit.QUEUE_HEAD, binit.QUEUE_HEAD))
+    check("70 个槽位的 +8 = 0..69", binit.payload_map(m), list(range(70)))
+    check("槽位 0 的 +8 = 0", binit.slot_index(m, 0), 0)
+    check("槽位 69 的 +8 = 69", binit.slot_index(m, 69), 69)
+    check("只跑 0x12E602 不会置初始化标志", binit.is_initialized(m), False)
+
+    # 编号写入点在 0x12E61C（记账显示成 0x12E61E）
+    log = []
+    m2 = brealos.boot()
+    base_wr = m2.bus.wr
+
+    def spy(addr, sz, val, pc=None):
+        log.append((pc, addr, sz, val))
+        return base_wr(addr, sz, val, pc)
+
+    m2.bus.wr = spy
+    brealos.call_fn(m2, binit.QUEUE_INIT_FN)
+    m2.bus.wr = base_wr
+    pay = [x for x in log if binit.SLOT_BASE <= x[1] < binit.SLOT_BASE + 70 * 12
+           and (x[1] - binit.SLOT_BASE) % 12 == 8]
+    check("槽位 +8 写入 70 笔", len(pay), 70)
+    check("写入者就是 0x12E61C（stb 本身）", sorted({x[0] for x in pay}), [0x0012E61C])
+
+    # 完整初始化（0x12E006）
+    m3 = brealos.boot()
+    res = binit.run(m3)
+    check("0x12E006 正常返回", res["ret"], True)
+    check("0x12E006 的步数（确定性）", res["steps"], 746)
+    check("0x12E006 的写入笔数", len(res["writes"]), 151)
+    check("跑完置了初始化标志", binit.is_initialized(m3), True)
+    a = binit.audit(m3)
+    check("体检：哨兵 + 编号全对", (a["initialized"], a["head_ok"], a["numbered"], a["bad"]),
+          (True, True, True, []))
+    hw = [w for w in res["writes"] if w[1] == binit.HW_PERIOD]
+    check("硬件定时器写入 0x0002039F", hw[0][3] if hw else None, 0x0002039F)
+    check("该寄存器读回只有低字节 0x9F", m3.bus.rd(binit.HW_PERIOD, 1), 0x9F)
+    check("describe 说的是「已跑」", "已跑" in binit.describe(m3), True)
+
+    # 调用者链
+    check("0x12E006 的唯一调用点", binit.INIT_CALLER, 0x0012DFB8)
+    check("0x12DFB8 的 call 目标就是 0x12E006", binit.INIT_FN, 0x0012E006)
+    rec = 0x54C00 + 4 * 0x1C
+    check("任务表记录 4 的 +0x10 = 0x12DFAE", m3.bus.rd(rec + 0x10, 4), 0x0012DFAE)
+    check("记录 4 是任务 5", binit.TASK_ID, 5)
+    check("记录 3（任务 4）的入口是 0x126454",
+          m3.bus.rd(0x54C00 + 3 * 0x1C + 0x10, 4), 0x00126454)
+
+    # 任务 5 的门：sta_tsk 改 TCB，位图不动
+    m4 = brealos.boot()
+    tcb5 = m4.bus.rd(0x54C00 + 4 * 0x1C, 4)
+    check("任务 5 初始状态 = 0x10（休眠）", m4.bus.rd(tcb5 + 8, 4), 0x10)
+    r = brealos.sta_tsk(m4, 5)
+    check("sta_tsk(5) 返回 0", r["err"], 0)
+    check("任务 5 状态变 0（就绪）", m4.bus.rd(tcb5 + 8, 4), 0)
+    check("任务 5 的保存 SP 已填", m4.bus.rd(tcb5 + 0x18, 4), 0x9F8036A4)
+
+    # 方法学：ret 读 DR1，不读栈
+    check("boot 后 DR1 是最后一次 call 的返回地址 0x404F8",
+          brealos.boot().cpu.dr[1], 0x000404F8)
+    m5 = brealos.boot()
+    c5 = m5.cpu
+    m5.bus.wr(0x9F83EFFC, 4, 0x00407DC)      # 只写栈，不设 DR1
+    c5.r[15] = 0x9F83EFFC
+    c5.i = 0
+    c5.pc = binit.INIT_FN
+    n = 0
+    while n < 5000 and not c5.halted and c5.pc != 0x00407DC:
+        m5.step(1)
+        n += 1
+    check("只写栈 / 改 SP 不会让函数返回", c5.pc != 0x00407DC, True)
+    check("它会撞进 0x404E0 兜底自旋", c5.pc, 0x000404E0)
+
+    # 阻塞型服务在非任务上下文里的返回码
+    m6 = brealos.boot()
+    check("wai_flg 在非任务上下文返回 -33",
+          brealos.kernel_call(m6, -46, r4=3, r5=1)["err"], -33)
+    check("set_flg 正常返回 0",
+          brealos.kernel_call(m6, -48, r4=3, r5=1)["err"], 0)
+    r = brealos.call_fn(m6, bqueue.PEEK, r4=0, max_steps=3000)
+    check("整段调取首会卡在 wai_sem", r["ret"], False)
+
+    # 取首的寄存器语义：R4 = is_empty，R5 = 载荷
+    head = blist.DISPLAY_QUEUE_HEAD
+    node = bqueue.slot_addr(0)
+    for nonempty, pay_v, want_r4, want_r5 in ((True, 0x5A, 0, 0x5A),
+                                               (True, 37, 0, 37),
+                                               (False, 0, 1, 0)):
+        m7 = brealos.boot()
+        if nonempty:
+            for addr, v in ((head, node), (head + 4, node), (node, head),
+                            (node + 4, head), (node + 8, pay_v)):
+                m7.bus.wr(addr, 4 if addr % 4 == 0 and addr != node + 8 else 1, v)
+        else:
+            m7.bus.wr(head, 4, head)
+            m7.bus.wr(head + 4, 4, head)
+        c7 = m7.cpu
+        c7.r[8] = head
+        c7.dr[1] = 0x00407DC
+        c7.r[15] = brealos.CALL_STACK
+        c7.r[4], c7.r[5] = 0, 0
+        c7.i = 0
+        c7.pc = 0x0012E64A
+        n = 0
+        while n < 400 and not c7.halted and c7.pc != 0x0012E664:
+            m7.step(1)
+            n += 1
+        check("取首 %s：r4 = is_empty" % ("非空" if nonempty else "空表"),
+              c7.r[4], want_r4)
+        check("取首 %s：r5 = 载荷" % ("非空" if nonempty else "空表"),
+              c7.r[5], want_r5)
 
 
 def test_bdisp():
@@ -2775,6 +2876,7 @@ def main():
     test_bqueue_slot()
     test_bdesc()
     test_bhandler()
+    test_binit()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
