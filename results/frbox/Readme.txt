@@ -152,3 +152,4 @@ bexpeed.txt            cd emu && python probe/exp_bexpeed.py        （V27 B↔E
 bexpeed2.txt           cd emu && python probe/exp_bexpeed2.py       （V28 EXPEED 器件模型：4 个 CS 窗口 / 读 6 + 48 位 + 写 0x76=1 / 寄存器 6 存 0x9F5A321C、bit7 改路径 2632→2692）
                        ⚠️ bexpeed.txt 的「2 帧 / 0 条写命令」是 V27 抓包器 bug，V28 已修正
 bxstat.txt             cd emu && python probe/exp_bxstat.py         （V29：采样点 0x19EF5E / 7 组值全对 / 写 0x76 = [0x9F5A321E]+1 载荷 [1] / 整场只写 1 次 / 0x9F5A321E 被 0x120458 与 0x12DE08 读）\nbgate2.txt             cd emu && python probe/exp_bgate2.py         （V30 第二道门：A 30 处=26 读/1 写、B 44 处=23 位写；字节 0x40 放行、多 7 个地址；槽位 0x9F58D508 + r4*0x0C）
+bqueue.txt             cd emu && python probe/exp_bqueue.py         （V31 显示请求队列：0x12E6F8 312 处引用、签名 r4/r5、head 0x9F58D500 + 节点 0x9F58D508+n*0x0C + 头插 0x124F5A、补 r5 无增益、0x120458 静态无入口）
