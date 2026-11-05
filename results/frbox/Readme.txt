@@ -159,3 +159,4 @@ bsem.txt               cd emu && python probe/exp_bsem.py          （V33：信�
 blist.txt              cd emu && python probe/exp_blist.py         （V34：链表四件套 init/is_empty/insert/unlink、表头 [条数|项宽] 40|16 与 17|16 互证、sem 14/27/29 计数信号量上限 7/255/255、消费端清空/取首/重挂）
 btable.txt             cd emu && python probe/exp_btable.py        （V35：对象表 = 4 字节表头 + 16 字节记录、sem 表止于 0x551B0 与 flag 表首尾相接、obj+0xC 背指记录 40/40、上限只在记录 +0xC、上限检查代码未执行、槽位 +8 载荷从没被写、游标块 0x9F58DA81..84、清空唯一调用 0x12E01E、rel12 假边界 KI#134）
 bdesc.txt             cd emu && python probe/exp_bdesc.py        （V36：描述符表 70 条、索引 = 槽位号 69/69、表在 ROM、0x9F58D858 = 当前描述符、81 = 事件掩码、槽位 0 是空标记、取首返回值在 R4、is_empty 判据）
+bhandler.txt          cd emu && python probe/exp_bhandler.py      （V37：43 个非空处理函数=事件翻译器、flgid 只有 1/3/10/12、42 条 set_flg 全用立即数、空处理 5 函数 31 槽位、+8=2 是代码常量分派、掩码区 9 字节、提交不写 r5、显示模块 wai_flg(3)）
