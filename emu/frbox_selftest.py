@@ -2126,6 +2126,56 @@ def test_bexpeed_dev():
           m_hi.fetch_bytes(0x9F5A321E, 1), b"\x01")
 
 
+def test_bgate2():
+    """V30：第二道门（0x9F58D450 字节 bit6）与状态字的读写分类。"""
+    print("\n[35 第二道门与状态字分类（V30）]")
+    from frbox import bgate, brealos
+
+    m = create("d300-b")
+    m.load()
+    check("第二道门常量 = 0x40", bgate.STATUS_WORK_READY, 0x40)
+    ra = bgate.access(m, bgate.STATUS)
+    rb = bgate.access(m, bgate.STATUS2)
+    kinds_a = [k for _, k, _ in ra]
+    kinds_b = [k for _, k, _ in rb]
+    check("A 的引用 30 处", len(ra), 30)
+    check("A 里位测试 26 处", kinds_a.count("test"), 26)
+    check("A 里位写 1 处", kinds_a.count("bitop"), 1)
+    check("A 的唯一写点在 0x21B334", [pc for pc, k, _ in ra if k == "bitop"], [0x0021B334])
+    check("B 的引用 44 处", len(rb), 44)
+    check("B 里位写 23 处", kinds_b.count("bitop"), 23)
+
+    def run(a_byte):
+        mm = create("d300-b")
+        mm.load()
+        mm.reset()
+        mm.enable_cov()
+        mm.attach_flow()
+        n = 0
+        while not mm.cpu.halted and n < 191520:
+            mm.step(1)
+            n += 1
+        brealos.sta_tsk(mm, 2)
+        mm.raise_irq(0x3F)
+        mm.run(max_steps=200000, spin_guard=False)
+        bgate.open_gate(mm)
+        if a_byte is not None:
+            mm.bus.wr(bgate.STATUS, 1, a_byte)
+        mm.run(max_steps=150000, spin_guard=False)
+        return mm
+
+    m_no = run(None)
+    check("门开着但 A 不动：没到 0x12018E", m_no.cov.visited(0x12018E), False)
+    check("门开着但 A 不动：没进 0x12E73E", m_no.cov.visited(0x12E73E), False)
+    check("门开着时 work_ready = False", bgate.work_ready(m_no), False)
+
+    m_yes = run(bgate.STATUS_WORK_READY)
+    check("置 A 的 bit6 后到 0x12018E", m_yes.cov.visited(0x12018E), True)
+    check("并进到 0x12E73E", m_yes.cov.visited(0x12E73E), True)
+    check("work_ready = True", bgate.work_ready(m_yes), True)
+    check("覆盖比不置位多 7", m_yes.cov.words() - m_no.cov.words(), 7)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2159,6 +2209,7 @@ def main():
     test_pendbits()
     test_bflag()
     test_bgate()
+    test_bgate2()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
