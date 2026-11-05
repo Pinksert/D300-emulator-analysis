@@ -94,6 +94,9 @@ class Machine:
     # 硬件自由运行计数器基址（0 = 不建）。V23：B 段 0x5C003000 窗口,
     # +0x34 计数器,任务 2 的「等走字」循环靠它出坑。
     hw_counter_base = 0
+    # 计数器每个 tick 走几个字（V24：可标定速率）。rate=1 是 V23 的默认口径；
+    # 改它只改「等多久」（延时长度），不改程序路径（实测见 dev_hwcnt.py）。
+    hw_counter_rate = 1
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
@@ -181,7 +184,8 @@ class Machine:
         self.hw_counter = None
         if self.hw_counter_base:
             from .dev_hwcnt import FreeRunCounter
-            self.hw_counter = FreeRunCounter(self, base=self.hw_counter_base)
+            self.hw_counter = FreeRunCounter(self, base=self.hw_counter_base,
+                                            rate=self.hw_counter_rate)
             self.bus.map_io(self.hw_counter_base, 0x100, self.hw_counter,
                             self.hw_counter.name)
             self.devices.append(self.hw_counter)
@@ -251,6 +255,10 @@ class Machine:
             self.trace.log("guest", f"CRC16 不符：文件 0x{crc:04X} / 计算 0x{calc:04X}")
         self.bus.load_rom(self.rom_base, data)
         self._map_extra_rom()          # load_rom 会清掉全部 ROM 区,extra_rom 重挂
+        if self.hw_counter is not None:
+            # 设备在 __init__ 的 _build() 里就建好了；允许调用方在 create()
+            # 之后改 hw_counter_rate 再 load()（V24 速率标定就用这条路）。
+            self.hw_counter.set_rate(self.hw_counter_rate)
         if len(data) != self.rom_size + 2 and len(data) != self.rom_size:
             self.trace.log("guest", f"镜像大小 {len(data)} 与机器配置 {self.rom_size + 2} 不符")
         self.reset()
