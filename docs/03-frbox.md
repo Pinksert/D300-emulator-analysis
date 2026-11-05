@@ -1,4 +1,4 @@
-# frbox 0.26.0 —— D300 的全系统模拟器
+# frbox 0.27.0 —— D300 的全系统模拟器
 
 > 本文只讲**模拟器怎么造的**。为什么要造、造到哪一步、哪些结论已经被证伪，见
 > [`02-findings.md`](02-findings.md) 和 `reports/14`–`32`。想直接跑，跳到第二节。
@@ -34,7 +34,7 @@ cd D300-emulator-analysis/emu
 python -m frbox -M help                       # 列出机器
 python -m frbox -M d300-a -c "bp 0xFE50C;c;info"   # A 段跑到启动链尽头
 python -m frbox -M d300-b -c "bp 0x407D8;c;info"   # B 段同上
-python frbox_selftest.py                      # 631 条断言
+python frbox_selftest.py                      # 642 条断言
 python fr_selftest.py                         # 63 条 CPU 断言
 ```
 
@@ -69,15 +69,16 @@ emu/
 │   ├── bflag.py         B 段事件标志对象与 wai/set/clr 语义（V24）
 │   ├── bgate.py         B 段主循环的门字节 0x9F58D08F（V25）
 │   ├── bdisp.py         显示描述符表 / 文案池 / 结构重建图（V26）
+│   ├── bexpeed.py       B↔EXPEED 位串行抓包解码（V27）
 │   ├── icu.py           中断控制器：设备线 → 向量
 │   ├── machine.py       机器模型：内存映射 + 复位向量 + 运行循环 + 任务启动
 │   ├── monitor.py       HMP 式命令行
 │   ├── snapshot.py      savevm / loadvm
 │   ├── trace.py         日志类别（in_asm / int / dev / svc / guest ...）
 │   └── cli.py           QEMU 式启动参数
-├── frbox_selftest.py    631 条断言
+├── frbox_selftest.py    642 条断言
 ├── frbox_boot.py        启动诊断：两台机器各能跑多远、卡在哪
-└── probe/               71 个取证脚本（见 probe/README.md）
+└── probe/               72 个取证脚本（见 probe/README.md）
 ```
 
 分层的唯一目的是让「CPU 会算」变成「机器能跑」：`Fr` 只要求宿主对象有 `rd/wr`，
@@ -598,7 +599,7 @@ machines   help   quit
 | 套件 | 条目 | 覆盖 |
 |---|---|---|
 | `fr_selftest.py` | 63 | CPU 核心：编码、标志位、延迟槽、EIT 压栈、ILM 屏蔽、S 位换栈 |
-| `frbox_selftest.py` | 620 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 / **服务分发表 + 事件标志 31（V24）** / **门字节 + 开门实验 19（V25）** / **显示链路 + 重建图 11（V26）** |
+| `frbox_selftest.py` | 620 | 总线 12 / 设备 15 / ICU+EIT 10 / 机器 14 / monitor 8 / CLI 4 / 时钟 15 / 快照 12 / 中断注入 13 / 手工启动 15 / 中断闭环 18 / 自旋消除 23 / 任务表 23 / μITRON 半主机 33 / 原生 REALOS 42 / 原生调度 23 / 任务等待 42 / 等待解码 21 / 位掩码+位图 19 / 覆盖率 17 / 任务解锁 15 / 信箱 24 / 回调槽 26 / 中断 0x2B 38 / 自动节拍 26 / **B 段内核启动 28** / **B 段墙拆除+开机装配 22（V23）** / A 段位扫描 10 / **服务分发表 + 事件标志 31（V24）** / **门字节 + 开门实验 19（V25）** / **显示链路 + 重建图 11（V26）** / **EXPEED 位串行解码 11（V27）** |
 
 每条断言都对着一个"写错不会崩、只会算错"的地方 —— 比如跨区访问的字节顺序、设备读写
 方向、EIT 的 ILM 屏蔽、`reset` 之后 `poke` 是否重放。
@@ -1915,4 +1916,62 @@ Rotate tall / Slide show / Print set (DPOF)。
 ```bash
 cd emu
 python probe/exp_bdisp.py > ../results/frbox/bdisp.txt
+```
+
+---
+
+## V27：EXPEED 位串行 —— 三根线解成字节
+
+### 0. 起点
+
+V26 量到「总线几乎不动」（238 次位串行写），但没回答「这些时钟位上
+到底传了什么」。这一版把位流解成字节。
+
+### 1. 协议
+
+```
+CS   = 0x70000002 bit2
+CLK  = 0x7000000A bit1
+DATA = 0x7000000A bit2
+命令字节 = 寄存器号 | 读标志 0x80，LSB 先
+```
+
+解码：CS 分帧、CLK 上升沿采样 DATA、每 8 位按低位在前拼字节。
+
+### 2. 整场只有两帧
+
+boot（191,520 步）+ 装配 + 开门 + 100 万步：
+
+```
+端口配置写 8 次 16 位（0x402FC–0x40350）—— 方向/配置，不是数据
+#0  8 位   0x86 = 读寄存器 6
+#1  40 位  46 00 36 00 F6 —— 读周期的时钟相位（主机驱动的位）
+写命令 0 条
+```
+
+原始位 `[0,1,1,0,0,0,0,1]` → LSB 先 → `0x86`。
+
+### 3. 含义
+
+固件整场只向显示控制器**读了一个寄存器**，没有发出任何写命令。
+与 V26 三条证据合起来：显示链路「从决定要画到真的画」第一环就没走。
+
+### 4. 新增
+
+- `frbox/bexpeed.py`：`ExpeedTap` / `decode_bits` / `classify` / `commands` / `summary`
+- 探针 `exp_bexpeed.py`（A–C）→ `results/frbox/bexpeed.txt`
+- 自检 `test_bexpeed` 11 条；**642/642** + 63/63；版本 **0.27.0**
+
+### 5. 边界与口径
+
+可报：协议三根线、LSB 先、2 帧（读寄存器 6 + 数据相位）、8 次配置写、0 条写命令。
+不可报：寄存器 6 的含义、写命令格式、EXPEED 应答时序、读标志 bit7 的独立复核。
+
+⚠️ 帧按 CS 分；读后时钟相位不是新命令；帧里的字节是主机驱动的位，不是器件返回。
+
+### 复现
+
+```bash
+cd emu
+python probe/exp_bexpeed.py > ../results/frbox/bexpeed.txt
 ```
