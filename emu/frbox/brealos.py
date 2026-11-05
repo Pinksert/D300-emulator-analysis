@@ -68,6 +68,12 @@ SVC_SIG_SEM = -55
 SVC_RCV_MSG = -61
 SVC_SND_MSG = -63
 SVC_SET_TIM = -83
+# 显示任务（入口 0x12DFAE）在 0x12E1D2 调的服务号：R12 = 0xFFFFFF56。
+# 处理函数 0x41BEA 的前导与 wai_flg 0x41B0A 几乎逐字相同，但带超时判断
+# （调用方把时限放在 R13，任务 5 传 0x64）；实测调用返回 **-17（E_NOSPT）**，
+# 也就是这个内核**没有实现**它。名字暂记 twai_flg（带超时的 wai_flg 形态），
+# 只作代号用，不作为语义结论。
+SVC_TWAI_FLG = -170
 
 # 服务号 → 处理函数（V24 动态解出：在陷阱派发点 0x406B2 抓 `call r12` 的目标，
 # 见 probe/exp_bflag.py A 段）。陷阱入口 0x40668 先把 R12 存起来、进内核态，
@@ -88,7 +94,14 @@ SERVICES = {
     SVC_RCV_MSG: 0x00041D38,
     SVC_SND_MSG: 0x00041CDE,
     SVC_SET_TIM: 0x00040EDE,
+    SVC_TWAI_FLG: 0x00041BEA,    # 显示任务在用；返回 -17（E_NOSPT，本内核未实现）
 }
+
+# 陷阱的服务号索引方式（V25 修正）：静态上 0x40660 不是表 —— 真正的索引是
+#   addr = (0x40660 + 2 * ((R12 & 0x7FFFFFFF) << 1)) & 0xFFFFFFFF
+# 负数服务号在 32 位回绕后落到 0x40460 一带（-46 → 0x40604），正数落到 0x40660+。
+# 所以「按 0x40660 + svc*2 直接读表」既读错地方、又会被回绕骗到。
+SERVICE_TABLE_WRAP_NOTE = True
 
 FLAG_TABLE = 0x000551B0     # 事件标志对象表（bflag.py 也用这个）
 
