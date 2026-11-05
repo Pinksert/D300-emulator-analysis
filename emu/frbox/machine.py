@@ -101,7 +101,7 @@ class Machine:
     # 会返回器件驱动的 DATA 位，而不是「未映射读回 0」。
     expeed_base = 0
     expeed_regs = None        # {寄存器号: bytes}，None = 全 0
-    expeed_read_len = 5       # 主机读一次打的字节数（实测 40 个时钟）
+    expeed_read_len = 5       # 应答字节数（无手册依据；取值不影响主机读到什么）
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
