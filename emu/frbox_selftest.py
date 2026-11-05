@@ -2208,6 +2208,131 @@ def test_bdesc():
     check("空表返回 0", c2.r[4], 0)
 
 
+def test_bhandler():
+    """V37：44 个处理函数的语义 —— 事件翻译器、模式 2 的常量、掩码区 9 字节。"""
+    print("\n[43 处理函数与掩码区（V37）]")
+    from frbox import bhandler, bdesc, bqueue, blist, brealos
+
+    check("服务号 set_flg = -48", bhandler.SVC_SET_FLG, -48)
+    check("提交函数地址", bhandler.SUBMIT, 0x0012E6F8)
+    check("掩码区基址", bhandler.MASK_BLOCK, 0x9F58DA7C)
+    check("ret 的机器码", bhandler.RET_BYTES, b"\x97\x20")
+
+    m = brealos.boot()
+    a = bhandler.audit(m)
+    check("处理函数 44 个 / 槽位 70 个", (a["handlers"], a["slots_covered"]), (44, 70))
+    check("单条 ret 的处理函数 5 个", a["ret_handlers"],
+          [0x0012E752, 0x0012F0F4, 0x0012F212, 0x0012F2A6, 0x0012F5AC])
+    check("单条 ret 占 31 个槽位", len(a["ret_only_slots"]), 31)
+    check("实做 39 个", a["handlers"] - len(a["ret_handlers"]), 39)
+    check("flag 只有 1/3/10/12", a["flag_ids"], [1, 3, 10, 12])
+    fm = bhandler.flag_map(m)
+    check("各 flag 的条数", {k: len(v) for k, v in fm.items()},
+          {1: 1, 3: 13, 10: 12, 12: 16})
+    check("flag 覆盖 29 个槽位", a["flag_slots"], 29)
+    check("位操作族 23 个槽位", a["bit_slots"], 23)
+    check("状态链（回调提交）", a["requeue_slots"], [6, 8, 12, 42, 44, 52, 57])
+    check("信号量族", a["sem_slots"], [17, 48])
+
+    def svcs(h):
+        return [(x[2], x[3], x[4]) for x in bhandler.actions(h) if x[0] == "svc"]
+
+    def bits(h):
+        return [(x[2], x[3], x[4]) for x in bhandler.actions(h) if x[0] == "bit"]
+
+    check("槽位 9 = set_flg(10, 0x2000)",
+          svcs(bdesc.entry(m, 9)["handler"]), [("set_flg", 10, 0x2000)])
+    check("槽位 4 = set_flg(3, 1024)",
+          svcs(bdesc.entry(m, 4)["handler"]), [("set_flg", 3, 1024)])
+    check("槽位 18 只置位 0x9F58DEBC 的 bit3（不调服务）",
+          (bits(bdesc.entry(m, 18)["handler"]), svcs(bdesc.entry(m, 18)["handler"])),
+          ([("borl", 0x9F58DEBC, 8)], []))
+    check("槽位 23 的处理函数就是单条 ret",
+          bhandler.is_ret(m, bdesc.entry(m, 23)["handler"]), True)
+    check("槽位 3 同时发两个 flag",
+          sorted(svcs(bdesc.entry(m, 3)["handler"])),
+          [("set_flg", 3, 512), ("set_flg", 10, 2048)])
+
+    check("模式 2 的常量表", bhandler.MODE2_CONST, {15: 0x80, 68: 0x8A, 31: 0x00, 32: 0x00})
+    check("模式 2 的槽位", sorted(bhandler.mode2_check(m)), [0, 15, 31, 32, 68])
+
+    # 动态：掩码值 + 掩码区布局
+    RET, SCRATCH = 0x00407DC, 0x9F83F000
+    c = m.cpu
+
+    def call_fn(addr, r4=0, r5=0):
+        m.bus.wr(SCRATCH - 4, 4, RET)
+        c.r[15] = SCRATCH - 4
+        c.r[4], c.r[5] = r4, r5
+        c.i = 0
+        c.pc = addr
+        n = 0
+        while n < 4000 and not c.halted and c.pc != RET:
+            m.step(1)
+            n += 1
+        return n
+
+    def apply(slot):
+        for k, val in enumerate((0x55, slot, 0, slot)):
+            m.bus.wr(bqueue.CURSOR_BASE + k, 1, val)
+        call_fn(bdesc.APPLY_FN)
+        return bdesc.event_mask(m)
+
+    check("模式 2：槽位 15 → 0x80", apply(15), 0x80)
+    check("模式 2：槽位 68 → 0x8A", apply(68), 0x8A)
+    check("模式 2：槽位 31 → 0x00", apply(31), 0x00)
+    check("模式 2：槽位 32 → 0x00", apply(32), 0x00)
+    check("模式 2：15/68 的 +4 都是 0，掩码与 +4 无关",
+          (bdesc.entry(m, 15)["value"], bdesc.entry(m, 68)["value"]), (0, 0))
+    apply(5)
+    blk = bytes(m.fetch_bytes(bhandler.MASK_BLOCK, 9))
+    check("掩码区 9 字节：7C=槽位号、7F=掩码、82=槽位号、81=掩码",
+          (blk[0], blk[1], blk[3], blk[5], blk[6]),
+          (5, 0, 0x21, 0x21, 5))
+
+    # 提交函数不写 r5
+    m2 = brealos.boot()
+    head = blist.DISPLAY_QUEUE_HEAD
+    m2.bus.wr(head, 4, head)
+    m2.bus.wr(head + 4, 4, head)
+    for i in range(70):
+        b = bqueue.slot_addr(i)
+        for k in (0, 4, 8):
+            m2.bus.wr(b + k, 4, 0)
+    c2 = m2.cpu
+    writes = []
+    base_wr = m2.bus.wr
+
+    def spy(addr, sz, val, pc=None):
+        if 0x9F58D508 <= addr < 0x9F58D848:
+            writes.append((addr, val))
+        return base_wr(addr, sz, val, pc)
+
+    m2.bus.wr = spy
+    m2.bus.wr(SCRATCH - 4, 4, RET)
+    c2.r[15] = SCRATCH - 4
+    c2.r[4], c2.r[5] = 5, 0x11223344
+    c2.i = 0
+    c2.pc = bqueue.SUBMIT
+    n = 0
+    while n < 4000 and not c2.halted and c2.pc != RET:
+        m2.step(1)
+        n += 1
+    m2.bus.wr = base_wr
+    check("提交的写入只落在 +0 / +4 / +9",
+          sorted({addr - bqueue.slot_addr(5) for addr, _v in writes}), [0, 4, 9])
+    check("载荷值没有出现在任何写入里", [v for _a, v in writes if v == 0x11223344], [])
+    check("槽位 +8 仍为 0", m2.bus.rd(bqueue.slot_addr(5) + 8, 1), 0)
+
+    # 接收端：显示模块里的 wai_flg(flgid=3)
+    d = bhandler.decode_at(0x12E118)
+    check("0x12E118 = ldi r5,#3（flgid）",
+          (d[0], d[2].get("i8"), d[2].get("ri")), ("ldi:8", 3, 5))
+    d2 = bhandler.decode_at(0x12E11C)
+    check("0x12E11C = ldi r7,#2（wfmode）",
+          (d2[0], d2[2].get("i8"), d2[2].get("ri")), ("ldi:8", 2, 7))
+
+
 def test_bdisp():
     """V26：显示链路 —— 描述符表、绘制函数、文案池、重建图。"""
     print("\n[32 显示链路与重建图（V26）]")
@@ -2649,6 +2774,7 @@ def main():
     test_btable()
     test_bqueue_slot()
     test_bdesc()
+    test_bhandler()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
