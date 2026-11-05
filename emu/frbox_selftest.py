@@ -2000,6 +2000,89 @@ def test_bgate():
     check("-170 返回 E_NOSPT(-17)", r["err"], -17)
 
 
+def test_btable():
+    """V35：对象表的真结构（4 字节表头 + 16 字节记录）、上限在哪。"""
+    print("\n[40 对象表结构与上限（V35）]")
+    from frbox import bsem, btable, brealos
+
+    m = brealos.boot()
+    check("表头 sem = 40 条 | 16", (btable.header(m, 0x54F2C)["count"],
+                                   btable.header(m, 0x54F2C)["stride"]), (40, 16))
+    check("表头 flag = 17 条 | 16", (btable.header(m, 0x551B0)["count"],
+                                     btable.header(m, 0x551B0)["stride"]), (17, 16))
+    check("sem 记录 1 在 0x54F30", btable.record_addr(0x54F2C, 1), 0x00054F30)
+    check("flag 记录 1 在 0x551B4", btable.record_addr(0x551B0, 1), 0x000551B4)
+    check("sem 表止于 0x551B0（= flag 表头）",
+          btable.table_end(0x54F2C, 40), 0x000551B0)
+    check("flag 表止于 0x552C4", btable.table_end(0x551B0, 17), 0x000552C4)
+
+    r1 = btable.record(m, 0x54F2C, 1)
+    check("记录 1 = (对象 0x68000638, 编号 1, 初始 1, 上限 1)",
+          (r1["obj"], r1["id"], r1["init"], r1["max"]),
+          (0x68000638, 1, 1, 1))
+    r14 = btable.record(m, 0x54F2C, 14)
+    check("记录 14 的参数 = [初始 0 | 上限 7]", (r14["init"], r14["max"]), (0, 7))
+    check("记录 14 的参数格在记录 +0xC", r14["addr"] + 0x0C, 0x0005500C)
+
+    a = btable.audit(m)
+    check("对象↔记录背指 40/40 全对", a["backptr_bad"], [])
+    check("记录→对象反向 40/40 全对", a["reverse_bad"], [])
+    check("对象计数 = 记录初始计数", a["count_bad"], [])
+    check("两张表首尾相接", [x[4] for x in a["touching"]], [True])
+    check("体检整体通过", a["ok"], True)
+    check("sem 17 的背指 = 0x55030", btable.record_of_object(m, 0x68000738), 0x00055030)
+    check("对象 +0xA 全 0（上限不存对象里）",
+          {m.bus.rd(btable.record(m, 0x54F2C, i)["obj"] + 0x0A, 2) for i in range(1, 41)},
+          {0})
+    check("上限检查代码在 0x418E8", bsem.SIG_MAX_CHECK, 0x000418E8)
+
+
+def test_bqueue_slot():
+    """V35：队列槽位的 +8 载荷、+9 状态、四字节游标。"""
+    print("\n[41 队列槽位与游标（V35）]")
+    from frbox import blist, bqueue, brealos
+
+    check("槽位基址 / 步长 / 条数",
+          (bqueue.SLOT_BASE, bqueue.SLOT_STRIDE, bqueue.SLOT_COUNT),
+          (0x9F58D508, 0x0C, 70))
+    check("槽位 0 与 69 的地址",
+          (bqueue.slot_addr(0), bqueue.slot_addr(69)), (0x9F58D508, 0x9F58D844))
+    check("节点地址 → 槽位号", bqueue.index_of(0x9F58D58C), 11)
+    check("非槽位地址 → None", bqueue.index_of(0x9F58D590), None)
+    check("状态位常量", (bqueue.FLAG_LINKED, bqueue.FLAG_EXTRA), (0x80, 0x40))
+    check("游标块基址 / 描述符表", (bqueue.CURSOR_BASE, bqueue.DESC_TABLE),
+          (0x9F58DA81, 0x001BC020))
+
+    m = brealos.boot()
+    check("boot 后 70 个载荷全是 0", {bqueue.payload(m, i) for i in range(70)}, {0})
+    check("boot 后 70 个状态位全是 0", {bqueue.flag(m, i) for i in range(70)}, {0})
+    check("boot 后游标四字节全 0", bqueue.cursor(m)["raw"], b"\x00\x00\x00\x00")
+    check("boot 后队列是空的", bqueue.peek(m), 0)
+
+    # 挂一个节点：模型行为和实测（+0/+4/+9 变、+8 不动）一致
+    blist.init_model(m, bqueue.HEAD)
+    bqueue.submit_model(m, 11)
+    check("挂链后链上有槽位 11", blist.walk(m, bqueue.HEAD), [bqueue.slot_addr(11)])
+    check("挂链只置 +9 的 0x80", bqueue.flag(m, 11), 0x80)
+    check("挂链不动载荷", bqueue.payload(m, 11), 0)
+    check("载荷写了才读得到", (m.bus.wr(bqueue.slot_addr(11) + 8, 1, 0x2A),
+                          bqueue.peek(m))[1], 0x2A)
+    bqueue.submit_model(m, 49, flag_extra=True)
+    check("第二个节点在链首、状态 0xC0",
+          (blist.walk(m, bqueue.HEAD)[0], bqueue.flag(m, 49)),
+          (bqueue.slot_addr(49), 0xC0))
+
+    # 游标替固件写（探针用的接口）
+    c = bqueue.set_cursor(m, slot_no=11, count=3, next_no=12)
+    check("游标写入后读回", (c["slot"], c["count"], c["next"]), (11, 3, 12))
+
+    # 清空：哨兵自指 + 槽位状态清零（0x12E602 的模型）
+    blist.clear_model(m, bqueue.HEAD)
+    check("清空后是空表", blist.is_empty(m, bqueue.HEAD), True)
+    check("清空后状态位归零",
+          (bqueue.flag(m, 11), bqueue.flag(m, 49)), (0, 0))
+
+
 def test_bdisp():
     """V26：显示链路 —— 描述符表、绘制函数、文案池、重建图。"""
     print("\n[32 显示链路与重建图（V26）]")
@@ -2276,23 +2359,24 @@ def test_bsem():
     m = brealos.boot()
     rows = bsem.entries(m)
     check("整表 40 项", len(rows), 40)
-    check("表尾 0x551AC", bsem.summary(m)["table_end"], 0x000551AC)
+    check("表结束于 flag 表表头 0x551B0", bsem.summary(m)["table_end"], 0x000551B0)
     check("表项对象指针与步长一致", bsem.summary(m)["mismatched"], [])
     check("id 17 的对象地址（读表）0x68000738", bsem.object_addr(m, 17), 0x68000738)
     check("id 17 的 id 字 = 17<<16", bsem.entry(m, 17)["idword"], 0x00110000)
     check("id 17 的计数 = 1", bsem.count(m, 17), 1)
     check("id 17 的等待队列自指（空）", bsem.waitq(m, 17), 0x68000738)
-    check("id 17 的背指 = 0x55030", bsem.backptr(m, 17), 0x00055030)
+    check("id 17 的背指 = 自己记录 0x55030", bsem.backptr(m, 17), 0x00055030)
     check("计数不为 1 的是 14/27/29",
           sorted(bsem.summary(m)["counts_not_one"].items()), [(14, 0), (27, 0), (29, 0)])
-    check("表项 +0 异常的 id",
-          [i for i, _ in bsem.summary(m)["odd_first_word"]], [1, 15, 28, 30])
-    check("初始计数规则 40/40 命中（下一项 +0 的高半字）",
+    check("非二值（上限 > 1）的是 14/27/29", bsem.summary(m)["not_binary"], [14, 27, 29])
+    check("上限：14=7 / 27=255 / 29=255",
+          (bsem.max_count(m, 14), bsem.max_count(m, 27), bsem.max_count(m, 29)), (7, 255, 255))
+    check("初始计数规则 40/40 命中（记录 +0xC 的高半字）",
           bsem.summary(m)["init_rule_fail"], [])
-    check("表尾补字 0x551AC = 0x00010001", m.bus.rd(bsem.TAIL_PAD, 4), 0x00010001)
-    check("id 14 的初始计数 = 0（下一项 15 的高半字）", bsem.initial_count(m, 14), 0)
-    check("id 15 的 +0 低半字 = 7（像是前一号的上限）",
-          m.bus.rd(bsem.table_addr(15), 4) & 0xFFFF, 7)
+    check("sem 40 的参数格 0x551AC = 0x00010001", m.bus.rd(bsem.TAIL_PAD, 4), 0x00010001)
+    check("id 14 的初始计数 = 0（记录 +0xC 高半字）", bsem.initial_count(m, 14), 0)
+    check("参数格地址 = 旧接口 table_addr(id+1)",
+          bsem.record_addr(14) + bsem.T_PARAM, bsem.table_addr(15))
     check("两个已知表头在 boot 后仍是 0（init 调用点 0x121xxx 从未执行）",
           [m.bus.rd(h, 4) for h in blist.OTHER_HEADS], [0, 0])
     check("显示队列没被 init（[head] = 0）", blist.first(m, blist.DISPLAY_QUEUE_HEAD), None)
@@ -2437,6 +2521,8 @@ def main():
     test_bdispchain()
     test_bsem()
     test_blist()
+    test_btable()
+    test_bqueue_slot()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
