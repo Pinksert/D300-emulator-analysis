@@ -151,3 +151,4 @@ ui-rebuild.png         （V26 重建图：左侧模拟屏 + 右侧三条证据�
 bexpeed.txt            cd emu && python probe/exp_bexpeed.py        （V27 B↔EXPEED 位串行解码：CS/CLK/DATA、LSB 先、整场 2 帧 = 读寄存器 6 + 40 位数据相位、8 次端口配置写、0 条写命令）
 bexpeed2.txt           cd emu && python probe/exp_bexpeed2.py       （V28 EXPEED 器件模型：4 个 CS 窗口 / 读 6 + 48 位 + 写 0x76=1 / 寄存器 6 存 0x9F5A321C、bit7 改路径 2632→2692）
                        ⚠️ bexpeed.txt 的「2 帧 / 0 条写命令」是 V27 抓包器 bug，V28 已修正
+bxstat.txt             cd emu && python probe/exp_bxstat.py         （V29：采样点 0x19EF5E / 7 组值全对 / 写 0x76 = [0x9F5A321E]+1 载荷 [1] / 整场只写 1 次 / 0x9F5A321E 被 0x120458 与 0x12DE08 读）\n
