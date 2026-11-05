@@ -2083,6 +2083,131 @@ def test_bqueue_slot():
           (bqueue.flag(m, 11), bqueue.flag(m, 49)), (0, 0))
 
 
+def test_bdesc():
+    """V36：描述符表 70 条、索引 = 槽位号、事件掩码、取首的返回值寄存器。"""
+    print("\n[42 描述符表与取首语义（V36）]")
+    from frbox import bdesc, blist, bqueue, brealos
+
+    check("表的地址 / 步长 / 条数",
+          (bdesc.DESC_TABLE, bdesc.DESC_STRIDE, bdesc.DESC_COUNT),
+          (0x001BC020, 0x10, 70))
+    check("条数 = 槽位数", bdesc.DESC_COUNT, bqueue.SLOT_COUNT)
+    check("字段偏移（状态/数值/方式/处理）",
+          (bdesc.F_STATUS, bdesc.F_VALUE, bdesc.F_MODE, bdesc.F_HANDLER),
+          (0x00, 0x04, 0x08, 0x0C))
+    check("最后一条与表尾",
+          (bdesc.entry_addr(69), bdesc.entry_addr(70)), (0x001BC470, 0x001BC480))
+
+    m = brealos.boot()
+    a = bdesc.audit(m)
+    check("长度 70", a["count"], 70)
+    check("有状态字节指针的 65 条", a["with_status"], 65)
+    check("没有状态字节指针的槽位", a["no_status"], [0, 15, 29, 63, 68])
+    check("状态字节指针互不重复", a["unique_status"], 65)
+    check("状态字节范围", (a["status_min"], a["status_max"]),
+          (0x9F58CE64, 0x9F58D4FB))
+    check("方式分布 41 / 24 / 5", a["modes"], {0: 41, 1: 24, 2: 5})
+    check("处理函数 44 个", a["handlers"], 44)
+    check("空处理 27 条", len(a["noop"]), 27)
+    check("空处理槽位表", a["noop"],
+          [0, 1, 2, 10, 13, 15, 16, 19, 27, 28, 34, 37, 40, 46, 47, 53,
+           54, 55, 56, 58, 61, 63, 64, 65, 67, 68, 69])
+    check("0x12E752 就是一条 ret（97 20）", a["noop_is_ret"], True)
+    check("形状异常为空", a["bad_shape"], [])
+    check("boot 后当前描述符指针是 0", a["current"], 0)
+    check("boot 后事件掩码是 0", a["mask"], 0)
+    check("current_index 无指针时返回 None", a["current_index"], None)
+
+    # 表在 ROM：写不进去
+    t = m.bus.rd(bdesc.entry_addr(1) + bdesc.F_VALUE, 4)
+    m.bus.wr(bdesc.entry_addr(1) + bdesc.F_VALUE, 4, 0xDEADBEEF)
+    check("表在 ROM（写被丢弃）", m.bus.rd(bdesc.entry_addr(1) + bdesc.F_VALUE, 4), t)
+
+    # 动态：按游标取描述符 + 事件掩码
+    RET, SCRATCH = 0x00407DC, 0x9F83F000
+    c = m.cpu
+
+    def call_fn(addr, r4=0):
+        m.bus.wr(SCRATCH - 4, 4, RET)
+        c.r[15] = SCRATCH - 4
+        c.r[4] = r4
+        c.i = 0
+        c.pc = addr
+        n = 0
+        while n < 4000 and not c.halted and c.pc != RET:
+            m.step(1)
+            n += 1
+        return n
+
+    def apply(slot):
+        for k, val in enumerate((0x55, slot, 0, slot)):
+            m.bus.wr(bqueue.CURSOR_BASE + k, 1, val)
+        call_fn(bdesc.APPLY_FN)
+        return bdesc.current(m), bdesc.event_mask(m)
+
+    got, mask = apply(1)
+    check("槽位 1 → 描述符 1", got, bdesc.entry_addr(1))
+    check("槽位 1 的掩码 = +4（3）", mask, 3)
+    got, mask = apply(5)
+    check("槽位 5 → 描述符 5", got, bdesc.entry_addr(5))
+    check("槽位 5 的掩码 = 33（0x21）", mask, 0x21)
+    got, mask = apply(2)
+    check("槽位 2（+8=0）的掩码 = 0", mask, 0)
+    check("槽位 0 是空标记：不取描述符、指针保持上一次的值",
+          apply(0)[0], bdesc.entry_addr(2))
+    check("槽位 0 的掩码保持哨兵", bdesc.event_mask(m), 0x55)
+    check("current_index 仍是上一次的 2", bdesc.current_index(m), 2)
+    check("expected_mask：+8=1 取 +4", bdesc.expected_mask(bdesc.entry(m, 5)), 33)
+    check("expected_mask：+8=0 取 0", bdesc.expected_mask(bdesc.entry(m, 2)), 0)
+    check("expected_mask：+8=2 返回 None", bdesc.expected_mask(bdesc.entry(m, 15)), None)
+
+    # 取首：返回值在 R4，读的是 +8
+    m2 = brealos.boot()
+    head = blist.DISPLAY_QUEUE_HEAD
+    node = bqueue.slot_addr(0)
+    m2.bus.wr(head, 4, node)
+    m2.bus.wr(head + 4, 4, node)
+    m2.bus.wr(node, 4, head)
+    m2.bus.wr(node + 4, 4, head)
+    m2.bus.wr(node + 8, 1, 0x5A)
+    m2.bus.wr(node + 9, 1, 0xA5)
+    reads = []
+    ow_rd = m2.bus.rd
+    def rd(a_, sz_, pc_=None):
+        if 0x9F58D000 <= a_ < 0x9F58DC00:
+            reads.append(a_)
+        return ow_rd(a_, sz_, pc_)
+    m2.bus.rd = rd
+    c2 = m2.cpu
+    m2.bus.wr(SCRATCH - 4, 4, RET)
+    c2.r[15] = SCRATCH - 4
+    c2.r[4] = 0
+    c2.i = 0
+    c2.pc = bqueue.PEEK
+    n = 0
+    while n < 3000 and not c2.halted and c2.pc != RET:
+        m2.step(1)
+        n += 1
+    m2.bus.rd = ow_rd
+    check("取首的返回值在 R4", c2.r[4], 0x5A)
+    check("取首没读 +9", node + 9 in reads, False)
+    check("取首读了 +8", node + 8 in reads, True)
+
+    # 空表：head 自指 → 返回 0
+    m2.bus.wr(head, 4, head)
+    m2.bus.wr(head + 4, 4, head)
+    m2.bus.wr(SCRATCH - 4, 4, RET)
+    c2.r[15] = SCRATCH - 4
+    c2.r[4] = 0
+    c2.i = 0
+    c2.pc = bqueue.PEEK
+    n = 0
+    while n < 3000 and not c2.halted and c2.pc != RET:
+        m2.step(1)
+        n += 1
+    check("空表返回 0", c2.r[4], 0)
+
+
 def test_bdisp():
     """V26：显示链路 —— 描述符表、绘制函数、文案池、重建图。"""
     print("\n[32 显示链路与重建图（V26）]")
@@ -2523,6 +2648,7 @@ def main():
     test_blist()
     test_btable()
     test_bqueue_slot()
+    test_bdesc()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
