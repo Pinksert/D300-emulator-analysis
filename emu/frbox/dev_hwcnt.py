@@ -32,9 +32,10 @@ class FreeRunCounter(Device):
 
     name = "hw-counter"
 
-    def __init__(self, machine=None, base=0x5C003000):
+    def __init__(self, machine=None, base=0x5C003000, rate=1):
         self.base = base
         self.count = 0
+        self.rate = rate          # 每个机器 tick 加多少（V24：可标定速率）
         self.shadow = {}          # 未建模寄存器的影子存储
         super().__init__(machine)
 
@@ -42,8 +43,18 @@ class FreeRunCounter(Device):
         self.count = 0
         self.shadow.clear()
 
+    def set_rate(self, rate):
+        """改「每个 tick 走几个字」—— 只影响延时长短，不改变程序路径。
+
+        V24 实测：rate = 1 / 4 / 16 三种取值下，任务 2 的开机装配
+        序列、覆盖集合、调用分布完全一致，只有总步数按比例缩短 ——
+        也就是说这道墙的语义只要求「会走字」，0x813 对应的真实频率
+        不影响固件的判断逻辑（只影响它等多久）。
+        """
+        self.rate = rate
+
     def tick(self, cycles):
-        self.count = (self.count + 1) & 0xFFFFFFFF
+        self.count = (self.count + self.rate) & 0xFFFFFFFF
 
     def read(self, off, size):
         # +0x34..+0x37：32 位计数器（大端字节序拼起来）。
