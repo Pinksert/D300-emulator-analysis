@@ -2000,6 +2000,34 @@ def test_bgate():
     check("-170 返回 E_NOSPT(-17)", r["err"], -17)
 
 
+def test_bdisp():
+    """V26：显示链路 —— 描述符表、绘制函数、文案池、重建图。"""
+    print("\n[32 显示链路与重建图（V26）]")
+    import os as _os
+    import tempfile
+    from frbox import bdisp
+
+    m = create("d300-b")
+    m.load()
+    s = bdisp.summary(m)
+    check("描述符表 70 条", s["count"], 70)
+    check("有文本的条目 65", s["nonempty"], 65)
+    check("样式 0/1/2 = 41/24/5", (s["type0"], s["type1"], s["type2"]), (41, 24, 5))
+    check("文本总字节 1644", s["text_bytes"], 1644)
+    check("绘制函数去重 44 个", s["unique_fn"], 44)
+    check("其中空实现 5 个", s["noop_fn"], 5)
+    check("0x12E752 是裸 ret", bdisp.fn_is_noop(m, 0x12E752), True)
+    check("PLAYBACK 前 5 条",
+          bdisp.menu_items(m, "PLAYBACK", 5),
+          ["Delete", "Playback folder", "Rotate tall", "Slide show", "Print set (DPOF)"])
+    check("SETUP 首条", bdisp.menu_items(m, "SETUP", 1), ["Format memory card"])
+    check("split_items 会把 OnOff 切成两条", bdisp.split_items(b"OnOff"), ["On", "Off"])
+
+    png = _os.path.join(tempfile.gettempdir(), "frbox_bdisp_selftest.png")
+    bdisp.render(png, m, facts={"expeed_w": 238, "expeed_r": 253, "sdram_run": 2126})
+    check("重建图 PNG 生成且大于 10KB", _os.path.getsize(png) > 10000, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2033,6 +2061,7 @@ def main():
     test_pendbits()
     test_bflag()
     test_bgate()
+    test_bdisp()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
