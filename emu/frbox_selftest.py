@@ -1863,6 +1863,89 @@ def test_pendbits():
           m.cov.visited(0x84900), False)
 
 
+def test_bflag():
+    """V24：B 段内核的门 —— 服务分发表、事件标志对象、wfmode 语义。"""
+    print("\n[30 服务分发表 + 事件标志语义（V24）]")
+    from frbox import brealos, bflag
+
+    m = brealos.boot()
+
+    # 1) 服务分发表：13 条静态常量 vs 动态抓 `call r12` 的目标
+    ok = all(brealos.service_handler(m, s) == h for s, h in brealos.SERVICES.items())
+    check("13 条服务号→处理函数与动态解一致", ok, True)
+    check("wai_flg 处理函数", brealos.SERVICES[brealos.SVC_WAI_FLG], 0x00041B0A)
+    check("set_flg 处理函数", brealos.SERVICES[brealos.SVC_SET_FLG], 0x00041A48)
+    check("slp_tsk 是空桩（B 段未实现）", brealos.SERVICES[brealos.SVC_SLP_TSK], 0x00040660)
+
+    # 2) flag 对象布局：对象 0x680008B8+(N-1)*0x10，表 0x551B0
+    check("flag 3 对象地址", bflag.object_addr(3), 0x680008D8)
+    check("对象表第 3 项指向同一对象", bflag.table_entry(m, 3), 0x680008D8)
+    check("对象表第 3 项 id 字", bflag.table_idword(m, 3), 0x00030000)
+    check("对象 +0x00 自指", m.bus.rd(0x680008D8, 4), 0x680008D8)
+    check("对象 +0x0C 背指表项 +4", m.bus.rd(0x680008E4, 4), 0x000551D4)
+
+    # 3) wfmode 语义：bit1=OR、bit0=清位（与教科书 μITRON 相反）
+    bflag.set_pattern(m, 3, 0)
+    r = bflag.set(m, 3, 0x300)
+    check("set_flg 返回 0", r["err"], 0)
+    check("set_flg 后位模式 0x300", bflag.pattern(m, 3), 0x300)
+
+    w = bflag.wait(m, 3, 0x300, bflag.WF_ANDW)
+    check("AND 成立：satisfied", w["satisfied"], True)
+    check("AND 成立：步数 102", w["steps"], 102)
+    check("受理码 0（不代表等到）", w["err"], 0)
+    check("AND 成立且不清位", bflag.pattern(m, 3), 0x300)
+
+    w = bflag.wait(m, 3, 0x900, bflag.WF_ANDW)
+    check("AND 不成立：satisfied", w["satisfied"], False)
+    check("AND 不成立：步数 150（兜底路径）", w["steps"], 150)
+
+    w = bflag.wait(m, 3, 0x900, bflag.WF_ORW)
+    check("OR 一位成立：satisfied", w["satisfied"], True)
+
+    w = bflag.wait(m, 3, 0x800, bflag.WF_ORW)
+    check("OR 全不成立：satisfied", w["satisfied"], False)
+
+    bflag.set_pattern(m, 3, 0x300)
+    w = bflag.wait(m, 3, 0x100, bflag.WF_CLR)
+    check("mode=1 满足后清位", bflag.pattern(m, 3), 0)
+    check("清位分支步数 104", w["steps"], 104)
+
+    # 4) 计数器速率：只改「等多久」，不改路径
+    m2 = create("d300-b")
+    m2.hw_counter_rate = 4
+    m2.load()
+    m2.reset()
+    check("hw_counter_rate 传到设备", m2.hw_counter.rate, 4)
+    m2.hw_counter.count = 0
+    m2.hw_counter.tick(0)
+    check("rate=4：一个 tick 走 4 个字", m2.hw_counter.count, 4)
+    m2.hw_counter.set_rate(1)
+    m2.hw_counter.tick(0)
+    check("set_rate(1)：一个 tick 走 1 个字", m2.hw_counter.count, 5)
+
+    # 5) 主循环结构：clr_flg(3,~0x200000) → 查门字节 → wai_flg(3,0x200000,2) → 跳回
+    GATE = 0x9F58D08F
+    check("门字节 boot 后为 0", m.bus.rd(GATE, 1), 0)
+    s = brealos.boot()
+    brealos.sta_tsk(s, 2)
+    s.raise_irq(0x3F)
+    s.run(max_steps=200000, spin_guard=False)
+    s.run(max_steps=400000, spin_guard=False)
+    check("装配完成后门字节仍是 0（没人写）", s.bus.rd(GATE, 1), 0)
+    n0 = len(s.flow.calls)
+    s.run(max_steps=50000, spin_guard=False)
+    win = s.flow.calls[n0:]
+    from collections import Counter as _C
+    svc = _C(x[2] for x in win)
+    check("主循环 5 万步：clr_flg 188 次", svc.get(-47), 188)
+    check("主循环 5 万步：wai_flg 188 次", svc.get(-46), 188)
+    check("clr_flg 调用点 0x12016C", _C(x[1] for x in win if x[2] == -47).most_common(1)[0][0], 0x12016C)
+    check("wai_flg 调用点 0x1203BE", _C(x[1] for x in win if x[2] == -46).most_common(1)[0][0], 0x1203BE)
+    w = [x for x in win if x[2] == -46][0]
+    check("wai_flg 等的是 flag 3 的 0x200000", (w[4], w[5], w[6]), (3, 0x200000, 2))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -1894,6 +1977,7 @@ def main():
     b = test_bboot()
     test_bwall(b)
     test_pendbits()
+    test_bflag()
     print(f"\n合计 {OK}/{TOTAL} 通过")
     return 0 if OK == TOTAL else 1
 
