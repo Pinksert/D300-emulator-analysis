@@ -2176,6 +2176,63 @@ def test_bgate2():
     check("覆盖比不置位多 7", m_yes.cov.words() - m_no.cov.words(), 7)
 
 
+def test_bqueue():
+    """V31：显示请求队列（head 0x9F58D500、节点 0x9F58D508+n*0x0C、提交 0x12E6F8）。"""
+    print("\n[36 显示请求队列（V31）]")
+    import os as _os
+    from frbox import brealos, bgate
+
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    rom = open(_os.path.join(_root, "data", "B3000111.bin"), "rb").read()
+
+    def count_imm(tgt):
+        pat = tgt.to_bytes(4, "big")
+        c, i = 0, rom.find(pat)
+        while i >= 0:
+            c += 1
+            i = rom.find(pat, i + 1)
+        return c
+
+    check("0x12E6F8 有 312 处 ldi 引用", count_imm(0x12E6F8), 312)
+    check("0x120458 没有任何立即数引用", count_imm(0x120458), 0)
+    check("11 号槽位 = 0x9F58D58C", 0x9F58D508 + 0x0B * 0x0C, 0x9F58D58C)
+
+    m = create("d300-b")
+    m.load()
+    m.reset()
+    m.enable_cov()
+    m.attach_flow()
+    n = 0
+    while not m.cpu.halted and n < 191520:
+        m.step(1)
+        n += 1
+    brealos.sta_tsk(m, 2)
+    m.raise_irq(0x3F)
+    m.run(max_steps=200000, spin_guard=False)
+    bgate.open_gate(m)
+    m.bus.wr(bgate.STATUS, 1, bgate.STATUS_WORK_READY)
+
+    entry = None
+    logs = []
+    _ow = m.bus.wr
+
+    def _w(a, sz, v, pc=None):
+        if a == 0x9F58D500 and (v & 0xFFFFFFFF):
+            logs.append(v & 0xFFFFFFFF)
+        return _ow(a, sz, v, pc)
+
+    m.bus.wr = _w
+    c = m.cpu
+    for _ in range(150000):
+        m.step(1)
+        if c.pc == 0x12E6F8 and entry is None:
+            entry = (c.r[4], c.r[5])
+    m.bus.wr = _ow
+    check("进入 0x12E6F8 时 r4 = 0x0B（槽位号）", entry[0], 0x0B)
+    check("r5 是 clr_flg 的残值 0xFFDFFFFF", entry[1], 0xFFDFFFFF)
+    check("挂链写进 head 的是节点地址 0x9F58D58C", logs[:1], [0x9F58D58C])
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2210,6 +2267,7 @@ def main():
     test_bflag()
     test_bgate()
     test_bgate2()
+    test_bqueue()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
