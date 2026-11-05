@@ -20,8 +20,9 @@ V27 只做了「听」（ExpeedTap：抓主机写出去的位解成字节）。�
 数据位摆好 —— 本模块在 `_on_clk_rise()` 里 pop 一位到 `_din`。
 
 边界（重要）：
-  * 寄存器内容**没有实证**。默认全 0；给的 5 字节读长是从「主机读一次
-    打了 40 个时钟」反推来的，不是器件手册数据。
+  * 寄存器内容**没有实证**。默认全 0。
+  * 读长默认 **5 字节**（= 40 位）。这个数字**没有器件手册依据**，取值也不影响
+    主机读到什么（V29 实测 5 与 6 结果一致）；它只决定器件愿意驱动多少位。
   * 只建模位串行本身，不建模 EXPEED 的时序要求（忙等、应答延迟）。
   * 写命令的数据相位没有样本（整场 0 条写命令），所以写路径只记账不生效。
 """
@@ -120,8 +121,11 @@ class ExpeedLink(Device):
 
     # ---------------------------------------------------------------- 位引擎
     def _begin_frame(self):
-        # 读命令之后的数据相位会落在**下一个 CS 窗口**里（实测：命令 16 位一帧、
-        # 数据 48 位一帧）。所以还有没发完的应答位时，不能把状态重置掉。
+        # 读命令之后的数据相位落在**下一个 CS 窗口**里（实测：命令 16 位一帧、
+        # 数据 48 位一帧）。所以：
+        #   * 还有没发完的应答位 → 继续发，不重置；
+        #   * 有待发的应答 → 这个窗口就是数据相位，开始驱动；
+        #   * 否则 → 命令相位。
         if self._tx:
             return
         self._shift = 0
@@ -148,19 +152,26 @@ class ExpeedLink(Device):
         b = self._shift & 0xFF
         self._shift = 0
         self._nbits = 0
-        if self._payload is not None:              # 写命令的载荷
+        if self._payload is not None:              # 写命令的载荷（实测只有 1 字节）
             self._payload.append(b)
             self.payload_bytes.append(b)
+            if self.cmds:
+                self.cmds[-1].setdefault("payload", []).append(b)
+            self._payload = None                   # 载荷收完
+            self._collect = False                  # 本窗口后面若还有时钟一律丢弃
             return
         if b & self.READ_FLAG:
             reg = b & 0x7F
             self.cmds.append({"kind": "read", "reg": reg, "raw": b})
             self._collect = False
+            # 立即入队。实测采样点在 0x19EF5E（整条时钟串里采 16 次），
+            # 采到的第 1 个字节 == 寄存器 6 的第 0 字节（V29：7 组值全对）。
+            # read_len 只决定器件驱动多少位，不影响主机读到什么（5/6 同结果）。
             self._tx = self._response_bits(reg)
         else:
-            self.cmds.append({"kind": "write", "reg": b, "raw": b})
-            self._payload = []
-            self._collect = False
+            self.cmds.append({"kind": "write", "reg": b, "raw": b, "payload": []})
+            self._payload = []          # 接着收载荷字节（写命令后 _collect 保持 True）
+            self._collect = True
 
     # ---------------------------------------------------------------- 视图
     def state(self):
@@ -170,6 +181,15 @@ class ExpeedLink(Device):
             "cmds": len(self.cmds),
             "bits_out": self.bits_out,
         }
+
+    def writes_to(self, reg):
+        """某个寄存器被写了几次、每次载荷是什么。"""
+        return [c.get("payload", []) for c in self.cmds
+                if c["kind"] == "write" and c["reg"] == reg]
+
+    def reads_of(self, reg):
+        """某个寄存器被读了几次。"""
+        return len([c for c in self.cmds if c["kind"] == "read" and c["reg"] == reg])
 
     def summary(self):
         return {
