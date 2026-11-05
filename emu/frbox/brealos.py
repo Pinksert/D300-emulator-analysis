@@ -56,10 +56,69 @@ F_STACK = 0x14
 # μITRON 服务号（负数，32 位补码进 R12 —— V17 的口径）
 SVC_STA_TSK = -23
 SVC_TER_TSK = -25
+SVC_CHG_PRI = -27
 SVC_WUP_TSK = -39
-SVC_SET_FLG = -48
 SVC_SLP_TSK = -41
 SVC_EXT_TSK = -45
+SVC_WAI_FLG = -46
+SVC_CLR_FLG = -47
+SVC_SET_FLG = -48
+SVC_WAI_SEM = -53
+SVC_SIG_SEM = -55
+SVC_RCV_MSG = -61
+SVC_SND_MSG = -63
+SVC_SET_TIM = -83
+
+# 服务号 → 处理函数（V24 动态解出：在陷阱派发点 0x406B2 抓 `call r12` 的目标，
+# 见 probe/exp_bflag.py A 段）。陷阱入口 0x40668 先把 R12 存起来、进内核态，
+# 在 0x406A6 装 0x40660、0x406AC 用「以 R12 为索引」的方式取跳转入口，
+# 最后 0x406B2 `call r12` —— 所以静态读表会被 0x40660 那段代码误导，
+# 只能动态抓。这张表是 1.11 的实测值：
+SERVICES = {
+    SVC_STA_TSK: 0x000414C8,     # 挂任务进就绪队列
+    SVC_TER_TSK: 0x000415A0,
+    SVC_CHG_PRI: 0x0004167C,
+    SVC_SLP_TSK: 0x00040660,     # 空桩 `ret:d`（B 段未实现，调用返回负值）
+    SVC_EXT_TSK: 0x00040664,     # 空桩
+    SVC_WAI_FLG: 0x00041B0A,     # 事件标志等待（语义见 bflag.py）
+    SVC_CLR_FLG: 0x00041AE2,
+    SVC_SET_FLG: 0x00041A48,
+    SVC_WAI_SEM: 0x00041902,
+    SVC_SIG_SEM: 0x000418C0,
+    SVC_RCV_MSG: 0x00041D38,
+    SVC_SND_MSG: 0x00041CDE,
+    SVC_SET_TIM: 0x00040EDE,
+}
+
+FLAG_TABLE = 0x000551B0     # 事件标志对象表（bflag.py 也用这个）
+
+DISPATCH_CALL_PC = 0x000406B2   # 陷阱里 `call r12` 的那条指令（抓目标用）
+
+
+def service_handler(m, svc, max_steps=20000):
+    """动态求「服务号 → 处理函数」：跑一次陷阱，在派发点抓 R12。
+
+    比读表可靠（0x40660 那块是代码不是表，静态读会读成垃圾）。
+    调用期间不改变机器状态以外的语义 —— 它真的执行一次系统调用，
+    只是参数全 0，多半返回参数错误（E_PAR/E_ID），不影响后续实验。
+    """
+    c = m.cpu
+    saved = (list(c.r), list(c.dr), c.ps, c.pc, c.delay, c.halted)
+    c.r[4] = c.r[5] = c.r[6] = c.r[7] = 0
+    c.r[12] = svc & 0xFFFFFFFF
+    c.pc = SAFE_PC
+    c.eit(TRAP_VEC)
+    tgt, n = None, 0
+    while n < max_steps and not c.halted:
+        m.step(1)               # 走机器时基（设备 tick 才不会被绕过，见 V20）
+        n += 1
+        if c.pc == DISPATCH_CALL_PC:
+            tgt = c.r[12]
+        if c.pc == SAFE_PC and n > 1:
+            break
+    c.r[:], c.dr[:], c.ps, c.pc, c.delay, c.halted = saved
+    return tgt
+
 
 
 def kernel_call(m, svc, r4=0, r5=0, r6=0, r7=0, r13=0, max_steps=80000):
