@@ -148,3 +148,4 @@ bflag.txt              cd emu && python probe/exp_bflag.py          （V24 B 段
 bgate.txt              cd emu && python probe/exp_bgate.py          （V25 B 段：门字节 0x9F58D08F 的 19 处引用与唯一写点 0x12F180、开门实验 +102 地址、内核 RAM 上界 0x6801DE84、任务停点表、服务 -170 未实现）
 bdisp.txt              cd emu && python probe/exp_bdisp.py          （V26 B 段显示链路：描述符表 70 条、绘制函数不写像素、EXPEED 整场 238 次写、SDRAM 最长连续 2,126 B、文案池分段、重建图）
 ui-rebuild.png         （V26 重建图：左侧模拟屏 + 右侧三条证据；像素为重建侧补绘，非固件渲染）
+bexpeed.txt            cd emu && python probe/exp_bexpeed.py        （V27 B↔EXPEED 位串行解码：CS/CLK/DATA、LSB 先、整场 2 帧 = 读寄存器 6 + 40 位数据相位、8 次端口配置写、0 条写命令）
