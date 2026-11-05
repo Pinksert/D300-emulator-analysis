@@ -2258,6 +2258,82 @@ def test_bdispchain():
     check("生产端 0x12E712 是 wai_sem 陷阱", has(0x12E712, "int", "u8=0x40"), True)
 
 
+def test_bsem():
+    """V33：信号量表与计数、循环双链表原语。"""
+    print("\n[38 信号量表与链表原语（V33）]")
+    from frbox import bsem, blist, brealos
+
+    check("信号量表 0x54F2C / 步长 0x10 / 40 项",
+          (bsem.SEM_TABLE, bsem.SEM_STRIDE, bsem.SEM_COUNT), (0x54F2C, 0x10, 40))
+    check("id 17 的表项地址 0x5502C", bsem.table_addr(17), 0x0005502C)
+    check("对象基址 0x68000638 / 步长 0x10",
+          (bsem.SEM_OBJ_BASE, bsem.SEM_OBJ_STRIDE), (0x68000638, 0x10))
+    check("id 17 的对象地址（算）0x68000738", bsem.object_addr_calc(17), 0x68000738)
+    check("计数三个写者",
+          (bsem.COUNT_WRITER_INIT, bsem.COUNT_WRITER_WAI, bsem.COUNT_WRITER_SIG),
+          (0x00040910, 0x0004193A, 0x000418F0))
+
+    m = brealos.boot()
+    rows = bsem.entries(m)
+    check("整表 40 项", len(rows), 40)
+    check("表尾 0x551AC", bsem.summary(m)["table_end"], 0x000551AC)
+    check("表项对象指针与步长一致", bsem.summary(m)["mismatched"], [])
+    check("id 17 的对象地址（读表）0x68000738", bsem.object_addr(m, 17), 0x68000738)
+    check("id 17 的 id 字 = 17<<16", bsem.entry(m, 17)["idword"], 0x00110000)
+    check("id 17 的计数 = 1", bsem.count(m, 17), 1)
+    check("id 17 的等待队列自指（空）", bsem.waitq(m, 17), 0x68000738)
+    check("id 17 的背指 = 0x55030", bsem.backptr(m, 17), 0x00055030)
+    check("计数不为 1 的是 14/27/29",
+          sorted(bsem.summary(m)["counts_not_one"].items()), [(14, 0), (27, 0), (29, 0)])
+    check("表项 +0 异常的 id",
+          [i for i, _ in bsem.summary(m)["odd_first_word"]], [1, 15, 28, 30])
+    check("初始计数规则 40/40 命中（下一项 +0 的高半字）",
+          bsem.summary(m)["init_rule_fail"], [])
+    check("表尾补字 0x551AC = 0x00010001", m.bus.rd(bsem.TAIL_PAD, 4), 0x00010001)
+    check("id 14 的初始计数 = 0（下一项 15 的高半字）", bsem.initial_count(m, 14), 0)
+    check("id 15 的 +0 低半字 = 7（像是前一号的上限）",
+          m.bus.rd(bsem.table_addr(15), 4) & 0xFFFF, 7)
+    check("两个已知表头在 boot 后仍是 0（init 调用点 0x121xxx 从未执行）",
+          [m.bus.rd(h, 4) for h in blist.OTHER_HEADS], [0, 0])
+    check("显示队列没被 init（[head] = 0）", blist.first(m, blist.DISPLAY_QUEUE_HEAD), None)
+
+    # --- 单元调用 ROM 里的两条原语 ---
+    HEADW, NODEW = 0x9F58D000, 0x9F58D100
+
+    def unit(pc, r4, r5, setup=None):
+        mm = create("d300-b")
+        mm.load()
+        mm.reset()
+        if setup:
+            setup(mm)
+        cc = mm.cpu
+        cc.r[4], cc.r[5] = r4, r5
+        cc.pc = pc
+        for _ in range(12):
+            mm.step(1)
+            if cc.halted:
+                break
+        return mm
+
+    m1 = unit(blist.LIST_INIT, HEADW, 0)
+    check("0x124F46 是 init：[head] = head", m1.bus.rd(HEADW, 4), HEADW)
+    check("0x124F46 是 init：[head+4] = head", m1.bus.rd(HEADW + 4, 4), HEADW)
+    check("init 后 is_empty", blist.is_empty(m1, HEADW), True)
+
+    m2 = unit(blist.LIST_INSERT, HEADW, NODEW, setup=lambda x: blist.init_model(x, HEADW))
+    check("insert 后 head->next = node", m2.bus.rd(HEADW, 4), NODEW)
+    check("insert 后 head->prev = node", m2.bus.rd(HEADW + 4, 4), NODEW)
+    check("insert 后 node->next = head（循环）", m2.bus.rd(NODEW, 4), HEADW)
+    check("insert 后 node->prev = head", m2.bus.rd(NODEW + 4, 4), HEADW)
+    check("walk 走一圈得到 1 个节点", blist.walk(m2, HEADW), [NODEW])
+
+    m3 = unit(blist.LIST_INIT, HEADW, 0)
+    blist.insert_model(m3, HEADW, 0x9F58D100)
+    blist.insert_model(m3, HEADW, 0x9F58D200)
+    check("头插顺序：最新在链首", blist.walk(m3, HEADW), [0x9F58D200, 0x9F58D100])
+    check("反向走一致", blist.back_walk(m3, HEADW), [0x9F58D100, 0x9F58D200])
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2294,6 +2370,7 @@ def main():
     test_bgate2()
     test_bqueue()
     test_bdispchain()
+    test_bsem()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
