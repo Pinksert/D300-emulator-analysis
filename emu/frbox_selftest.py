@@ -979,22 +979,29 @@ def test_waits():
     fl2 = m2.attach_flow()
     check("attach_flow 幂等", m2.attach_flow() is fl2, True)
     m2.boot_realos(1)
+    dev_boot = (m2.dispatch.requests, m2.dispatch.raised)
     _to_deadlock(m2)
     check("挂了流水也停在同一步", m2.step_count, m.step_count)
     check("挂了流水也停在同一个 PC", m2.cpu.pc, m.cpu.pc)
     check("流水记到 14 次服务调用", len(fl2.calls), 14)
     check("当前 TCB 换过 4 段", len(fl2.switches), 4)
-    check("第一次切换发生在 43,622 步", fl2.switches[0][0], 43622)
+    # V40 换基线：0x44 改成锁存器（重复置位只挂一条中断）之后，boot 里那 3 次写 1
+    # 从「挂 3 条」变成「挂 1 条」，多出来的两次服务不再排在前面 —— 首切从
+    # 43,622 提前到 43,540（−82）、首次 set_flg 从 44,073 到 43,991（−82）。
+    # 除这两个时间点，其余全部不变：4 次切换 / 14 次服务 / 死锁步 103,428 /
+    # 末 PC 1,041,680 / 总步 243,428。A/B 实测见 results/frbox/blive.txt 的 J 段。
+    check("boot 里 3 次写 1 只挂 1 条（锁存）", dev_boot, (3, 1))
+    check("第一次切换发生在 43,540 步", fl2.switches[0][0], 43540)
     check("流水里的第一个服务是任务 5 的 rcv_msg",
           fl2.names.get(fl2.calls[0][2]), "rcv_msg")
     first_set = [c for c in fl2.calls if c[2] == -48][0]
-    check("第一次 set_flg 在 44,073 步、由任务 1 发出",
-          (first_set[0], first_set[8]), (44073, st[1]["tcb"]))
+    check("第一次 set_flg 在 43,991 步、由任务 1 发出",
+          (first_set[0], first_set[8]), (43991, st[1]["tcb"]))
     check("最后一次调用是任务 1 的 wai_flg",
           (fl2.calls[-1][2], fl2.calls[-1][3 + 1]), (-46, 3))
     w = fl2.waits()
     check("waits() 里任务 1 要 0x2000", w[st[1]["tcb"]][3], 0x2000)
-    check("谁置过 flg2/0x4000 → 任务 1（44,073 步）",
+    check("谁置过 flg2/0x4000 → 任务 1（43,991 步）",
           [t for _, t in fl2.unblocked(2, 0x4000)], [st[1]["tcb"]])
     check("没人置过 flg3/0x2000", fl2.unblocked(3, 0x2000), [])
 
@@ -2937,6 +2944,120 @@ def test_bready():
     check("任务 5 那一位没置起", (bready.ready_map(m3) >> 28) & 1, 0)
 
 
+def test_blive():
+    """V40：0x44 是锁存器、ICR 0x46F 的推迟机制、整机自跑。"""
+    print("\n[46 整机自跑（V40）]")
+    from frbox import blive
+    from frbox.machine import create
+
+    # ---- boot 一遍，同时记 ICR 与 0x44 的写
+    m = create("d300-b", dispatch=True)
+    m.load(); m.reset()
+    c = m.cpu
+    icr_writes = []
+    req = []
+    base_wr = m.bus.wr
+
+    def spy(a, n, v, pc=0):
+        if blive.ICR_BASE <= a < blive.ICR_BASE + blive.ICR_COUNT:
+            icr_writes.append((pc, a))
+        if a == blive.DISPATCH_REG and (v & 0xFF):
+            req.append((pc, m.bus.rd(blive.DISPATCH_ICR, 1), c.i))
+        return base_wr(a, n, v, pc)
+
+    m.bus.wr = spy
+    n = 0
+    while not c.halted and n < blive.BOOT_STEPS:
+        m.step(1)
+        n += 1
+    m.bus.wr = base_wr
+
+    check("boot 步数 = 191520", m.step_count, 191520)
+    check("boot 后停在空闲任务", blive.name(m), "空闲")
+    check("boot 后就绪位图 = 0x80000000", m.bus.rd(blive.READY_MAP, 4), 0x80000000)
+    check("boot 末 ICR 0x46F = 0x1E（最后一次服务入口写的）", blive.icr(m), 0x1E)
+    check("boot 末待决派发 = 1 条（重叠置位不再挂）", blive.pending_dispatch(m), 1)
+    check("ICR 数组 48 条", blive.ICR_COUNT, 0x30)
+    check("0x46F = 0x440 + (0x3F − 0x10)", blive.ICR_BASE + (blive.DISPATCH_VEC - 0x10),
+          blive.DISPATCH_ICR)
+
+    # ---- 0x44 锁存器的计数
+    st = m.dispatch.state()
+    check("boot 里写 0x44=1 共 2 次", st["请求（写 1）"], 2)
+    check("其中真正挂上中断 1 次（第二次重叠置位）", st["挂中断"], 1)
+    check("boot 里没有写 0", st["撤销（写 0）"], 0)
+    check("0x44 被读 2 次（写后哑读）", st["被读"], 2)
+    check("boot 末锁存位 = 1", st["锁存位"], 1)
+    check("没撤销过任何待决项", st.get("撤掉的待决项", 0), 0)
+    check("两次写都在 sta_tsk 尾部 0x41886", sorted({pc for pc, _i, _f in req}), [0x41886])
+    check("两次写时 ICR 都是 0x10", sorted({i for _p, i, _f in req}), [0x10])
+    check("两次写都在中断关闭状态下（i=0）", sorted({f for _p, _i, f in req}), [0])
+
+    # ---- ICR init 循环不写 0x46F
+    loop = sorted({a for pc, a in icr_writes if 0x120900 <= pc < 0x121000})
+    allw = sorted({a for pc, a in icr_writes})
+    check("task-2 的 init 循环写 46 条 ICR", len(loop), 46)
+    check("循环覆盖 0x440..0x46E（跳过 0x448）", (loop[0], loop[-1], 0x448 in loop),
+          (0x440, 0x46E, False))
+    check("init 阶段写点覆盖 48 个地址（含 0x46F）", len(allw), 48)
+    check("0x448 由 0x40456 单独补", (0x40456, 0x448) in icr_writes, True)
+    check("0x46F 不在 init 循环里", blive.DISPATCH_ICR in loop, False)
+
+    # ---- 0x46F 的三个写点（静态）
+    def ins(a):
+        return c.fetch(a)
+
+    mn, _b, v, _sz, _w = ins(0x40866)
+    check("0x40866 = ldi:20 #0x440", (mn, v["i20"]), ("ldi:20", 0x440))
+    mn, _b, v, _sz, _w = ins(0x4086A)
+    check("0x4086A = ldi:8 #0x10", (mn, v["i8"]), ("ldi:8", 0x10))
+    mn, _b, v, _sz, _w = ins(0x4086C)
+    check("0x4086C = stb disp 0x2F", (mn, v["disp8"]), ("stb", 0x2F))
+    mn, _b, v, _sz, _w = ins(0x4069A)
+    check("服务入口 ldi:8 #0x1E", (mn, v["i8"]), ("ldi:8", 0x1E))
+    mn, _b, v, _sz, _w = ins(0x4069C)
+    check("0x4069C = stb disp 0x2F（ICR ← 0x1E）", (mn, v["disp8"]), ("stb", 0x2F))
+    mn, _b, v, _sz, _w = ins(0x406D2)
+    check("服务出口 ldi:8 #0x10", (mn, v["i8"]), ("ldi:8", 0x10))
+    mn, _b, v, _sz, _w = ins(0x406D4)
+    check("0x406D4 = stb disp 0x2F（ICR ← 0x10）", (mn, v["disp8"]), ("stb", 0x2F))
+
+    # ---- 整机自跑 12 万步
+    m = blive.boot()
+    res = blive.run(m, steps=120000)
+    cnt = res["counts"]
+    check("12 万步：请求 18 次", cnt["REQ"], 18)
+    check("12 万步：撤销 17 次", cnt["ACK"], 17)
+    check("12 万步：派发 17 次", cnt["DISP"], 17)
+    check("12 万步：换手 6 次", cnt["SW"], 6)
+    check("第一次派发在 191520 步（boot 末那条遗留请求）",
+          res["events"][0][0], 191520)
+    check("第一次换手 191588 → 任务 2", res["switches"][0], (191588, 0x68000168))
+    idx = {r["tcb"] for r in __import__("frbox.brealos", fromlist=["x"]).records(m, include_idle=True)}
+    check("换手目标都在任务表里", all(t in idx for _s, t in res["switches"]), True)
+    check("入口执行过的任务 = 2,4,5", res["tasks"], [2, 4, 5])
+    check("显示初始化在 294,388 步执行", res["display_init"], 294388)
+    check("显示初始化后哨兵自指", m.bus.rd(blive.DISPLAY_MARK, 4), blive.DISPLAY_MARK)
+    check("槽位 +8 = 0..4", [m.bus.rd(blive.SLOT_BASE + 8 + i * 12, 1) for i in range(5)],
+          [0, 1, 2, 3, 4])
+    check("初始化标志 0x9F58DA85 = 1", m.bus.rd(0x9F58DA85, 1), 1)
+    check("派发后位图不再只有空闲", res["ready_map"] != 0x80000000, True)
+
+    # ---- 推迟铁律
+    rok, rbad, dok, dbad = res["relay"]
+    check("REQ 里 ICR=0x1E 且 ILM=0x1E 的条数", rok, 18)
+    check("REQ 不符合铁律的条数", rbad, 0)
+    check("DISP 里 ILM=0x1F 的条数", dok, 17)
+    check("DISP 不符合铁律的条数", dbad, 0)
+
+    # ---- 设备计数与事件一致
+    st = m.dispatch.state()
+    check("撤销次数 = ACK 事件数", st["撤销（写 0）"], cnt["ACK"])
+    check("窗口内写 1 次数 = REQ 事件数", st["请求（写 1）"] - 2, cnt["REQ"])
+    check("审计里三项都在", len(blive.audit(m, res)) >= 9, True)
+    check("describe 里有「当前=」", "当前=" in blive.describe(m), True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2981,6 +3102,7 @@ def main():
     test_bhandler()
     test_binit()
     test_bready()
+    test_blive()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
