@@ -109,6 +109,16 @@ class Machine:
     ctrl50_status_cfg = 0     # 反事实实验用：+04 的 bit1/bit6（默认 0 = 空闲）
     ctrl50_status_cmd = 0     # 反事实实验用：+05 的 bit6/bit7（默认 0 = 无应答）
     ctrl50_status_rdy = 0     # 反事实实验用：+01 的 bit0（默认 0 = 未置起；置 1 多走一条清位）
+    # 0x40000000 窗口（V46）：0 = 不建。建了之后整块是「可回读的寄存器面」，
+    # +0xF8 的两次读-改-写能叠出 0x3B3B，批量下载口（+0x10200）的字节留档。
+    # 见 dev_ctrl40.py。
+    ctrl40_base = 0
+    ctrl40_size = None        # None = 用设备默认的 0x1000000
+    # 0x60000000 / 0x61000000 双通道控制器（V46）：基址元组，空 = 不建。
+    # 每通道 0x4000 寄存器面，+0x100 整字节由器件驱动，**bit2–3 是状态字段，
+    # == 3 才算就绪**（默认 0 = 未就绪，与 V44 未映射读回 0 等价）。见 dev_dual60.py。
+    dual60_bases = ()
+    dual60_status = 0         # 反事实实验用：+0x100 整字节（0x0C ⇒ 字段 3 = 就绪）
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
@@ -219,6 +229,18 @@ class Machine:
                 status_cmd=self.ctrl50_status_cmd,
                 status_rdy=self.ctrl50_status_rdy)
             self.devices.append(self.ctrl50)
+        self.ctrl40 = None
+        if self.ctrl40_base:
+            from .dev_ctrl40 import attach as attach_ctrl40
+            self.ctrl40 = attach_ctrl40(self, base=self.ctrl40_base,
+                                        size=self.ctrl40_size)
+            self.devices.append(self.ctrl40)
+        self.dual60 = []
+        if self.dual60_bases:
+            from .dev_dual60 import attach as attach_dual60
+            self.dual60 = attach_dual60(self, bases=self.dual60_bases,
+                                        status=self.dual60_status)
+            # attach 内部已 append 到 self.devices
         for base, size, name in self.extra_ram:
             self.bus.map_ram(base, size, name)
         self.dp.attach(0x10, 0x18, self.timer)
@@ -942,6 +964,19 @@ class D300B(Machine):
     # 固件 `btstl` 测它、置起就 `bandl` 清掉（一次性的检测，不是轮询循环）——
     # 置 1 只会多走一条指令，让 boot 从 191,520 步变成 191,521 步到空闲，路径不变。
     ctrl50_base = 0x50000000
+    # 0x40000000 窗口（V46）：1650 笔写 / 4 次读。拆开是「寄存器实例
+    # （0x40040000 / 0x40040800 / 0x40040900，值 0x280/0x1E0/0x140 这类时序参数；
+    # 另有 0x4000D000 / 0x401C0000 各 2 笔）
+    # + 一个必须可读的 16 位寄存器 +0xF8（两次读-改-写叠出 0x3B3B / 0x1D1D）
+    # + 批量下载口 +0x10200（6 张 16 位曲线表、1541 项 = 3082 字节，逐字节来自 ROM）」。
+    # 建模后：写进去的值能读回、RMW 叠得对、下载口字节留档；读侧口径不变（没人读结果）。
+    ctrl40_base = 0x40000000
+    # 0x60000000 / 0x61000000 双通道控制器（V46）：16 笔写 / 5 次读，两个通道跑
+    # 同一段代码（0x1A36BC 初始化、0x1A36DA 查状态）。+0x100 的 **bit2–3 是状态
+    # 字段**（`lsl2 #12` + `lsr2 #14` 取出来、`cmp #3`），调用点 0x15CB76 拿返回值
+    # 做 cmp/bne —— 这是 V45 之后**唯一还会影响控制流的未映射读**。
+    # 基址来自 0x8400 描述符表（任务 2 在开机装配里填）。
+    dual60_bases = (0x60000000, 0x61000000)
     # 依据（V43 把「未映射访问审计」从头做了一遍，见 results/frbox/bpool.txt）：
     #   * 写入 0x9F58C000 起 1307 次、0x9F5AA000–0x9F5AF000 五页共 5120 次（步长 4）
     #   * 早先静态分析里串口 ISR 读 0x9F58DA86、EXT9 ISR 读 0x9F58DA85
