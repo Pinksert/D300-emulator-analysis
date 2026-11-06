@@ -3141,6 +3141,96 @@ def test_bfill():
     check("region_of(0x1500) = 低区 RAM", bfill.region_of(0x1500), "低区 RAM")
 
 
+def test_bmove():
+    """V42：0x1356A0 是 memmove 的存储端；基址为 0 → 把 ICR 整片搬掉。"""
+    print("\n[48 整片搬运与空指针反事实（V42）]")
+    import fr_dis
+    from fr_emu import TABLE
+    from frbox import bmove, blive
+
+    # ---- A. 五条关键指令的真身（目的/源基址都在别的寄存器里）
+    m = blive.boot()
+    rom, base = m.bus.rom, m.bus.rom_base
+
+    def txt(pc):
+        return " ".join(fr_dis.disasm_addr(rom, pc, pc + 2, base))
+
+    def mn(pc):
+        r = TABLE.decode(rom, pc - base)
+        return r[0] if r else None
+
+    check("0x135690 是 add r9,r0（r0 ← r9+0x80）", "r9, r0" in txt(0x135690), True)
+    check("0x135694 是 add r8,r1（r1 ← r8+0x4C）", "r8, r1" in txt(0x135694), True)
+    check("0x13569C 是 ld（取源）", mn(0x13569C), "ld")
+    check("0x13569E 是 bgt:d（收尾）", mn(0x13569E), "bgt:d")
+    check("0x1356A0 是 st（存目的）", mn(0x1356A0), "st")
+    check("位移 DELTA = 0x34（0x80-0x4C）", bmove.DELTA, 0x34)
+    check("长度 LEN = 0x2188 / 每次 2,147 笔", (bmove.LEN, bmove.WORDS), (0x2188, 2147))
+    check("空指针判定点 0x135608 / 赋值点 0x135624",
+          ["0x%X" % v for v in (bmove.NULL_TEST_PC, bmove.DST_ASSIGN_PC)],
+          ["0x135608", "0x135624"])
+
+    # ---- B/C. 700,000 步：11 次搬运的形状 + 逐笔对源
+    m = blive.boot()
+    sw = bmove.ShiftWatch(m).attach()
+    inner = m.bus.wr
+    pairs = []
+
+    def spy(a, n, v, pc=0):
+        if pc == bmove.SHIFT_ST and len(pairs) < bmove.WORDS:
+            pairs.append((v & 0xFFFFFFFF, m.bus.rd(a - bmove.DELTA, 4) & 0xFFFFFFFF))
+        return inner(a, n, v, pc)
+
+    m.bus.wr = spy
+    res = blive.run(m, steps=700000)
+    m.bus.wr = inner
+    sw.detach()
+
+    check("0x1356A0 共 23,617 笔存储", len(sw.stores), 23617)
+    s = sw.summary()
+    check("切成 11 次搬运", s["calls"], 11)
+    check("每段 2,147 笔", s["words"], [2147])
+    check("dst 恒 0x2208→0x0080",
+          ["0x%X→0x%X" % t for t in s["dst"]], ["0x2208→0x80"])
+    check("src 恒 0x21D4→0x004C",
+          ["0x%X→0x%X" % t for t in s["src"]], ["0x21D4→0x4C"])
+    check("11 次全部 r8 = r9 = 0", s["bases"], {(0, 0): 11})
+    check("空基址搬运 11 / 11", s["null"], 11)
+    check("落 ICR 块 176 笔", s["regions"].get("ICR 块"), 176)
+    check("落 direct page 352 笔", s["regions"].get("direct page"), 352)
+    check("最早一次在步 506,201", sw.calls()[0]["start"], 506201)
+    check("第一次搬运 2,147 笔逐笔等于源 [dst-0x34]",
+          sum(1 for v, src in pairs if v == src), 2147)
+    check("第一次搬运里有非 0 字（不是填 0）",
+          sum(1 for v, _src in pairs if v) > 0, True)
+
+    # ---- E. 静态：谁写 r8 / r9
+    w9 = [pc for pc, _t in bmove.writes_reg(rom, base, bmove.FUNC_LO, bmove.FUNC_HI, "r9")]
+    w8 = [pc for pc, _t in bmove.writes_reg(rom, base, bmove.FUNC_LO, bmove.FUNC_HI, "r8")]
+    check("函数体内写 r9 的 4 条",
+          ["0x%X" % v for v in w9],
+          ["0x13534E", "0x1354F4", "0x1355B2", "0x135624"])
+    check("函数体内写 r8 的 3 条",
+          ["0x%X" % v for v in w8], ["0x13531E", "0x1353A2", "0x13556C"])
+    check("提到 r9 的 30 条",
+          len(bmove.scan_reg(rom, base, bmove.FUNC_LO, bmove.FUNC_HI, "r9")), 30)
+    check("提到 r8 的 55 条",
+          len(bmove.scan_reg(rom, base, bmove.FUNC_LO, bmove.FUNC_HI, "r8")), 55)
+
+    # ---- G. 反事实：只改 0x135624 的 r4
+    m2 = blive.boot()
+    fx = bmove.fix_dst(m2, ptr=0x2200).attach()
+    res2 = blive.run(m2, steps=700000)
+    fx.detach()
+    check("反事实只命中一次", fx.hits, 1)
+    check("反事实：换手 24 → 37", len(res2["switches"]), 37)
+    check("反事实：收尾回到空闲 0x407DC", "0x%X" % m2.cpu.pc, "0x407DC")
+    check("反事实：ICR 0x46F 末值 0x10", "0x%02X" % (m2.bus.rd(0x46F, 1) & 0xFF), "0x10")
+    check("反事实：17 个任务入口", len(res2["tasks"]), 17)
+    check("原样：24 次换手（对照）", len(res["switches"]), 24)
+    check("原样：ICR 0x46F 末值 0x00", m.bus.rd(0x46F, 1) & 0xFF, 0x00)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3187,6 +3277,7 @@ def main():
     test_bready()
     test_blive()
     test_bfill()
+    test_bmove()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
