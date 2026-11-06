@@ -36,6 +36,26 @@ def check(name, got, want):
     print(f"  {'OK ' if good else 'BAD'}  {name:<40} 实测={got!r}  期望={want!r}")
 
 
+def under_sdram_1mb(fn):
+    """把 `ram-sdram` 临时装回 1MB（到 0x9F680000 截断）再跑。
+
+    V43 把默认铺到任务栈区之前（2.5MB）之后，池地址 `0x9F69xxxx` 才真的
+    可读写 —— 于是任务不再走「取不到缓冲区也照搬」那条路，V41/V42 记下的
+    memmove / 填充 / 停摆数字在新口径下**不可复现**。
+
+    这些数字是「地址未映射时会发生什么」的历史观测，仍有价值，所以用这个
+    装饰器把它们固定在旧口径下跑，别当成新默认行为。
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def wrap(*a, **k):
+        from frbox import bpool
+        with bpool.sdram_override(bpool.SD_SIZE_V42):
+            return fn(*a, **k)
+    return wrap
+
+
 def code_for(mnem):
     """在编码空间里找一个助记符对应的机器码（用于构造测试指令）"""
     for w in range(0x10000):
@@ -3058,8 +3078,14 @@ def test_blive():
     check("describe 里有「当前=」", "当前=" in blive.describe(m), True)
 
 
+@under_sdram_1mb
 def test_bfill():
-    """V41：0x1356A0 是整片填充；反事实、任务启动普查、只写标志。"""
+    """V41：0x1356A0 是整片填充；反事实、任务启动普查、只写标志。
+
+    ⚠️ 本组数字是 **1MB 口径**下的观测（见 `under_sdram_1mb`）。V43 把
+    `ram-sdram` 铺到 2.5MB 之后池能读写了，任务不再走「取不到也照搬」这条路，
+    这 11 次填充在新默认口径下一次都不会发生。
+    """
     print("\n[47 整片填充与反事实（V41）]")
     from frbox import bfill, blive
 
@@ -3141,8 +3167,13 @@ def test_bfill():
     check("region_of(0x1500) = 低区 RAM", bfill.region_of(0x1500), "低区 RAM")
 
 
+@under_sdram_1mb
 def test_bmove():
-    """V42：0x1356A0 是 memmove 的存储端；基址为 0 → 把 ICR 整片搬掉。"""
+    """V42：0x1356A0 是 memmove 的存储端；基址为 0 → 把 ICR 整片搬掉。
+
+    ⚠️ 同样是 **1MB 口径**下的观测（见 `under_sdram_1mb`）。起因是
+    「池地址未映射 → 取到 NULL」，V43 修好映射后整条链不再触发。
+    """
     print("\n[48 整片搬运与空指针反事实（V42）]")
     import fr_dis
     from fr_emu import TABLE
@@ -3231,6 +3262,101 @@ def test_bmove():
     check("原样：ICR 0x46F 末值 0x00", m.bus.rd(0x46F, 1) & 0xFF, 0x00)
 
 
+def test_bpool():
+    """V43：池地址没映射 → 取到 NULL → 搬 0 地址 → 踩 ICR → 停摆。"""
+    print("\n[49 缓冲池与地址映射（V43）]")
+    from frbox import blive, bpool
+
+    # ---- A. 常量与地址（两档口径都要对得上）
+    check("池头四个地址", ["0x%X" % a for a in bpool.POOL_ALL],
+          ["0x9F69CE98", "0x9F69CEB4", "0x9F69CEE4", "0x9F69CEFC"])
+    check("三个节点地址", ["0x%X" % a for a in bpool.NODES],
+          ["0x9F696844", "0x9F698A60", "0x9F69AC7C"])
+    check("POOL_HI = 0x9F69CF04", bpool.POOL_HI, 0x9F69CF04)
+    check("SDRAM 基址 / 任务栈基址", (bpool.SD_BASE, bpool.TASKSTACK_BASE),
+          (0x9F580000, 0x9F800000))
+    check("旧口径 1MB / 新口径 2.5MB",
+          (bpool.SD_SIZE_V42, bpool.SD_SIZE_V43), (0x00100000, 0x00280000))
+    check("常量 NULL_ASSIGN_PC", bpool.NULL_ASSIGN_PC, 0x12216E)
+    check("常量 RET_MOV_PC", bpool.RET_MOV_PC, 0x122190)
+    check("常量 ALLOC_NODE / ALLOC_BUF",
+          (bpool.ALLOC_NODE, bpool.ALLOC_BUF), (0x122064, 0x122D32))
+    check("WATCH 表 7 项且含两端分配器",
+          (len(bpool.WATCH), bpool.WATCH[bpool.ALLOC_BUF]), (7, "取缓冲区"))
+
+    # ---- B. 1MB 口径：池地址在总线外面
+    def run_cfg(size, steps=700000):
+        with bpool.sdram_override(size):
+            m = blive.boot()
+            pw = bpool.PoolWatch(m).attach()
+            nw = bpool.NullWatch(m).attach()
+            c, st = m.cpu, m.cpu.step
+            cnt = {a: 0 for a in bpool.WATCH}
+
+            def spy():
+                if c.pc in cnt:
+                    cnt[c.pc] += 1
+                return st()
+
+            c.step = spy
+            res = blive.run(m, steps=steps)
+            c.step = st
+            nw.detach()
+            pw.detach()
+        return m, pw, nw, cnt, res
+
+    m1, pw1, nw1, cnt1, res1 = run_cfg(bpool.SD_SIZE_V42)
+    check("1MB：0x9F69CE98 未映射", bpool.mapped(m1, bpool.POOL_COUNT), False)
+    reg, back = bpool.roundtrip(m1, bpool.POOL_COUNT)
+    check("1MB：写 0xA1B2C3D4 读回 0", (reg, back), (None, 0))
+    check("1MB：池四个地址全在总线外", bpool.pool_mapped(m1), False)
+    check("1MB：ram-sdram 尺寸", bpool.sdram(m1), (0x9F580000, 0x00100000))
+
+    # ---- C. 1MB 口径下的后果（V41/V42 那条链）
+    check("1MB：池照样被初始化 3 次", len(pw1.init_at()), 3)
+    check("1MB：初始化步 415,345 / 415,366 / 419,098",
+          pw1.init_at(), [415345, 415366, 419098])
+    check("1MB：串进池的节点 3 个",
+          ["0x%X" % v for v in pw1.nodes_linked()],
+          ["0x9F696844", "0x9F698A60", "0x9F69AC7C"])
+    tr = pw1.count_track()
+    check("1MB：计数第一次被写是 3", (tr[0][0], tr[0][2]), (419230, 3))
+    check("1MB：读回计数恒 0（写没落地）", bpool.count_at(m1), 0)
+    check("1MB：NULL 发生 1 次", len(nw1.nulls()), 1)
+    check("1MB：NULL 在步 497,969", nw1.first_null()[0], 497969)
+    check("1MB：NULL 时 r4 = 0", nw1.first_null()[1], 0)
+    check("1MB：取节点 1 次 / 取缓冲区 11 次",
+          (cnt1[bpool.ALLOC_NODE], cnt1[bpool.ALLOC_BUF]), (1, 11))
+    check("1MB：memmove 起点 11 次", cnt1[bpool.MEM_MOVE_PC], 11)
+    check("1MB：换手 24 次", len(res1["switches"]), 24)
+    check("1MB：收尾卡在拷贝环 0x137968", m1.cpu.pc, 0x137968)
+    check("1MB：跑过入口 9 个", res1["tasks"],
+          [2, 3, 4, 5, 6, 7, 9, 10, 11])
+
+    # ---- D. 2.5MB 口径（V43 起默认）：池活了
+    m2, pw2, nw2, cnt2, res2 = run_cfg(bpool.SD_SIZE_V43)
+    check("2.5MB：0x9F69CE98 已映射", bpool.mapped(m2, bpool.POOL_COUNT), True)
+    check("2.5MB：结束计数读回 3", bpool.count_at(m2), 3)
+    reg, back = bpool.roundtrip(m2, bpool.POOL_COUNT)
+    check("2.5MB：写 0xA1B2C3D4 能读回",
+          (reg.name if reg else None, back), ("ram-sdram", 0xA1B2C3D4))
+    check("2.5MB：池四个地址全在总线里", bpool.pool_mapped(m2), True)
+    check("2.5MB：ram-sdram 铺到任务栈区之前",
+          bpool.sdram(m2), (0x9F580000, 0x00280000))
+    check("2.5MB：SDRAM 上界 == 任务栈基址", bpool.SD_BASE + 0x00280000,
+          bpool.TASKSTACK_BASE)
+    check("2.5MB：初始化步不变", pw2.init_at(), [415345, 415366, 419098])
+    check("2.5MB：节点照样 3 个", len(pw2.nodes_linked()), 3)
+    check("2.5MB：NULL 一次都不发生", len(nw2.hits), 0)
+    check("2.5MB：取缓冲区不再被调到", cnt2[bpool.ALLOC_BUF], 0)
+    check("2.5MB：memmove 一次都不发生", cnt2[bpool.MEM_MOVE_PC], 0)
+    check("2.5MB：换手 34 次", len(res2["switches"]), 34)
+    check("2.5MB：收尾回到空闲任务 0x407DC", m2.cpu.pc, 0x407DC)
+    check("2.5MB：跑过入口 17 个", res2["tasks"],
+          [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 16, 17, 20, 21, 26, 27, 28])
+    check("2.5MB：ICR 0x46F 保持 0x10", m2.bus.rd(0x46F, 1) & 0xFF, 0x10)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3278,6 +3404,7 @@ def main():
     test_blive()
     test_bfill()
     test_bmove()
+    test_bpool()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
