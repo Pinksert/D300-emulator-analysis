@@ -3463,17 +3463,20 @@ def test_lists():
                 if lists.NODES_B_BASE <= r[0] <= lists.NODES_B_END]
         check("无节点区：节点区未映射写 6001 笔（含哨兵那笔）", len(recs), 6001)
         # V45：0x50000000 建成器件后，这 80 笔写不再记未映射 → 7934-80 / 3013-7。
-        # （-7 就是那 7 个原本「未映射读回 0」的窗口地址：+01/+04/+05/+06 等）
-        check("无节点区：未映射写总数 7854", len(m2.bus.unmapped_writes), 7854)
-        check("无节点区：未映射读 3006 个地址", len(m2.bus.unmapped_reads), 3006)
+        # V46：0x40000000（1,730 写 / 2 读地址）与 0x60·0x61（11 写 / 3 读地址）
+        # 也建成器件 → 7854-1730-11 = 6113、3006-2-3 = 3001。
+        check("无节点区：未映射写总数 6113", len(m2.bus.unmapped_writes), 6113)
+        check("无节点区：未映射读 3001 个地址", len(m2.bus.unmapped_reads), 3001)
         check("无节点区：换手 34（与有节点区相同）", len(res2["switches"]), 34)
         check("无节点区：末 PC 0x407DC", m2.cpu.pc, 0x407DC)
     finally:
         machine.D300B.extra_ram = base
 
     # ---- F. 默认口径：补上映映后剩下的全在外设窗口
-    check("默认：未映射写降到 1853", len(m.bus.unmapped_writes), 1853)
-    check("默认：未映射读降到 5", len(m.bus.unmapped_reads), 5)
+    # V46：读侧清零（V45 是 5 个地址 / 9 次）—— 0x40 的 2 个 RMW 地址与
+    # 0x60/0x61 的 3 个状态地址都挂上了器件。写侧只剩两个「只写 0 读」窗口。
+    check("默认：未映射写降到 112", len(m.bus.unmapped_writes), 112)
+    check("默认：未映射读清零（0 个地址）", len(m.bus.unmapped_reads), 0)
     per = {}
     for a, sz, v, pc in m.bus.unmapped_writes:
         for name, lo, hi, _ in lists.PERIPHERAL_WINDOWS:
@@ -3481,8 +3484,7 @@ def test_lists():
                 per[name] = per.get(name, 0) + 1
                 break
     check("默认：剩余未映射写按窗口分组",
-          per, {"0x40xxxxxx": 1730, "0x6Fxxxxxx": 108,
-                "0x60/0x61": 11, "0x5C0020xx": 4})
+          per, {"0x6Fxxxxxx": 108, "0x5C0020xx": 4})
     check("默认：五块窗口合计 = 未映射写总数",
           sum(per.values()), len(m.bus.unmapped_writes))
 
@@ -3562,8 +3564,9 @@ def test_bctrl():
     check("整机：0x50 窗口不再有未映射写",
           sum(1 for a, n, v, pc in m.bus.unmapped_writes
               if 0x50000000 <= a < 0x50400000), 0)
-    check("整机：未映射写 1853", len(m.bus.unmapped_writes), 1853)
-    check("整机：未映射读 5 个地址", len(m.bus.unmapped_reads), 5)
+    # V46 之后 0x40 与 0x60/0x61 也建了器件，总账再降一档（见 test_dual40）
+    check("整机：未映射写 112", len(m.bus.unmapped_writes), 112)
+    check("整机：未映射读 0 个地址（读侧已清零）", len(m.bus.unmapped_reads), 0)
     check("整机：换手 34（与建模前相同）", len(res["switches"]), 34)
     check("整机：末 PC 0x407DC", m.cpu.pc, 0x407DC)
     check("整机：入口 17 个", len(res["tasks"]), 17)
@@ -3598,6 +3601,167 @@ def test_bctrl():
     check("反事实：到达空闲后 SP/ILM 与默认口径一致",
           (b1.cpu.r[15], b1.cpu.ilm), (0x68000BE8, 0x1F))
     check("默认口径仍是 191,520 步到空闲", brealos.boot().cpu.pc, 0x407DC)
+
+
+def test_dual40():
+    """V46：0x40 窗口（dev_ctrl40）与 0x60/0x61 双通道控制器（dev_dual60）。"""
+    print("\n[52 0x40 窗口 + 0x60/0x61 双通道（V46）]")
+    import os
+    from frbox import blive, brealos, lists, machine
+    from frbox.dev_ctrl40 import CtrlWindow40
+    from frbox.dev_dual60 import DualCtrl60
+
+    # ---- A. 纯设备：DualCtrl60 的寄存器面
+    d = DualCtrl60(index=0)
+    check("dual60 常量：基址 / 大小 / 状态寄存器 / 字段",
+          (d.BASE, d.SIZE, d.R_STATUS, d.STATUS_FIELD_MASK),
+          (0x60000000, 0x4000, 0x100, 0x0C))
+    d.write(0x03, 1, 0xFF)
+    d.write(0x04, 1, 0x01)
+    d.write(0x06, 1, 0x00)
+    check("dual60 配置字节如实回读", (d.read(0x03, 1), d.read(0x04, 1),
+                                     d.read(0x06, 1)), (0xFF, 0x01, 0x00))
+    # +02 的两步 RMW：先 OR 0x80 再 OR 0x02（`borh #0x8` / `borl #0x2`）
+    d.write(0x02, 1, d.read(0x02, 1) | 0x80)
+    d.write(0x02, 1, d.read(0x02, 1) | 0x02)
+    check("dual60 +02 两步 RMW 叠出 0x82", d.ctrl(), 0x82)
+    check("dual60 +100 默认读到 0（= 未映射口径）", d.read(0x100, 1), 0x00)
+    d.set_status(byte=0x0C)
+    check("dual60 +100 由器件驱动整字节", d.read(0x100, 1), 0x0C)
+    check("dual60 +100 字段 = bit2–3（0x0C → 3）", d.field, 3)
+    d.set_status(field=0)
+    check("dual60 +100 字段可清回 0", (d.read(0x100, 1), d.field), (0x00, 0))
+    d.write(0x4000, 1, 0xAA)
+    check("dual60 窗口外丢弃", d.read(0x4000, 1), 0)
+    e = DualCtrl60(index=1)
+    check("dual60 第二通道基址 +16MB", e.base, 0x61000000)
+
+    # ---- B. 纯设备：CtrlWindow40 的回读与 RMW
+    w = CtrlWindow40()
+    check("ctrl40 常量：基址 / +0xF8 / 终值",
+          (w.BASE, w.RMW_OFF, w.RMW_FINAL), (0x40000000, 0xF8, 0x3B3B))
+    w.write(0x40002, 2, 0x000E)
+    check("ctrl40 16 位写拆字节、可按字节读回",
+          (w.read(0x40002, 1), w.read(0x40003, 1)),
+          (0x00, 0x0E))
+    check("ctrl40 整体读回 0x000E", w.read(0x40002, 2), 0x000E)
+    check("ctrl40 没写过的偏移读 0", w.read(0x40010, 1), 0)
+    # 两次 RMW（与 0x14C1BA–0x14C1DC 同序）：不回读就只会得到 0x003B
+    v = w.read(0x400F8, 2)
+    w.write(0x400F8, 2, (v & 0xFFFFC0FF) | 0x3B00)
+    v = w.read(0x400F8, 2)
+    check("ctrl40 RMW 第一步：0x3B00", v, 0x3B00)
+    w.write(0x400F8, 2, (v & 0xFFFFFFC0) | 0x003B)
+    check("ctrl40 RMW 第二步叠出 0x3B3B", w.rmw_value(0x40000), 0x3B3B)
+    check("ctrl40 +0xF8 读被记了 2 次", w.rmw_reads, 2)
+
+    # ---- C. 整机：两个器件默认都挂上
+    m = blive.boot()
+    res = blive.run(m, steps=700000)
+    check("整机：默认挂上 ctrl40", m.ctrl40 is not None, True)
+    check("整机：默认挂上两个 dual60 通道", len(m.dual60), 2)
+    check("整机：0x400400F8 落在 ctrl40",
+          m.bus.find(0x400400F8).name, "ctrl40")
+    check("整机：0x60000100 落在 dual600",
+          m.bus.find(0x60000100).name, "dual600")
+    check("整机：0x61000002 落在 dual601",
+          m.bus.find(0x61000002).name, "dual601")
+    check("整机：0x8400 描述符表的两个基址",
+          (m.bus.rd(0x8400, 4), m.bus.rd(0x8450, 4)),
+          (0x60000000, 0x61000000))
+    check("整机：描述符表的子窗口指针",
+          [m.bus.rd(0x8400 + i, 4) for i in (4, 8, 12, 16, 20)],
+          [0x60001000, 0x60002000, 0x60000200, 0x60002000, 0x60000400])
+    check("整机：描述符表的三个数值（A）",
+          [m.bus.rd(0x8418, 4), m.bus.rd(0x841C, 4), m.bus.rd(0x8420, 4)],
+          [0xDC0, 0x46C, 0x98])
+    check("整机：描述符表的三个数值（B）",
+          [m.bus.rd(0x8468, 4), m.bus.rd(0x846C, 4), m.bus.rd(0x8470, 4)],
+          [0xDE0, 0x46D, 0xA0])
+
+    # 通道 A 的 +02 被两步 RMW 叠成 0x82，随后又被 0x1A3694 写成 0x01
+    check("整机：通道 A 的 +02 终值 0x01（0x1A3694 直写）",
+          m.dual60[0].ctrl(), 0x01)
+    check("整机：通道 B 的 +02 终值 0x82（只做了两步 RMW）",
+          m.dual60[1].ctrl(), 0x82)
+    check("整机：通道 A 收到 6 笔写 / 3 次读",
+          (m.dual60[0].writes, m.dual60[0].reads), (6, 3))
+    check("整机：通道 B 收到 5 笔写 / 2 次读",
+          (m.dual60[1].writes, m.dual60[1].reads), (5, 2))
+
+    # ---- D. 0x40：RMW 终值、下载口
+    dev = m.ctrl40
+    check("整机：实例 +0x40000 的 +0xF8 = 0x3B3B",
+          dev.rmw_value(0x40000), 0x3B3B)
+    check("整机：实例 +0x40800 的 +0xF8 = 0x1D1D（另一份配置）",
+          dev.rmw_value(0x40800), 0x1D1D)
+    check("整机：实例 +0x40900 的 +0xF8 从没被 RMW",
+          dev.rmw_value(0x40900), 0x0000)
+    check("整机：+0xF8 一共读了 4 次（两实例各 2 次）", dev.rmw_reads, 4)
+    check("整机：长度寄存器 +0x10000 = 0x0800",
+          (dev.regs.get(0x10000, 0) << 8) | dev.regs.get(0x10001, 0), 0x0800)
+    pay = dev.stream_payload()
+    check("整机：下载口收到 3082 字节（1541 个半字）", len(pay), 3082)
+    rom = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "data", "B3000111.bin"), "rb").read()
+    # 表 0（256 项）逐字节来自 ROM 0x1BDBAE；表 1 起各自的源地址不同，
+    # 所以只有第一张表能直接用这个偏移比对（6 张表全等见 probe 的 F 段）。
+    src0 = rom[0x1BDBAE - 0x40000: 0x1BDBAE - 0x40000 + 512]
+    check("整机：下载口表 0 = ROM 0x1BDBAE 的 512 字节", pay[:512], src0)
+    check("整机：下载口表 0 是 i×0x40 的斜坡",
+          [int.from_bytes(pay[2 * i:2 * i + 2], "big") for i in range(4)],
+          [0x0000, 0x0040, 0x0080, 0x00C0])
+    check("整机：表 1 在 +0x10400 起、首值 0 / 0x100 / 0x200",
+          [int.from_bytes(dev.image(0x10400 + 2 * i, 2), "big") for i in range(3)],
+          [0x0000, 0x0100, 0x0200])
+    check("整机：表 2 在 +0x10800 起、首值 0 / 0x1000 / 0x16A0",
+          [int.from_bytes(dev.image(0x10800 + 2 * i, 2), "big") for i in range(3)],
+          [0x0000, 0x1000, 0x16A0])
+    check("整机：表 3/4/5 三份同内容（+0x11000 = +0x11400 = +0x11800）",
+          (dev.image(0x11000, 16), dev.image(0x11400, 16), dev.image(0x11800, 16))
+          and (dev.image(0x11000, 16) == dev.image(0x11400, 16)
+               == dev.image(0x11800, 16)), True)
+    check("整机：6 张表占 3082 / 区间 6146 字节 = 50.1%（每表按 0x200 对齐、中间留空）",
+          round(100.0 * len(pay) / (0x11A02 - 0x10200), 1), 50.1)
+
+    # ---- E. 未映射总账：读侧清零
+    check("整机：未映射读 0 个地址（V45 是 5 个）",
+          len(m.bus.unmapped_reads), 0)
+    check("整机：未映射写 112 笔（V45 是 1853）",
+          len(m.bus.unmapped_writes), 112)
+    check("整机：0x40/0x60/0x61 三个窗口不再有未映射写",
+          sum(1 for a, n, v, pc in m.bus.unmapped_writes
+              if 0x40000000 <= a < 0x41000000 or 0x60000000 <= a < 0x62000000), 0)
+    check("整机：换手 34（与建模前相同）", len(res["switches"]), 34)
+    check("整机：入口 17 个", len(res["tasks"]), 17)
+    check("整机：末 PC 0x407DC", m.cpu.pc, 0x407DC)
+    check("整机：覆盖 5404 个字（与 V45 相同）", m.cov.words(), 5404)
+    check("窗口常量与设备一致（0x40）",
+          (lists.CTRL40_BASE, lists.CTRL40_SIZE, lists.CTRL40_RMW_FINAL),
+          (CtrlWindow40.BASE, CtrlWindow40.SIZE, CtrlWindow40.RMW_FINAL))
+    check("窗口常量与设备一致（0x60/0x61）",
+          (lists.DUAL60_BASES, lists.DUAL60_SIZE, lists.DUAL60_STATUS),
+          ((DualCtrl60.BASE, 0x61000000), DualCtrl60.SIZE,
+           DualCtrl60.R_STATUS))
+    check("窗口表：0x40 / 0x60 两行已归零",
+          [(w[0], w[3]) for w in lists.PERIPHERAL_WINDOWS
+           if w[0] in ("0x40xxxxxx", "0x60/0x61")],
+          [("0x40xxxxxx", 0), ("0x60/0x61", 0)])
+
+    # ---- F. 反事实：状态字段 = 3 让分支翻转（覆盖 +17），整机数字不变
+    old = machine.D300B.dual60_status
+    machine.D300B.dual60_status = 0x0C
+    try:
+        m2 = blive.boot()
+        res2 = blive.run(m2, steps=700000)
+    finally:
+        machine.D300B.dual60_status = old
+    check("反事实：状态字段 = 3 → 覆盖 5421（走「就绪」出口）",
+          m2.cov.words(), 5421)
+    check("反事实：换手仍是 34（返回值被调用点清掉，进不了分支）",
+          len(res2["switches"]), 34)
+    check("反事实：末 PC 仍是 0x407DC", m2.cpu.pc, 0x407DC)
+    check("反事实：入口仍是 17 个", len(res2["tasks"]), 17)
 
 
 def main():
@@ -3650,6 +3814,7 @@ def main():
     test_bpool()
     test_lists()
     test_bctrl()
+    test_dual40()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
