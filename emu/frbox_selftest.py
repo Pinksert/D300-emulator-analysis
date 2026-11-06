@@ -37,11 +37,15 @@ def check(name, got, want):
 
 
 def under_sdram_1mb(fn):
-    """把 `ram-sdram` 临时装回 1MB（到 0x9F680000 截断）再跑。
+    """把机器装回 **V42 口径**（`ram-sdram` 1MB + 没有节点区）再跑。
 
     V43 把默认铺到任务栈区之前（2.5MB）之后，池地址 `0x9F69xxxx` 才真的
     可读写 —— 于是任务不再走「取不到缓冲区也照搬」那条路，V41/V42 记下的
     memmove / 填充 / 停摆数字在新口径下**不可复现**。
+
+    V44 又补了节点区 `0x9F550000+0x30000`（固件的 3003 个双向链表节点），
+    那块在 V42 时代也**从来没建过**。所以 V42 口径 = 1MB SDRAM **且**无节点区，
+    两者都要还原，才能复现历史数字。
 
     这些数字是「地址未映射时会发生什么」的历史观测，仍有价值，所以用这个
     装饰器把它们固定在旧口径下跑，别当成新默认行为。
@@ -50,9 +54,16 @@ def under_sdram_1mb(fn):
 
     @functools.wraps(fn)
     def wrap(*a, **k):
-        from frbox import bpool
-        with bpool.sdram_override(bpool.SD_SIZE_V42):
+        from frbox import bpool, lists, machine
+        base = list(machine.D300B.extra_ram)
+        # 先摘掉节点区，再把 ram-sdram 缩回 1MB
+        no_nodes = [x for x in base if x[2] != "ram-nodes"]
+        machine.D300B.extra_ram = [(bpool.SD_BASE, bpool.SD_SIZE_V42,
+                                    "ram-sdram")] + no_nodes[1:]
+        try:
             return fn(*a, **k)
+        finally:
+            machine.D300B.extra_ram = base
     return wrap
 
 
@@ -3357,6 +3368,123 @@ def test_bpool():
     check("2.5MB：ICR 0x46F 保持 0x10", m2.bus.rd(0x46F, 1) & 0xFF, 0x10)
 
 
+def test_lists():
+    """V44：双向链表库 —— 两套实例，以及那块没映射的节点区。"""
+    print("\n[50 双向链表库与节点区（V44）]")
+    from frbox import blive, bpool, lists, machine
+
+    # ---- A. 库入口与常量
+    check("库入口五个地址",
+          (lists.LIST_INIT, lists.LIST_EMPTY, lists.LIST_PUSH,
+           lists.LIST_NEXT, lists.LIST_NEWNODE),
+          (0x124F46, 0x124F4E, 0x124F5A, 0x124F7A, 0x124FA0))
+    check("挂链三步的指令地址",
+          (lists.PUSH_PREV, lists.PUSH_NEXT, lists.PUSH_HEAD),
+          (0x124F5C, 0x124F60, 0x124F62))
+    check("套 A：计数 / 三个头 / 三个节点",
+          (lists.POOL_COUNT, lists.POOL_HEADS, lists.POOL_NODES),
+          (0x9F69CE98, (0x9F69CEB4, 0x9F69CEE4, 0x9F69CEFC),
+           (0x9F696844, 0x9F698A60, 0x9F69AC7C)))
+    check("套 A：节点大小 0x221C", lists.POOL_NODE_SIZE, 0x221C)
+    check("套 B：三个头 / 头链 / 节点区",
+          (lists.LIST_HEADS_B, lists.LIST_HEADCHAIN_B,
+           lists.NODES_B_BASE, lists.NODES_B_END),
+          ((0x9F5A0CC0, 0x9F5A0CC8, 0x9F5A0CD0), 0x9F5A0CD8,
+           0x9F553620, 0x9F5A0CDC))
+    check("套 B：节点大小 0x14 / 每链 1001 / 建 1000",
+          (lists.NODE_SIZE_B, lists.CHAIN_LEN_B, lists.BUILD_COUNT_B),
+          (0x14, 1001, 1000))
+    check("节点区 RAM：0x9F550000 + 0x30000",
+          lists.nodes_ram_extra(), (0x9F550000, 0x00030000, "ram-nodes"))
+
+    # ---- B. 机器默认就带节点区
+    m = blive.boot()
+    check("默认：节点区已映射",
+          m.bus.find(lists.NODES_B_BASE) is not None, True)
+    check("默认：节点区落在 ram-nodes",
+          m.bus.find(lists.NODES_B_BASE).name, "ram-nodes")
+    check("默认：节点区首地址写哨兵能读回",
+          bpool.roundtrip(m, lists.NODES_B_BASE, 0x5A5A5A5A)[1], 0x5A5A5A5A)
+    check("默认：ram-sdram 仍是 2.5MB",
+          bpool.sdram(m), (0x9F580000, 0x00280000))
+    check("默认：两块 RAM 首尾相接不重叠",
+          lists.NODES_RAM_BASE + lists.NODES_RAM_SIZE, 0x9F580000)
+
+    # ---- C. 套 B：三条链各 1001 个节点，双向配对
+    # ⚠️ 链表是 boot 之后（跑起来时）才建的，所以这里必须先跑一遍
+    res_m = blive.run(m, steps=700000)
+    check("默认：跑 70 万步后换手 34 次", len(res_m["switches"]), 34)
+    check("默认：跑 70 万步后末 PC 0x407DC", m.cpu.pc, 0x407DC)
+    check("默认：跑 70 万步后 ICR 0x46F = 0x10",
+          m.bus.rd(0x46F, 1) & 0xFF, 0x10)
+    check("默认：跑 70 万步后入口 17 个", len(res_m["tasks"]), 17)
+    for h in lists.LIST_HEADS_B:
+        n, end = lists.chain_len(m, h)
+        nodes = lists.chain_nodes(m, h)
+        check("套 B：头 0x%X 链长 1001" % h, n, 1001)
+        check("套 B：头 0x%X 双向全配对" % h,
+              lists.is_bidirectional(m, nodes), 0)
+        # ⚠️ 0x124F5A 是**头插**，遍历顺序是「尾 → 头 → 首 → …」
+        check("套 B：头 0x%X 遍历第 2 项就是链头自己" % h, nodes[1], h)
+    alln = sorted(set(sum((lists.chain_nodes(m, h)
+                           for h in lists.LIST_HEADS_B), [])))
+    check("套 B：节点总数 3003（1000×3 + 3 个头）", len(alln), 3003)
+    check("套 B：节点区首地址", alln[0], 0x9F553620)
+    check("套 B：节点区末地址（三个链头）", alln[-3:], [0x9F5A0CC0,
+                                                     0x9F5A0CC8, 0x9F5A0CD0])
+    reg = lists.registry(m)
+    check("套 B：注册表首项 = 节点区末端", reg[0], 0x9F564F60)
+    check("套 B：注册表第 2 项 = 尾哨兵", reg[1], 0x9F562080)
+    check("套 B：注册表三项 = 三条链的首节点",
+          reg[2:5], [0x9F55D260, 0x9F558440, 0x9F553620])
+
+    # ---- D. 套 A：3 个大节点 + 头链
+    check("套 A：计数读回 3", bpool.count_at(m, lists.POOL_COUNT), 3)
+    n, _ = lists.chain_len(m, lists.POOL_HEADS[0])
+    check("套 A：链长 4（3 节点 + 回到头）", n, 4)
+    n, _ = lists.chain_len(m, lists.POOL_HEADCHAIN)
+    check("套 A：头链 13 个头", n, 13)
+
+    # ---- E. 反事实：没有节点区时链是断的
+    base = list(machine.D300B.extra_ram)
+    machine.D300B.extra_ram = [x for x in base if x[2] != "ram-nodes"]
+    try:
+        m2 = blive.boot()
+        res2 = blive.run(m2, steps=700000)
+        check("无节点区：节点区未映射",
+              m2.bus.find(lists.NODES_B_BASE) is not None, False)
+        check("无节点区：写哨兵读回 0",
+              bpool.roundtrip(m2, lists.NODES_B_BASE)[1], 0)
+        n, _ = lists.chain_len(m2, lists.LIST_HEADS_B[0])
+        # 断链时 head->next 读回 0 → 走一步就停 → 链长 1（那个 0 不算节点）
+        check("无节点区：链长 1（断链，head->next 读回 0）", n, 1)
+        # ⚠️ 上面 roundtrip 写哨兵本身多一笔未映射写，所以总数比基线多 1
+        recs = [r for r in m2.bus.unmapped_writes
+                if lists.NODES_B_BASE <= r[0] <= lists.NODES_B_END]
+        check("无节点区：节点区未映射写 6001 笔（含哨兵那笔）", len(recs), 6001)
+        check("无节点区：未映射写总数 7934", len(m2.bus.unmapped_writes), 7934)
+        check("无节点区：未映射读 3013 个地址", len(m2.bus.unmapped_reads), 3013)
+        check("无节点区：换手 34（与有节点区相同）", len(res2["switches"]), 34)
+        check("无节点区：末 PC 0x407DC", m2.cpu.pc, 0x407DC)
+    finally:
+        machine.D300B.extra_ram = base
+
+    # ---- F. 默认口径：补上映映后剩下的全在外设窗口
+    check("默认：未映射写降到 1933", len(m.bus.unmapped_writes), 1933)
+    check("默认：未映射读降到 12", len(m.bus.unmapped_reads), 12)
+    per = {}
+    for a, sz, v, pc in m.bus.unmapped_writes:
+        for name, lo, hi, _ in lists.PERIPHERAL_WINDOWS:
+            if lo <= a < hi:
+                per[name] = per.get(name, 0) + 1
+                break
+    check("默认：剩余未映射写按窗口分组",
+          per, {"0x40xxxxxx": 1730, "0x6Fxxxxxx": 108,
+                "0x50xxxxxx": 80, "0x60/0x61": 11, "0x5C0020xx": 4})
+    check("默认：五块窗口合计 = 未映射写总数",
+          sum(per.values()), len(m.bus.unmapped_writes))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3405,6 +3533,7 @@ def main():
     test_bfill()
     test_bmove()
     test_bpool()
+    test_lists()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
