@@ -3462,16 +3462,18 @@ def test_lists():
         recs = [r for r in m2.bus.unmapped_writes
                 if lists.NODES_B_BASE <= r[0] <= lists.NODES_B_END]
         check("无节点区：节点区未映射写 6001 笔（含哨兵那笔）", len(recs), 6001)
-        check("无节点区：未映射写总数 7934", len(m2.bus.unmapped_writes), 7934)
-        check("无节点区：未映射读 3013 个地址", len(m2.bus.unmapped_reads), 3013)
+        # V45：0x50000000 建成器件后，这 80 笔写不再记未映射 → 7934-80 / 3013-7。
+        # （-7 就是那 7 个原本「未映射读回 0」的窗口地址：+01/+04/+05/+06 等）
+        check("无节点区：未映射写总数 7854", len(m2.bus.unmapped_writes), 7854)
+        check("无节点区：未映射读 3006 个地址", len(m2.bus.unmapped_reads), 3006)
         check("无节点区：换手 34（与有节点区相同）", len(res2["switches"]), 34)
         check("无节点区：末 PC 0x407DC", m2.cpu.pc, 0x407DC)
     finally:
         machine.D300B.extra_ram = base
 
     # ---- F. 默认口径：补上映映后剩下的全在外设窗口
-    check("默认：未映射写降到 1933", len(m.bus.unmapped_writes), 1933)
-    check("默认：未映射读降到 12", len(m.bus.unmapped_reads), 12)
+    check("默认：未映射写降到 1853", len(m.bus.unmapped_writes), 1853)
+    check("默认：未映射读降到 5", len(m.bus.unmapped_reads), 5)
     per = {}
     for a, sz, v, pc in m.bus.unmapped_writes:
         for name, lo, hi, _ in lists.PERIPHERAL_WINDOWS:
@@ -3480,9 +3482,122 @@ def test_lists():
                 break
     check("默认：剩余未映射写按窗口分组",
           per, {"0x40xxxxxx": 1730, "0x6Fxxxxxx": 108,
-                "0x50xxxxxx": 80, "0x60/0x61": 11, "0x5C0020xx": 4})
+                "0x60/0x61": 11, "0x5C0020xx": 4})
     check("默认：五块窗口合计 = 未映射写总数",
           sum(per.values()), len(m.bus.unmapped_writes))
+
+
+def test_bctrl():
+    """V45：`0x50000000` 三通道位串行控制块（dev_ctrl50）。"""
+    print("\n[51 三通道位串行控制块（V45）]")
+    from frbox import blive, brealos, lists, machine
+    from frbox.dev_ctrl50 import CtrlSerial50
+
+    # ---- A. 纯设备：寄存器语义（不建整机，快）
+    d = CtrlSerial50()
+    check("常量：基址 / 大小 / 三通道",
+          (d.BASE, d.SIZE, d.CH_BASE, d.CH_STRIDE, d.CH_COUNT),
+          (0x50000000, 0x400, 0x100, 0x100, 3))
+    d.write(0x104, 1, 0x7F)
+    check("+04 配置回读：状态位被器件替换（0x7F → 0x3D）", d.read(0x104, 1), 0x3D)
+    d.write(0x106, 1, 0x0C)
+    check("+06 控制位如实回读", d.read(0x106, 1), 0x0C)
+    d.write(0x105, 1, 0x28)
+    check("+05 回读：CLK/DATA 保留、状态位为 0", d.read(0x105, 1), 0x28)
+    # +01 的 bit0 是器件状态位（固件 btstl 测它、置起就 bandl 清掉）
+    d.write(0x01, 1, 0x0F)
+    check("+01 其余位如实回读、bit0 被状态位替换", d.read(0x01, 1), 0x0E)
+    d.set_status(rdy=0x01)
+    check("+01 状态位打桩（bit0 = 1）", d.read(0x01, 1), 0x0F)
+    d.set_status(rdy=0)
+    check("+01 状态位可以清回去", d.read(0x01, 1), 0x0E)
+    d.set_status(cfg=0x42, cmd=0xC0)
+    check("+04 状态位打桩（0x3D → 0x7F）", d.read(0x104, 1), 0x7F)
+    check("+05 状态位打桩（0x28 → 0xE8）", d.read(0x105, 1), 0xE8)
+    d.set_status(cfg=0, cmd=0)
+    check("状态位可以清零回去", (d.read(0x104, 1), d.read(0x105, 1)), (0x3D, 0x28))
+    d.write(0x500, 1, 0xAA)                      # 窗口外：丢弃
+    check("窗口外的偏移被丢弃", d.read(0x500, 1), 0)
+
+    # ---- B. 位串行：手工打 16 个时钟，载荷应原样解出
+    e = CtrlSerial50()
+    e.write(0x106, 1, 0x04)                      # 片选
+    e.write(0x105, 1, 0x20)                      # 起始位（片选后第一个时钟）
+    for i in range(16):
+        bit = 0xA55A >> (15 - i) & 1
+        e.write(0x105, 1, 0x08 if bit else 0x00)
+        e.write(0x105, 1, 0x28 if bit else 0x20)
+    check("位串行：起始位 1 个", e.starts[0], 1)
+    check("位串行：17 个时钟（1 起始 + 16 数据）", e.clocks[0], 17)
+    check("位串行：解出 0xA55A（MSB 先）", e.tx[0], [0xA55A])
+    check("位串行：片选边沿记了 1 次", e.cs_edges[0], 1)
+
+    # ---- C. 整机：默认就挂上器件，配置/载荷都是固件的真实值
+    m = blive.boot()
+    res = blive.run(m, steps=700000)
+    dev = m.ctrl50
+    check("整机：默认挂上 ctrl50", dev is not None, True)
+    check("整机：0x50000104 落在 ctrl50",
+          m.bus.find(0x50000104).name, "ctrl50")
+    check("整机：三通道配置字节（非状态位）",
+          [dev.config(i) for i in range(3)], [0x3D, 0x09, 0x00])
+    check("整机：通道 A 发了一个 16 位字", dev.tx[0], [0x2000])
+    check("整机：通道 A 时钟 17 / 起始位 1",
+          (dev.clocks[0], dev.starts[0]), (17, 1))
+    check("整机：通道 B/C 只打了起始位、没有载荷",
+          (dev.tx[1], dev.tx[2], dev.starts[1], dev.starts[2]),
+          ([], [], 0, 0))
+    # 复位后第一句是 `sth @0x50000000 = 0x0001`（16 位）→ +00=0x00、+01=0x01，
+    # 而 +01 的 bit0 是器件状态位（固件 btstl 测它），所以读 +01 只能拿到状态。
+    check("整机：复位后第一句给 +00/+01 写了 0x0001",
+          (dev.regs[0x00], dev.regs[0x01]), (0x00, 0x01))
+    check("整机：+01 的 bit0 是状态位（默认 0，不回读写入值）",
+          m.bus.rd(0x50000001, 1), 0x00)
+    check("整机：整块读回时那一位被状态吃掉（0x0001 → 0x0000）",
+          m.bus.rd(0x50000000, 2), 0x0000)
+    check("整机：+01 写进去的位仍在寄存器里",
+          dev.regs[0x01] & 0x01, 0x01)
+    check("整机：+04 读回带不动状态位（器件空闲）",
+          m.bus.rd(0x50000104, 1), 0x3D)
+    check("整机：0x50 窗口不再有未映射写",
+          sum(1 for a, n, v, pc in m.bus.unmapped_writes
+              if 0x50000000 <= a < 0x50400000), 0)
+    check("整机：未映射写 1853", len(m.bus.unmapped_writes), 1853)
+    check("整机：未映射读 5 个地址", len(m.bus.unmapped_reads), 5)
+    check("整机：换手 34（与建模前相同）", len(res["switches"]), 34)
+    check("整机：末 PC 0x407DC", m.cpu.pc, 0x407DC)
+    check("整机：入口 17 个", len(res["tasks"]), 17)
+    check("窗口常量与设备一致",
+          (lists.CTRL50_BASE, lists.CTRL50_SIZE, lists.CTRL50_CH_COUNT),
+          (CtrlSerial50.BASE, CtrlSerial50.SIZE, CtrlSerial50.CH_COUNT))
+    check("窗口表：0x50 那行已归零",
+          [w for w in lists.PERIPHERAL_WINDOWS if w[0] == "0x50xxxxxx"][0][3], 0)
+
+    # ---- D. 反事实：状态位置起不改变默认路径（要显式打开才生效）
+    dev.set_status(cfg=0x42, cmd=0xC0)
+    check("反事实：状态位置起后 +04 读到 0x7F",
+          m.bus.rd(0x50000104, 1), 0x7F)
+    dev.set_status(cfg=0, cmd=0)
+    check("反事实：关掉后回到 0x3D", m.bus.rd(0x50000104, 1), 0x3D)
+
+    # ---- E. +01 的 bit0 置起：boot 多走一条清位指令 —— 是 1 步相位，不是岔路。
+    # 固件在 0x4014A `btstl #0x1,@0x50000001`，置起就 0x4014E `bandl #0xE` 清掉，
+    # 两条路在 0x40150 汇合；于是固定预算 191,520 步正好落在空闲 bra -1 的前一条。
+    old_rdy = machine.D300B.ctrl50_status_rdy
+    machine.D300B.ctrl50_status_rdy = 0x01
+    try:
+        b1 = brealos.boot()
+    finally:
+        machine.D300B.ctrl50_status_rdy = old_rdy
+    check("反事实：bit0 置起 → 191,520 步停在空闲前一条（0x407D8）",
+          b1.cpu.pc, 0x407D8)
+    check("反事实：此时 SP/ILM 还是装配前的值",
+          (b1.cpu.r[15], b1.cpu.ilm), (0x000083F8, 0x10))
+    b1.step(1)
+    check("反事实：再走一步就到空闲 0x407DC（路径没岔）", b1.cpu.pc, 0x407DC)
+    check("反事实：到达空闲后 SP/ILM 与默认口径一致",
+          (b1.cpu.r[15], b1.cpu.ilm), (0x68000BE8, 0x1F))
+    check("默认口径仍是 191,520 步到空闲", brealos.boot().cpu.pc, 0x407DC)
 
 
 def main():
@@ -3534,6 +3649,7 @@ def main():
     test_bmove()
     test_bpool()
     test_lists()
+    test_bctrl()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
