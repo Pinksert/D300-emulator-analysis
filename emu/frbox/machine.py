@@ -102,6 +102,13 @@ class Machine:
     expeed_base = 0
     expeed_regs = None        # {寄存器号: bytes}，None = 全 0
     expeed_read_len = 5       # 应答字节数（无手册依据；取值不影响主机读到什么）
+    # 0x50000000 三通道位串行控制块（V45）：0 = 不建。
+    # 建了之后 +04/+06… 如实回读配置，+05 只回状态位（CLK/DATA 不回读），
+    # 并解出固件通过 16 个时钟发出去的 16 位字。见 dev_ctrl50.py。
+    ctrl50_base = 0
+    ctrl50_status_cfg = 0     # 反事实实验用：+04 的 bit1/bit6（默认 0 = 空闲）
+    ctrl50_status_cmd = 0     # 反事实实验用：+05 的 bit6/bit7（默认 0 = 无应答）
+    ctrl50_status_rdy = 0     # 反事实实验用：+01 的 bit0（默认 0 = 未置起；置 1 多走一条清位）
     known_windows = []
     # ---- 中断 ----
     # 48 个 ICR 紧接在直接页 0x440 起，vec 0x10 对应 0x440，一一对应（A/B 两段都实测到）
@@ -203,6 +210,15 @@ class Machine:
             self.bus.map_io(self.expeed_base, 0x100, self.expeed,
                             self.expeed.name)
             self.devices.append(self.expeed)
+        self.ctrl50 = None
+        if self.ctrl50_base:
+            from .dev_ctrl50 import attach as attach_ctrl50
+            self.ctrl50 = attach_ctrl50(
+                self, base=self.ctrl50_base,
+                status_cfg=self.ctrl50_status_cfg,
+                status_cmd=self.ctrl50_status_cmd,
+                status_rdy=self.ctrl50_status_rdy)
+            self.devices.append(self.ctrl50)
         for base, size, name in self.extra_ram:
             self.bus.map_ram(base, size, name)
         self.dp.attach(0x10, 0x18, self.timer)
@@ -918,6 +934,14 @@ class D300B(Machine):
     ssp = 0x0003F000
     default_firmware = os.path.join(FW_DIR, "B3000111.bin")
     cycles_per_tick = 256
+    # 0x50000000 三通道位串行控制块（V45）：固件在这里做了 80 笔写、58 次读，
+    # 全是「软件打时钟」的位串行 —— bit5 时钟 / bit3 数据 / bit6-7 状态，
+    # 三组基址 0x100/0x200/0x300。V44 之前这一整段「未映射 ⇒ 读恒 0」。
+    # 建模后：+04/+06/+07/+09/+0A 如实回读，+05 只回状态位（默认 0 = 空闲，
+    # 与未映射等价），并把每次 16 时钟的载荷解出来。+01 的 bit0 也是一位状态位：
+    # 固件 `btstl` 测它、置起就 `bandl` 清掉（一次性的检测，不是轮询循环）——
+    # 置 1 只会多走一条指令，让 boot 从 191,520 步变成 191,521 步到空闲，路径不变。
+    ctrl50_base = 0x50000000
     # 依据（V43 把「未映射访问审计」从头做了一遍，见 results/frbox/bpool.txt）：
     #   * 写入 0x9F58C000 起 1307 次、0x9F5AA000–0x9F5AF000 五页共 5120 次（步长 4）
     #   * 早先静态分析里串口 ISR 读 0x9F58DA86、EXT9 ISR 读 0x9F58DA85
