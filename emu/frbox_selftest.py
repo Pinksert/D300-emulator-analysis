@@ -2834,6 +2834,109 @@ def test_blist():
           rom.count((0x000124F7A).to_bytes(4, "big")), 43)
 
 
+def test_bready():
+    """V39：真正的就绪结构（0x68000000 头部）、sta_tsk 的请求派发、任务 5 上 CPU。"""
+    print("\n[45 就绪结构与任务调度（V39）]")
+    from frbox import bready, brealos, binit
+
+    # ---- 0x45984 在 B 段是 ROM（V38 把它当位图，读的其实是固件字节）
+    m = brealos.boot()
+    reg = m.bus.region_at(bready.A_READY_MAP, 4)
+    check("0x45984 在 B 段落在 ROM", reg.kind, "rom")
+    check("读回是固件字节 0x2E80A800", m.bus.rd(bready.A_READY_MAP, 4), 0x2E80A800)
+    m.bus.wr(bready.A_READY_MAP, 4, 0xDEADBEEF)
+    check("写 0x45984 被丢弃", m.bus.rd(bready.A_READY_MAP, 4), 0x2E80A800)
+
+    # ---- 内核区头部：boot 后只有队列 0（任务 2）
+    idx = bready.task_index(m)
+    idle = idx[29]
+    t2, t5 = idx[2], idx[5]
+    check("boot 后当前 TCB = 空闲", bready.current(m), idle)
+    check("boot 后就绪位图 = 0x80000000", bready.ready_map(m), 0x80000000)
+    check("队列 0 里是任务 2", bready.queue_occupants(m, 0), [t2])
+    check("队列 1 空", bready.queue_occupants(m, 1), [])
+    check("队列 2 空", bready.queue_occupants(m, 2), [])
+    check("任务 2 优先数 = 1", bready.prio_of(m, t2), 1)
+    check("任务 2 应在队列 0", bready.expected_queue(m, t2), 0)
+    check("队列 0 的位号 = 31", bready.bit_of(0), 31)
+    check("队列 3 的位号 = 28", bready.bit_of(3), 28)
+    ok, bad, rows = bready.map_consistent(m)
+    check("boot 后 队列号 = 优先数−1（一致 / 不一致）", (ok, bad), (1, 0))
+    check("boot 后位图那一位是 1", rows[0]["bit_set"], True)
+    check("describe 报的是空闲任务", "空闲" in bready.describe(m), True)
+    check("boot 后任务 5 不在队列里", bready.occupancy(m).get(t5), None)
+
+    # ---- sta_tsk(5)：入队 3 + 置第 28 位 + 写 0x44
+    log = []
+    base_wr = m.bus.wr
+
+    def spy(addr, sz, val, pc=None):
+        log.append((pc, addr, sz, val))
+        return base_wr(addr, sz, val, pc)
+
+    icr_boot = m.bus.rd(bready.DISPATCH_ICR, 1)
+    m.bus.wr = spy
+    r = brealos.sta_tsk(m, bready.TASK5_ID)
+    m.bus.wr = base_wr
+    check("sta_tsk(5) 返回 0", r["err"], 0)
+    check("sta_tsk(5) 步数（确定性）", r["steps"], 128)
+    check("位图第 28 位置起", bready.ready_map(m), 0x90000000)
+    check("任务 5 进了队列 3", bready.queue_occupants(m, 3), [t5])
+    check("任务 5 状态字节 = 0（就绪）", bready.state_of(m, t5), 0)
+    check("任务 5 保存栈顶 = 0x9F8036A4", m.bus.rd(t5 + bready.TCB_SP, 4), 0x9F8036A4)
+    check("写位图的那一笔在 0x41882",
+          [(pc, v) for pc, a, sz, v in log if a == bready.READY_MAP], [(0x41882, 0x90000000)])
+    check("写了 0x44 请求派发（0x41886）",
+          [(pc, v) for pc, a, sz, v in log if a == bready.DISPATCH_REQ], [(0x41886, 1)])
+    ok2, bad2, rows2 = bready.map_consistent(m)
+    check("sta_tsk 后两条关系仍成立", (ok2, bad2), (2, 0))
+    check("任务 5 的位图那一位是 1",
+          [r_["bit_set"] for r_ in rows2 if r_["tcb"] == t5], [True])
+
+    # ---- 派发器：选位图最高位 = 优先数最小
+    check("boot 后 vec 0x3F 的 ICR = 0x1E（最低优先级）", icr_boot, 0x1E)
+    check("服务跑过之后 ICR 变成 0x10", m.bus.rd(bready.DISPATCH_ICR, 1), 0x10)
+    check("dump 里有队列 3（任务 5 还在队里）", "队列  3" in bready.dump(m), True)
+    check("vec 0x3F 的入口 = 0x40D32",
+          m.bus.rd(m.cpu.dr[0] + (255 - bready.DISPATCH_VEC) * 4, 4), bready.DISPATCH_ENTRY)
+    d = bready.dispatch(m)
+    check("一次派发把 CPU 交给任务 2", d["after"], t2)
+    check("派发确实换了任务", d["switched"], True)
+    check("任务 5 还没上 CPU", m.cov.visited(bready.TASK5_ENTRY), False)
+
+    # ---- 任务 2 阻塞在 flag 3
+    m.run(max_steps=200000, spin_guard=False)
+    check("20 万步后当前仍是任务 2", bready.current(m), t2)
+    check("任务 2 状态字节 = 4（等待）", bready.state_of(m, t2), 4)
+    check("任务 2 在 flag 3 的等待链里", bready.flag_waiters(m, 3), [t2])
+
+    # ---- 一路推下去：任务 4 → 任务 5 → 显示初始化自己跑
+    d2 = bready.dispatch(m)
+    check("第二次派发把 CPU 交给任务 4", d2["after"], idx[4])
+    trail = bready.run_until(m, bready.DISPLAY_INIT, chunk=2000, max_rounds=400)
+    check("任务 5 入口 0x12DFAE 执行过", m.cov.visited(bready.TASK5_ENTRY), True)
+    check("显示初始化 0x12E006 执行过", m.cov.visited(bready.DISPLAY_INIT), True)
+    check("队列哨兵已自指", (m.bus.rd(binit.QUEUE_HEAD, 4), m.bus.rd(binit.QUEUE_HEAD + 4, 4)),
+          (binit.QUEUE_HEAD, binit.QUEUE_HEAD))
+    check("初始化标志 = 1", binit.is_initialized(m), True)
+    check("槽位 0..4 的 +8 = 0..4",
+          [m.bus.rd(binit.SLOT_BASE + i * 12 + 8, 1) for i in range(5)], [0, 1, 2, 3, 4])
+    check("轨迹里至少两次派发请求", sum(1 for e in trail if e[1] == "dispatch") >= 2, True)
+    check("轨迹里换过 >= 2 个任务",
+          len({e[2] for e in trail if e[1] == "switch"}) >= 2, True)
+    check("audit 说 0x45984 是 rom",
+          [v for k, v in bready.audit(m) if k.startswith("0x45984")][0].startswith("rom"), True)
+
+    # ---- 0x44 建模（dispatch=True）时序不对：服务没跑完就被切走
+    from frbox.machine import create
+    m3 = create("d300-b", dispatch=True)
+    brealos.boot(m3)
+    check("dispatch=True 的 boot 也停在空闲", m3.cpu.pc, 0x407DC)
+    r3 = brealos.sta_tsk(m3, 5)
+    check("此时 sta_tsk 跑不到返回（撞步数上限）", r3["steps"], 80000)
+    check("任务 5 那一位没置起", (bready.ready_map(m3) >> 28) & 1, 0)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -2877,6 +2980,7 @@ def main():
     test_bdesc()
     test_bhandler()
     test_binit()
+    test_bready()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
