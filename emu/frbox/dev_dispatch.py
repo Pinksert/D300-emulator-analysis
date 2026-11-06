@@ -60,8 +60,10 @@ class DispatchRequest(Device):
         self.reads = 0           # 被读的次数
         self.cancelled = 0       # 写 0 时真正撤掉的待决项
         self.raised = 0          # 真正挂上中断的次数（重叠置位不算）
+        self.zero_levels = 0     # ICR 低 5 位读到 0 的次数（模型分不出「未配置」）
         self.latch = 0           # 锁存位
         self.last_level = None
+        self.last_raw = None
         super().__init__(machine)
 
     def reset(self):
@@ -70,8 +72,10 @@ class DispatchRequest(Device):
         self.reads = 0
         self.cancelled = 0
         self.raised = 0
+        self.zero_levels = 0
         self.latch = 0
         self.last_level = None
+        self.last_raw = None
 
     # ---- 总线 ----
     def read(self, off, size):
@@ -92,10 +96,17 @@ class DispatchRequest(Device):
             return
         self.latch = 1
         if m is not None:
-            lvl = m.irq_level(self.vec) or 0x1F   # 级别取固件自己写进 ICR 的值
+            raw = m.irq_level(self.vec)
+            # ⚠️ `0` 在 irq_level 的约定里等于「还没配置」，所以这里兜底成 0x1F。
+            # 但固件也可能把 ICR 写成 0（低 5 位为 0），二者在模型里分不出来 ——
+            # 见 KNOWN_ISSUES #169，V41 把这种情形单独计数。
+            if not raw:
+                self.zero_levels += 1
+            lvl = raw or 0x1F            # 级别取固件自己写进 ICR 的值
             m.raise_irq(self.vec, lvl)
             self.raised += 1
             self.last_level = lvl
+            self.last_raw = raw
             self.dbg(f"0x{off:02X} ← 0x{v:02X} → 请求 vec 0x{self.vec:02X} "
                      f"(level 0x{lvl:02X})，累计 {self.requests} 次")
 
@@ -117,6 +128,8 @@ class DispatchRequest(Device):
                "被读": self.reads, "锁存位": self.latch, "向量": "0x%02X" % self.vec}
         if self.cancelled:
             out["撤掉的待决项"] = self.cancelled
+        if self.zero_levels:
+            out["ICR 读到 0（当未配置）"] = self.zero_levels
         if self.last_level is not None:
             out["最后级别"] = "0x%02X" % self.last_level
         return out
