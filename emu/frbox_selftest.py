@@ -3058,6 +3058,89 @@ def test_blive():
     check("describe 里有「当前=」", "当前=" in blive.describe(m), True)
 
 
+def test_bfill():
+    """V41：0x1356A0 是整片填充；反事实、任务启动普查、只写标志。"""
+    print("\n[47 整片填充与反事实（V41）]")
+    from frbox import bfill, blive
+
+    # ---- 原样跑 891,520 步：记填充写与 0x9F58DA85 的读写
+    m = blive.boot()
+    fw = bfill.FillWatch(m).attach()
+    sp = bfill.AddrSpy(m, 0x9F58DA85).attach()
+    icr_spy = bfill.AddrSpy(m, 0x46F).attach()
+    res = blive.run(m, steps=700000)
+    icr_spy.detach(); sp.detach(); fw.detach()
+
+    check("0x1356A0 落在填充循环里", bfill.FILL_PC, 0x1356A0)
+    check("0x1356A0 执行 23,617 次", len(fw.hits), 23617)
+    cov = fw.coverage()
+    check("落在 ICR 块 352 笔（32 × 11）", cov.get("ICR 块"), 352)
+    check("落在 0x1000..0x2188 12,342 笔", cov.get("低区 RAM"), 12342)
+    rs = fw.runs()
+    check("11 段连续下行", len(rs), 11)
+    check("每段 2,147 笔", {r["count"] for r in rs}, {2147})
+    check("起点恒 0x2208", {r["top"] for r in rs}, {0x2208})
+    check("终点恒 0x0080", {r["bottom"] for r in rs}, {0x0080})
+    check("最早一次在步 506,201", rs[0]["start"], 506201)
+    icr_addrs = {a for _s, a, _v, _n in fw.in_range(0x400, 0x480)}
+    check("ICR 块 32 个对齐位置全被清过", len(icr_addrs), 32)
+    check("0x400..0x47C 一个不落", icr_addrs == set(range(0x400, 0x480, 4)), True)
+    check("0x46C 每次都被写 0（11 笔）",
+          [v for _s, a, v, _n in fw.in_range(0x46C, 0x470)], [0] * 11)
+    check("原样：换手 24 次", len(res["switches"]), 24)
+    check("原样：最后一次换手 501,944", res["switches"][-1][0], 501944)
+    check("原样：跑过入口的任务 9 个", res["tasks"],
+          [2, 3, 4, 5, 6, 7, 9, 10, 11])
+    check("原样：收尾卡在拷贝循环 0x137968", m.cpu.pc, 0x137968)
+
+    # ---- 停摆的直接原因：填充把 ICR 0x46F 写成 0x00
+    check("0x46F 末值 0x00（V40 记的 0x80 作废）", m.bus.rd(0x46F, 1) & 0xFF, 0x00)
+    odd = [w for w in icr_spy.writes if w[2] not in (0x10, 0x1E)]
+    check("0x46F 被填充清 0 共 11 次（每次填充一次）", len(odd), 11)
+    check("第一次清 0 在步 513,781", odd[0][0], 513781)
+    check("这 11 笔写的都是 0x00", {w[2] for w in odd}, {0x00})
+    check("0x46F 出现过的值只有 0x00/0x10/0x1E",
+          {w[2] for w in icr_spy.writes}, {0x00, 0x10, 0x1E})
+    nz = sum(n for v, n in fw.values_in(0x80, 0x220C).items() if v)
+    check("填充里非 0 写入 671 笔 / 23,617 笔", (nz, len(fw.hits)), (671, 23617))
+
+    # ---- 0x9F58DA85 是只写标志
+    check("0x9F58DA85 只有 1 笔写", len(sp.writes), 1)
+    check("写点在 0x12E0AE、值 1", (sp.writes[0][1], sp.writes[0][2]), (0x12E0AE, 1))
+    check("0x9F58DA85 一笔读都没有", len(sp.reads), 0)
+
+    # ---- 反事实：把填充写引到影子 RAM
+    m2 = blive.boot()
+    dv = bfill.divert_fill(m2).attach()
+    res2 = blive.run(m2, steps=700000)
+    dv.detach()
+    check("反事实：被引走 2,144 笔", dv.diverted, 2144)
+    check("反事实：换手 37 次", len(res2["switches"]), 37)
+    check("反事实：最后一次换手 660,439", res2["switches"][-1][0], 660439)
+    check("反事实：17 个任务入口", res2["tasks"],
+          [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 16, 17, 20, 21, 26, 27, 28])
+    check("反事实：收尾回到空闲任务", m2.cpu.pc, 0x407DC)
+    check("反事实：ICR 0x46F 不再是 0x80", m2.bus.rd(0x46F, 1), 0x10)
+
+    # ---- 任务启动普查
+    rows = bfill.census(m2)
+    check("普查 29 条", len(rows), 29)
+    check("sta_tsk 调用 16 次", len(bfill.started_tasks(m2)), 16)
+    check("从没启动过的任务", bfill.never_started(m2), [8, 12, 13, 14, 15, 18, 19, 22, 23, 24, 25])
+    check("任务 1 在反事实里跑到过", [r["ran"] for r in rows if r["id"] == 1], [True])
+    check("任务 8 的存 SP 还是 0", [r["saved_sp"] for r in rows if r["id"] == 8], [0])
+
+    # ---- 填充值/跨度常量与实测一致
+    check("FILL_BASE = 0x80（r0 是基址，不是值）", bfill.FILL_BASE, 0x80)
+    check("FILL_VALUE = 0x00（值在 r12）", bfill.FILL_VALUE, 0x00)
+    check("FILL_SPAN = 0x2188", bfill.FILL_SPAN, 0x2188)
+    check("FILL_TOP/FILL_BOTTOM = 0x2208 / 0x0080",
+          (bfill.FILL_TOP, bfill.FILL_BOTTOM), (0x2208, 0x0080))
+    check("region_of(0x46C) = ICR 块", bfill.region_of(0x46C), "ICR 块")
+    check("region_of(0x44) = direct page", bfill.region_of(0x44), "direct page")
+    check("region_of(0x1500) = 低区 RAM", bfill.region_of(0x1500), "低区 RAM")
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3103,6 +3186,7 @@ def main():
     test_binit()
     test_bready()
     test_blive()
+    test_bfill()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
