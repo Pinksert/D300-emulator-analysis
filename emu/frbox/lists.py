@@ -185,14 +185,38 @@ NODES_RAM_BASE = 0x9F550000
 NODES_RAM_SIZE = 0x00030000
 #: 补上映映后仍未映射的外设窗口（不该用 RAM 铺）
 PERIPHERAL_WINDOWS = (
-    ("0x40xxxxxx", 0x40000000, 0x41000000, 1730),
+    # V46：0x40xxxxxx 已建成器件（dev_ctrl40）—— 寄存器实例可回读、
+    # +0xF8 的两次 RMW 能叠出 0x3B3B、+0x10200 的批量流留档。
+    # 详见 KNOWN_ISSUES #179 / emu/probe/exp_dual40.py。
+    ("0x40xxxxxx", 0x40000000, 0x41000000, 0),
     ("0x6Fxxxxxx", 0x6F000000, 0x70000000, 108),
     # V45：0x50xxxxxx 已建成器件（dev_ctrl50），那 80 笔不再算未映射写。
     # 详见 KNOWN_ISSUES #176 / emu/probe/exp_bctrl.py。
     ("0x50xxxxxx", 0x50000000, 0x51000000, 0),
-    ("0x60/0x61",   0x60000000, 0x62000000, 11),
+    # V46：0x60000000 / 0x61000000 已建成器件（dev_dual60）。
+    ("0x60/0x61",   0x60000000, 0x62000000, 0),
+    # 只有 4 笔写、0 次读，且是 0x5C00_2000 里 3 个孤立偏移 —— 明显是某个
+    # 更大窗口里的一小片命令口，证据不足以单独建器件，老实留着。
     ("0x5C0020xx",  0x5C002000, 0x5C002100, 4),
 )
+
+#: V46：`0x40000000` 窗口（与 `dev_ctrl40.CtrlWindow40` 一致）。
+#: 寄存器实例在 +0x40000 / +0x40800 / +0x40900，`+0xF8` 是必须可读的 16 位
+#: 位域寄存器（两次 RMW → 0x3B3B）；`+0x10200` 是批量下载口。
+CTRL40_BASE = 0x40000000
+CTRL40_SIZE = 0x1000000
+CTRL40_RMW_OFF = 0xF8
+CTRL40_RMW_FINAL = 0x3B3B
+CTRL40_STREAM_LO = 0x10200
+CTRL40_STREAM_LEN_REG = 0x10000
+
+#: V46：`0x60000000` / `0x61000000` 双通道控制器（与 `dev_dual60.DualCtrl60` 一致）。
+DUAL60_BASES = (0x60000000, 0x61000000)
+DUAL60_SIZE = 0x4000
+DUAL60_CTRL = 0x02
+DUAL60_STATUS = 0x100
+DUAL60_STATUS_FIELD = 0x0C     # +0x100 的 bit2–3（`lsl2 #12` + `lsr2 #14` 取出来）
+DUAL60_READY = 0x03            # 该字段 == 3 才算就绪（256 个值里 64 个命中）
 
 #: V45：`0x50000000` 三通道位串行控制块（与 `dev_ctrl50.CtrlSerial50` 一致）。
 #: 三组各 16 字节，步长 0x100；`+05` 是串口（bit5 CLK / bit3 DATA / bit6-7 状态），
