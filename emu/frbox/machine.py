@@ -918,12 +918,18 @@ class D300B(Machine):
     ssp = 0x0003F000
     default_firmware = os.path.join(FW_DIR, "B3000111.bin")
     cycles_per_tick = 256
-    # 依据（全部来自本次 boot 实验的未映射访问审计）：
+    # 依据（V43 把「未映射访问审计」从头做了一遍，见 results/frbox/bpool.txt）：
     #   * 写入 0x9F58C000 起 1307 次、0x9F5AA000–0x9F5AF000 五页共 5120 次（步长 4）
     #   * 早先静态分析里串口 ISR 读 0x9F58DA86、EXT9 ISR 读 0x9F58DA85
-    # 说明 0x9F58xxxx 是主控真正的数据 RAM，而不是「未映射」。先按 1MB 给，
-    # 上界取观测最高写入（0x9F5AFxxx）之上。
-    extra_ram = [(0x9F580000, 0x00100000, "ram-sdram"),
+    #   * **0x9F69xxxx 整段是固件自己的数据结构**：缓冲区池头 0x9F69CE98 /
+    #     0x9F69CEB4 / 0x9F69CEE4 / 0x9F69CEFC，三个 8.6KB 节点 0x9F696844 /
+    #     0x9F698A60 / 0x9F69AC7C。V41/V42 那 11 次「取缓冲区返回 0」就是
+    #     因为这段没映射（写被丢、读恒 0）—— 真因见 KNOWN_ISSUES #171。
+    #   * 按 64KB 分桶实测（V43，同一份固件跑 70 万步）：用到 0x9F58–0x9F6C
+    #     与 0x9F77–0x9F7E 两簇，上界 0x9F7Dxxx。
+    # 所以 ram-sdram 必须一直铺到任务栈区（0x9F800000）为止 —— 1MB 会在
+    # 0x9F680000 截断，正好把池切在外面。给 2.5MB（0x9F580000+0x00280000）。
+    extra_ram = [(0x9F580000, 0x00280000, "ram-sdram"),
                  # 0x68000xxx 窗口（V22 实测定性）：REALOS 的内核对象区 ——
                  # TCB 链表（0x6800013C 起步长 0x2C）+ 当前任务用户栈
                  # （空闲任务栈 0x68000B98）。派发序列读 [TCB+0x18]（下一任务
