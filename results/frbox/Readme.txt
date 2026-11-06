@@ -162,3 +162,4 @@ bdesc.txt             cd emu && python probe/exp_bdesc.py        （V36：描述
                        ⚠️ 「取首返回值在 R4」只在整段跑完时成立：中间 R4 = is_empty、R5 = 载荷（V38 更正）
 bhandler.txt          cd emu && python probe/exp_bhandler.py      （V37：43 个非空处理函数=事件翻译器、flgid 只有 1/3/10/12、42 条 set_flg 全用立即数、空处理 5 函数 31 槽位、+8=2 是代码常量分派、掩码区 9 字节、提交不写 r5、显示模块 wai_flg(3)）
 binit.txt             cd emu && python probe/exp_binit.py        （V38：槽位 +8 = 槽位编号 70/70（写入者 0x12E61C）、0x12E006 746 步跑通做五件事、调用者是任务 5 入口 0x12DFB8（更正「任务 4」）、sta_tsk(5) 改 TCB 但就绪位图不变、ret 读 DR1 不读栈（旧探针假返回）、wai_sem 非任务上下文卡死 / wai_flg 返回 -33、取首 R4=is_empty R5=载荷）
+bready.txt            cd emu && python probe/exp_bready.py      （V39：0x45984 在 B 段是 ROM（写丢弃、读回 0x2E80A800）；真正的就绪结构在内核区头部 0x68000000（+0 当前 TCB / +4 位图 / +8 起 8B 队列哨兵）；队列号 = 优先数-1、位 = 31-队列号；sta_tsk(5) 入队 3 + 置位 28 + 写 0x44 请求派发（0x41886）；派发器 0x40D32 选优先数最小；换手 空闲→任务2→任务4→任务3→任务5，任务 5 上 CPU 后 0x12E006 自己跑完）
