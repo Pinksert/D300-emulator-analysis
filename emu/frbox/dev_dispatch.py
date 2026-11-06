@@ -41,42 +41,84 @@ DISPATCH_VEC = 0x3F      # 它请求的那条向量（内核调度器 0x000FE776
 
 
 class DispatchRequest(Device):
-    """写 1 就挂一条调度中断；读恒为 0（真机上是只写寄存器）。"""
+    """请求锁存器（V40 改写）。
+
+    写 1 = 置位并挂一条 vec 0x3F 中断；写 0 = 清位**并撤掉待决项**；
+    读回锁存位（固件确实会写完立刻读一次：0x41886→0x41888、0x40EAC→0x40EAE，
+    读回值丢弃，是写后哑读）。
+
+    旧版本只置不清：写 0 什么都不做，于是一条已经被撤销的请求
+    会在 CPU 的待决队列里活到下一次开中断，被当成真请求受理。
+    """
 
     name = "dispatch"
 
     def __init__(self, machine=None, vec=DISPATCH_VEC):
         self.vec = vec & 0xFF
-        self.requests = 0
+        self.requests = 0        # 写 1 的次数
+        self.acks = 0            # 写 0 的次数
+        self.reads = 0           # 被读的次数
+        self.cancelled = 0       # 写 0 时真正撤掉的待决项
+        self.raised = 0          # 真正挂上中断的次数（重叠置位不算）
+        self.latch = 0           # 锁存位
         self.last_level = None
         super().__init__(machine)
 
     def reset(self):
         self.requests = 0
+        self.acks = 0
+        self.reads = 0
+        self.cancelled = 0
+        self.raised = 0
+        self.latch = 0
         self.last_level = None
 
     # ---- 总线 ----
     def read(self, off, size):
-        return 0
+        self.reads += 1
+        return self.latch
 
     def write(self, off, size, val):
-        if not (val & 0xFF):
-            return                       # 写 0 不算请求
-        self.requests += 1
+        v = val & 0xFF
         m = self.machine
-        lvl = None
+        if not v:
+            self.acks += 1
+            if self.latch:
+                self.latch = 0
+                self.deassert()
+            return
+        self.requests += 1
+        if self.latch:                   # 已经挂着了：重复置位不重复挂中断
+            return
+        self.latch = 1
         if m is not None:
             lvl = m.irq_level(self.vec) or 0x1F   # 级别取固件自己写进 ICR 的值
             m.raise_irq(self.vec, lvl)
-        self.last_level = lvl
-        self.dbg(f"0x{off:02X} ← 0x{val & 0xFF:02X} → 请求 vec 0x{self.vec:02X} "
-                 f"(level 0x{lvl:02X})，累计 {self.requests} 次")
+            self.raised += 1
+            self.last_level = lvl
+            self.dbg(f"0x{off:02X} ← 0x{v:02X} → 请求 vec 0x{self.vec:02X} "
+                     f"(level 0x{lvl:02X})，累计 {self.requests} 次")
+
+    def deassert(self):
+        """撤掉 CPU 待决队列与 ICU 里这条向量的请求。"""
+        m = self.machine
+        c = getattr(m, "cpu", None) if m is not None else None
+        if c is None:
+            return
+        before = len(c.irq_pending)
+        c.irq_pending[:] = [e for e in c.irq_pending if e[1] != self.vec]
+        self.cancelled += before - len(c.irq_pending)
+        if m.icu is not None:
+            m.icu.pending.pop(self.vec, None)
 
     # ---- 调试 ----
     def state(self):
-        out = {"请求次数": self.requests, "向量": "0x%02X" % self.vec}
+        out = {"请求（写 1）": self.requests, "挂中断": self.raised, "撤销（写 0）": self.acks,
+               "被读": self.reads, "锁存位": self.latch, "向量": "0x%02X" % self.vec}
+        if self.cancelled:
+            out["撤掉的待决项"] = self.cancelled
         if self.last_level is not None:
-            out["级别"] = "0x%02X" % self.last_level
+            out["最后级别"] = "0x%02X" % self.last_level
         return out
 
 
