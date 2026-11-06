@@ -187,10 +187,21 @@ NODES_RAM_SIZE = 0x00030000
 PERIPHERAL_WINDOWS = (
     ("0x40xxxxxx", 0x40000000, 0x41000000, 1730),
     ("0x6Fxxxxxx", 0x6F000000, 0x70000000, 108),
-    ("0x50xxxxxx", 0x50000000, 0x51000000, 80),
+    # V45：0x50xxxxxx 已建成器件（dev_ctrl50），那 80 笔不再算未映射写。
+    # 详见 KNOWN_ISSUES #176 / emu/probe/exp_bctrl.py。
+    ("0x50xxxxxx", 0x50000000, 0x51000000, 0),
     ("0x60/0x61",   0x60000000, 0x62000000, 11),
     ("0x5C0020xx",  0x5C002000, 0x5C002100, 4),
 )
+
+#: V45：`0x50000000` 三通道位串行控制块（与 `dev_ctrl50.CtrlSerial50` 一致）。
+#: 三组各 16 字节，步长 0x100；`+05` 是串口（bit5 CLK / bit3 DATA / bit6-7 状态），
+#: `+06` bit2 是片选。固件在这块地址上做了 80 笔写、58 次读、0 次整块读。
+CTRL50_BASE = 0x50000000
+CTRL50_SIZE = 0x400
+CTRL50_CH_BASE = 0x100
+CTRL50_CH_STRIDE = 0x100
+CTRL50_CH_COUNT = 3
 
 
 def nodes_ram_extra():
