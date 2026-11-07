@@ -63,6 +63,46 @@ V42 把「停摆」定成一次空指针搬运，把「两次取缓冲区都返�
 
 ⚠️ 计数「只减不增 / 下溢成 0xFFFFFFFF」这个 V43 中途的观察**已被推翻**：那是
 1MB 口径下「读回恒 0」的副产品。这条留在这里当反面记录。
+
+---
+
+**V47：卡点结案 —— 它等的不是锁，是事件标志 6。**
+
+V43 把「`0x122064` 进去不出来」留成 OPEN（#172）。V47 逐条走完了那条路，
+结论是**三段**，每一段都有动态证据：
+
+1. **第一步不是判池，是加锁。** `0x122082 call:d @r12` 的延迟槽是
+   `0x122084 ldi:8 r4,#0x13` —— 所以那句「`r4 = 0x13`」不是死代码，是
+   **`lock(19)` 的参数**。`0x12590C(sem_id)` 是 **优先数继承互斥量的加锁包装**：
+
+   ```
+   0x12590C(semid)                    0x125992(semid)
+     enter #8                           enter #8
+     get_tid  (-24) → r13 = 自己         get_tid  (-24)
+     chg_pri  (-27) 自己 → 1             chg_pri  (-27) 自己 → 1
+     wai_sem  (-53) semid                sig_sem  (-55) semid
+     *(0x9F58C4D0 + semid) = 自己        *(0x9F58C4D0 + semid) = 0
+     chg_pri  (-27) 自己 → 0             chg_pri  (-27) 自己 → 0
+   ```
+
+   `0x9F58C4D0` 是一张 **按 sem_id 索引的字节表**，记「谁现在持有这把锁」
+   （实测 +19 位先写 `0x09`、后写 `0x0A`，正好是任务 9 → 任务 10）。
+   加锁**成功**：sem 19 计数 1 → 0（步 495,923 内核写 0）。
+
+2. **清标志 → 探三条队列 → 都空 → 解锁 → 等。**
+   `0x122090 clr_flg(6, ~0x20)`（清 flag 6 的 bit5）→ 调两个探测函数 →
+   `0x12211C/0x122136` 两处 `is_empty` 都空 → `0x12214A` 解锁 →
+   `0x12215C wai_flg(6, ptn=0x20, mode=2)`。
+
+3. **flag 6 从头到尾没人置过。** 70 万步整机：`set_flg` 11 次只碰 flag
+   `1 / 3 / 10 / 12 / 14`，**一次都没碰 6**；`clr_flg` 17 次里就有它。
+   反事实补一次 `set_flg(6, 0x20)`：任务确实被唤醒（`0x12215C` 命中 1 → 2 次），
+   但醒来后重新判空、**第二次等**，调用方 `0x13531E` 仍是 0 次 —— 说明
+   光有标志不够，得有节点真被归还。
+
+所以「释放端」不是一个「补个信号」就能补上的东西：它得**既挂回链表、又置 bit5**。
+这段代码在 17 个跑过的任务里都不在，只可能在那 11 个从没启动的任务
+（8、12–15、18、19、22–25）里，或者在只有真实硬件事件才会进的路径上。
 """
 from __future__ import unicode_literals
 
@@ -334,3 +374,104 @@ class sdram_override(object):
         from .machine import D300B
         D300B.extra_ram = self._base
         return False
+
+
+# ---- V47：锁（优先数继承互斥量）与等待（事件标志 6）------------------------
+
+#: 分配器加的那把锁 —— 信号量 19（`0x122084` 的延迟槽写进 r4）
+LOCK_SEM = 19
+#: 加锁包装（get_tid → chg_pri 1 → wai_sem → 记持有者 → chg_pri 0）
+LOCK_ENTER = 0x12590C
+#: 解锁包装（… sig_sem → 清持有者）
+LOCK_EXIT = 0x125992
+#: 「谁持有这把锁」字节表基址；**按 sem_id 索引**（实测 +19 位：任务 9 → 任务 10）
+LOCK_HOLDER_BASE = 0x9F58C4D0
+#: 加锁时把「自己」的优先数临时提到这个值，解锁时归 0
+LOCK_BOOST_PRI = 0x1
+#: `0x9F58C4C0` 起 16 字节：实测全程恒 0。`0x122096 btstl #1, r0`
+#: 读的是 `0x9F58C4C1` 的 bit0 —— 恒 0 就恒走「空」那一支（见 KI#183）。
+LOCK_STATE_LO = 0x9F58C4C0
+LOCK_STATE_SIZE = 0x10
+
+#: 分配器卡住的那条 `wai_flg`
+WAIT_FLG_PC = 0x12215C
+#: 它等的是**事件标志 6 的 bit5**（`0x20`），模式 2 = 任一位成立（`bflag.WF_ORW`）
+POOL_FLAG = 6
+POOL_FLAG_BIT = 0x20
+POOL_WAIT_MODE = 0x02
+#: 等之前先把这一位清掉
+CLR_FLG_PC = 0x122090
+
+
+def holder_addr(sem_id):
+    """「谁持有 sem_id 这把锁」那个字节的地址。"""
+    return LOCK_HOLDER_BASE + sem_id
+
+
+def holder(m, sem_id):
+    """当前持有者（任务号）；0 = 无人。"""
+    return m.bus.rd(holder_addr(sem_id), 1) & 0xFF
+
+
+def holders(m, count=40):
+    """整张持有者表：`[(sem_id, 任务号)]`（含 0 的那些，方便看全貌）。"""
+    return [(i, m.bus.rd(LOCK_HOLDER_BASE + i, 1) & 0xFF) for i in range(1, count + 1)]
+
+
+def held_locks(m, count=40):
+    """只列**有人持有**的那些：`[(sem_id, 任务号)]`。"""
+    return [(i, t) for i, t in holders(m, count) if t]
+
+
+def lock_state_bytes(m):
+    """`0x9F58C4C0` 起 16 字节的原始值（实测恒 0，留档用）。"""
+    return bytes(m.bus.rd(LOCK_STATE_LO + i, 1) & 0xFF for i in range(LOCK_STATE_SIZE))
+
+
+class HolderWatch(object):
+    """记「锁的持有者」什么时候换人 —— 把 40 个字节的整体当成一个状态。
+
+    只包 `bus.wr`；`bus.rd` 不动。推进仍走 `m.run()`。
+    """
+
+    def __init__(self, m, count=40):
+        self.m = m
+        self.count = count
+        self.events = []          # (step, pc, sem_id, 新值)
+        self._bw = None
+
+    def attach(self):
+        m, bw = self.m, self.m.bus.wr
+        lo, hi = LOCK_HOLDER_BASE, LOCK_HOLDER_BASE + self.count + 1
+
+        def wr(a, n, v, pc=0):
+            if lo <= a < hi and n == 1:
+                self.events.append((m.step_count, pc, a - lo, v & 0xFF))
+            return bw(a, n, v, pc)
+
+        self._bw = bw
+        m.bus.wr = wr
+        return self
+
+    def detach(self):
+        if self._bw is not None:
+            self.m.bus.wr = self._bw
+            self._bw = None
+        return self
+
+    def __enter__(self):
+        return self.attach()
+
+    def __exit__(self, *a):
+        self.detach()
+        return False
+
+    def of(self, sem_id):
+        return [e for e in self.events if e[2] == sem_id]
+
+    def acquire_release(self, sem_id):
+        """`[(step, 'set'|'clear', 任务号)]` —— 谁拿了、谁放了。"""
+        out = []
+        for step, _pc, sid, v in self.of(sem_id):
+            out.append((step, "set" if v else "clear", v))
+        return out
