@@ -3764,6 +3764,86 @@ def test_dual40():
     check("反事实：入口仍是 17 个", len(res2["tasks"]), 17)
 
 
+def test_wait():
+    """V47：分配器卡在 `wai_flg(6, bit5)`；`flow` 的「当前 TCB」槽按段取。"""
+    print("\n[53 分配器的卡点 + flow 的 TCB 槽（V47）]")
+    from frbox import bflag, blive, bpool
+    from frbox.flow import cur_tcb_slot
+
+    # ---- A. 常量与静态字节：把「延迟槽是实参」这件事钉住
+    check("锁是信号量 19", bpool.LOCK_SEM, 19)
+    check("加锁包装 0x12590C", bpool.LOCK_ENTER, 0x12590C)
+    check("解锁包装 0x125992", bpool.LOCK_EXIT, 0x125992)
+    check("持有者表基址", bpool.LOCK_HOLDER_BASE, 0x9F58C4D0)
+    check("holder_addr(19)", bpool.holder_addr(19), 0x9F58C4E3)
+    check("等的是 flag6 的 bit5、mode 2",
+          (bpool.POOL_FLAG, bpool.POOL_FLAG_BIT, bpool.POOL_WAIT_MODE),
+          (6, 0x20, 2))
+
+    m = blive.boot()
+    rom, base = m.bus.rom, m.bus.rom_base
+
+    def bs(a, n=2):
+        return rom[a - base:a - base + n].hex()
+
+    check("0x122084 = ldi:8 r4,#0x13（lock 的实参）", bs(0x122084), "c134")
+    check("0x12214C = ldi:8 r4,#0x13（unlock 的实参）", bs(0x12214C), "c134")
+    check("0x12215C = int #0x40", bs(0x12215C), "1f40")
+    check("boot 后没人持有 sem 19", bpool.holder(m, 19), 0)
+    check("0x9F58C4C0 起 16 字节全 0", bpool.lock_state_bytes(m), bytes(16))
+    check("A 段仍取 0x45980", cur_tcb_slot(create("d300-a")), 0x45980)
+    check("B 段取 0x68000000", cur_tcb_slot(m), 0x68000000)
+    check("flow 在 B 段用的是 B 槽", m.flow.cur_tcb, 0x68000000)
+
+    # ---- B. 整机跑完：卡点、锁、flag 账
+    hits = {bpool.ALLOC_NODE: 0, bpool.WAIT_FLG_PC: 0, bpool.CALLER_R8_PC: 0,
+            0x122162: 0}
+    c, st = m.cpu, m.cpu.step
+
+    def spy():
+        if c.pc in hits:
+            hits[c.pc] += 1
+        return st()
+
+    hw = bpool.HolderWatch(m).attach()
+    c.step = spy
+    blive.run(m, steps=700000)
+    c.step = st
+    hw.detach()
+
+    check("进分配器 1 次", hits[bpool.ALLOC_NODE], 1)
+    check("走到 wai_flg(6) 那句 1 次", hits[bpool.WAIT_FLG_PC], 1)
+    check("调用方取返回值 0 次（没返回）", hits[bpool.CALLER_R8_PC], 0)
+    check("「醒来再锁」那句没走过", hits[0x122162], 0)
+    check("跑完 sem19 无人持有", bpool.holder(m, 19), 0)
+    check("拿过 sem19 的任务",
+          sorted({t for _s, k, t in hw.acquire_release(19) if k == "set"}),
+          [4, 9, 10, 11, 27, 28])
+    check("sem19 拿了 6 次放了 6 次", len(hw.of(19)), 12)
+
+    fl = m.flow
+    check("flow.switches 34 条", len(fl.switches), 34)
+    check("flow 记到 18 个 TCB", len({x[8] for x in fl.calls}), 18)
+    # ⚠️ TCB 数与任务数不是同一个数：多出来的那一个恒是 tcb = 0（槽还没填的那一段）
+    check("flow 记到 17 个任务（第 18 个 TCB 是 tcb=0）",
+          (fl.summary()["tasks"], fl.summary()["tcbs"] - fl.summary()["tasks"]), (17, 1))
+    setf = sorted({x[3] for x in fl.calls if x[2] == -48})
+    check("set_flg 只碰过 1/3/10/12/14", setf, [1, 3, 10, 12, 14])
+    check("flag 6 从来没被 set", 6 in setf, False)
+    check("flag 6 确实被等过", 6 in {x[4] for x in fl.calls if x[2] == -46}, True)
+
+    # ---- C. 反事实：补一次 set_flg(6, 0x20) —— 阴性结果
+    r = bflag.set(m, 6, 0x20)
+    check("set_flg 走内核受理", r["err"], 0)
+    c.step = spy
+    blive.run(m, steps=200000)
+    c.step = st
+    check("反事实：唤醒后重走一遍、再等一次",
+          hits[bpool.WAIT_FLG_PC] >= 2, True)
+    check("反事实：走过了「醒来再锁」那句", hits[0x122162] >= 1, True)
+    check("反事实：调用方仍然没拿到返回值", hits[bpool.CALLER_R8_PC], 0)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3812,6 +3892,7 @@ def main():
     test_bfill()
     test_bmove()
     test_bpool()
+    test_wait()
     test_lists()
     test_bctrl()
     test_dual40()
