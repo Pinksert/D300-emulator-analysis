@@ -4,7 +4,7 @@
 
 这里有两套东西，目标不同：
 
-| | **frbox 0.47.0** | NikonEmulator 驱动 |
+| | **frbox 0.48.0** | NikonEmulator 驱动 |
 |---|---|---|
 | 是什么 | 纯 Python 写的 **D300 专用全系统模拟器**（FR CPU + 总线 + 外设 + 中断 + 快照 + 自旋消除 + monitor） | 给上游 [NikonEmulator](https://github.com/nikonhacker) 写的 18 个实验驱动 |
 | 跑什么 | D300 的 **A 段**（IO 协处理，512 KB）和 **B 段**（主控，7 MB）整机 | B 段为主，函数级打桩 |
@@ -17,7 +17,7 @@
 而按键、存储卡、测光这些外设模型还没有。
 它是一份**逆向过程的记录**：哪些链路已经走通、卡在哪一位上、踩过哪些坑。
 
-**仓库里没有任何 HTML 文件。** 59 份报告全部只留在本机（根目录中文名），
+**仓库里没有任何 HTML 文件。** 60 份报告全部只留在本机（根目录中文名），
 仓库只留文末那张「报告索引」表 ——
 每份报告的主题和结论都写在表里，读表就够；要细节再回本地开原文。
 
@@ -55,7 +55,7 @@ python -m frbox -M d300-a --realos 1 --cov --cb --auto-irq2b 1024 \
        -monitor none -c "fast 100000; autoirq; tasks"    # 周期时钟：中断自己来（V21）
 python -m frbox -M d300-a --realos 1 --cov --cb --irq2b 20 --answer  # 硬写完成位（V19 对照）
 
-python frbox_selftest.py     # 1271/1271
+python frbox_selftest.py     # 1289/1289
 python fr_selftest.py        # 63/63
 ```
 
@@ -117,7 +117,7 @@ D300-emulator-analysis/
 ├── README.md               本文件
 ├── KNOWN_ISSUES.md         ★ 已知问题：已修缺陷、踩坑记录、当前边界
 ├── BUILD.md                环境搭建（Java 线）＋ frbox 的运行方式
-├── emu/                    ★ frbox 0.47.0：纯 Python 全系统模拟器
+├── emu/                    ★ frbox 0.48.0：纯 Python 全系统模拟器
 │   ├── fr_emu.py           CPU 核心（含 EIT、μITRON 陷阱）
 │   ├── fr30.cpu            binutils CGEN 指令描述（解码表输入，GPL，见 emu/NOTICE.md）
 │   ├── fr30-opc.c
@@ -129,9 +129,9 @@ D300-emulator-analysis/
 │   ├── fr_selftest.py      63 条 CPU 断言
 │   ├── frbox/              分层：bus / device / dev_clk / dev_serial / dev_timer
 │   │                       / icu / machine / monitor / snapshot / trace / cli
-│   ├── frbox_selftest.py   1271 条断言
+│   ├── frbox_selftest.py   1289 条断言
 │   ├── frbox_boot.py       启动诊断
-│   └── probe/              92 个取证脚本（见 probe/README.md）
+│   └── probe/              93 个取证脚本（见 probe/README.md）
 ├── docs/
 │   ├── 01-architecture.md  静态结构：地址表、任务表、管线、总线协议
 │   ├── 02-findings.md      各轮结论的时间线，含被证伪的假设
@@ -162,7 +162,7 @@ D300-emulator-analysis/
 | 未定义编码 / 未实现指令 | 854 / **0** |
 | 覆盖助记符 | 122 种 |
 | 执行速度 | 30,000–43,000 步/秒（CPython 3.13 单线程） |
-| 自检 | 1271 条（frbox）+ 63 条（CPU），全绿 |
+| 自检 | 1289 条（frbox）+ 63 条（CPU），全绿 |
 | A 段行程 | 43,446 步 / 824 PC / 0 中断 / 停 `0xFE50C` |
 | B 段行程 | 191,518 步 / 1,239 PC / 1 中断 / 停 `0x407D8`（复位链尽头，V20 及以前的止点） |
 | B 段 REALOS 原生 boot（V22） | **191,520 步到空闲任务 `0x407DC`**（确定性）；前提是补齐两块实测定性的 RAM：`0x68000000` 64 KB 内核对象区（TCB 链 + 当前任务用户栈，boot 期间观测写入 3,746 次）+ `0x9F800000` 256 KB 任务用户栈区（28 条任务栈顶全在 `0x9F8002A4–0x9F8222A4`） |
@@ -436,7 +436,7 @@ java -Xmx1500m com.nikonhacker.emu.D300Cover B3000111.bin 20000000 0 cover0.txt 
 
 ---
 
-## 报告索引（59 份 · 都留在本机）
+## 报告索引（60 份 · 都留在本机）
 
 **HTML 报告一律不入库。** 两个原因：GitHub 的 blob 视图不渲染 HTML，点开只有源码；单份 1–2 MB，改一版就多一版二进制快照，把提交历史淹掉。所以仓库里只留这张表 —— 每份报告的结论都写在这里，要细节再回本地开原文。
 
