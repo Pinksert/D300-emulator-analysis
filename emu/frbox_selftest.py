@@ -3844,6 +3844,49 @@ def test_wait():
     check("反事实：调用方仍然没拿到返回值", hits[bpool.CALLER_R8_PC], 0)
 
 
+def test_static():
+    """V48：全 ROM 静态普查（bstatic）—— 调用点 / 调用边 / store / flag 6 的按铃人。
+
+    ⚠️ 这是自检里**最慢的一条**（线性扫 7 MB，约 50 秒）。慢也得跑：它断言的是
+    「ROM 里到底写了什么」，动态跑一万步也看不见没被执行的那 88 个调用点。
+    """
+    print("\n[54 全 ROM 静态普查（V48）]")
+    from frbox import bgate, bstatic
+
+    sw, m = bstatic.sweep_of_type("d300-b")
+    s = sw.summary()
+    check("调用点 2297 个", s["calls"], 2297)
+    check("服务号认不出 15 个", s["unknown_svc"], 15)
+    check("调用边 15435 条", s["edges"], 15435)
+    check("不同被调目标 1576 个", s["targets"], 1576)
+    check("enter 23613 个", s["funcs"], 23613)
+    check("能算出地址的 store 25862 条", s["stores"], 25862)
+
+    # ---- 校验：V47 用**动态证据**定死的两个点，静态必须一模一样
+    c1 = [c for c in sw.calls if c.addr == 0x122090][0]
+    check("0x122090 = clr_flg(-47)", c1.svc, bstatic.CLR_FLG)
+    check("0x122090 清的是 flag 6", c1.flgid, 6)
+    check("0x122090 的 bits = 0xDF（~0x20）", c1.bits, 0xDF)
+    c2 = [c for c in sw.calls if c.addr == 0x12215C][0]
+    check("0x12215C = wai_flg(-46)", c2.svc, bstatic.WAI_FLG)
+    check("0x12215C 等的是 flag 6 的 bit5 mode2",
+          (c2.flgid, c2.bits, c2.mode), (6, 0x20, 2))
+
+    # ---- flag 6 的「按铃人」在 ROM 里一直有
+    check("set_flg 静态 866 处", len(sw.flag_sets()), 866)
+    check("碰 flag 6 的 88 处", len(sw.flag_sets(6)), 88)
+    six_bit5 = sorted(c.addr for c in sw.flag_sets(6) if c.bits == 0x20)
+    check("其中 bit5 的 7 处", six_bit5,
+          [0x1201CA, 0x122426, 0x1233B6, 0x14D5E6, 0x14D726, 0x14DACA, 0x14DB52])
+    check("等 flag 6 的静态点 55 处", len(sw.flag_waits(6)), 55)
+    check("主循环那个 set_flg 属于函数 0x1200B0", sw.enclosing(0x1201CA), 0x1200B0)
+
+    # ---- 门字节：写者只有两个，其中一个正是 V25 定的那个
+    check("门字节写者 = 0x12ECF4 / 0x12F180",
+          sw.writers_of(bgate.GATE), [(0x12ECF4, 'stb'), (0x12F180, 'stb')])
+    check("0x12F180 就是 bgate.GATE_WRITER", bgate.GATE_WRITER, 0x12F180)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3893,6 +3936,7 @@ def main():
     test_bmove()
     test_bpool()
     test_wait()
+    test_static()
     test_lists()
     test_bctrl()
     test_dual40()
