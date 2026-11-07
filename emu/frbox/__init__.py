@@ -8,6 +8,7 @@
     frbox.device   设备基类（QEMU DeviceState 的简化版）
     frbox.machine  机器模型：内存映射 + 复位向量 + 运行循环
     frbox.monitor  HMP 式命令行（info mtree / x / step / bp / irq ...）
+    frbox.bstatic  全 ROM 静态普查：调用点 / 调用边 / store（V48）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -21,4 +22,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.47.0"
+__version__ = "0.48.0"
