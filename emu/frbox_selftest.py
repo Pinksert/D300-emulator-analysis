@@ -3958,6 +3958,34 @@ def test_bpix():
     check("同样的块，重画笔数够", v["rewrite"][0], True)
 
 
+def test_tick():
+    """V50：tick 设施（btick）—— 常量、服务号换算、队列布局。
+
+    不建机器：这里断言的是**坐标与换算**。延时队列哨兵 0x68000118 落点、
+    「队列号 = 优先数 − 1」、位号 = 31 − 队列号，这三条错了，
+    手工到期就会挂进错的队列，任务再也换不回来。
+    """
+    from frbox import btick, bready
+
+    check("延时队列哨兵 = 0x68000118", btick.SENTINEL, 0x68000118)
+    check("等待原因字节 TCB+0x20", btick.TCB_WHY, 0x20)
+    check("状态字节与 bready 一致", btick.TCB_STATE, bready.TCB_STATE)
+
+    # 服务号：R12 低 8 位补码
+    check("0xAB → -85（dly_tsk）", btick.sx8(0xFFAB), -85)
+    check("0xE9 → -23（sta_tsk）", btick.sx8(0x00E9), -23)
+    check("0xD1 → -47（clr_flg）", btick.sx8(0x00D1), -47)
+    check("0xFF → -1", btick.sx8(0xFFFF), -1)
+
+    # 队列布局：32 条哨兵占 0x68000008..0x68000108，延时哨兵紧接其后
+    check("队列 9 哨兵 = 0x68000050", bready.queue_addr(9), 0x68000050)
+    check("队列 9 的位号 = 22", bready.bit_of(9), 22)
+    check("32 条哨兵尾 = 0x68000108",
+          bready.queue_addr(31) + bready.QUEUE_STRIDE, 0x68000108)
+    check("延时哨兵在就绪队列区之后",
+          btick.SENTINEL >= bready.queue_addr(31) + bready.QUEUE_STRIDE, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4009,6 +4037,7 @@ def main():
     test_wait()
     test_static()
     test_bpix()
+    test_tick()
     test_lists()
     test_bctrl()
     test_dual40()
