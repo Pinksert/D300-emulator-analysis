@@ -43,6 +43,30 @@ FR30 是 16 位定长（`ldi:32` 由解码器给出 6 字节），所以**从头
   寄存器传参的调用**不在**图里。
 * **`stores` 只收基址是已知常量的那一种**（`ldi:32 rX,#addr` 之后 `st/stb/sth`）。
   基址来自参数或内存的 store 收不到。
+
+## ⚠️ V51 更正：store 地址曾经一律算错
+
+V48–V50 的 `_sweep` 取 `rb = v['rj']`（退化到 `ri`）当基址、把 `disp8/9/10` 当偏移，
+对**全部** store 形态一视同仁。这与 `fr_emu.py:684-709` 的执行实现不符，后果是：
+
+    0x196F10  stb r4, @(R13, rJ)      ; 真实地址 = r13 + rJ
+              V50 算成 regs[rj]       ; 漏掉 r13，把 r13=0x2D 那个偏移丢了
+
+V50 报的「`0x9F5A0284` 有 38 个写点」全部是这类假阳性 —— 它们真实写的是
+`0x9F5A0284 + r13`（同一结构体的字段），而**偏移 0 的字一个写点都没有**。
+V48 的 `writers_of(GATE)` 同样需要按本节重算。
+
+修正后的口径（照抄 `fr_emu` 的分支，不靠猜字段序，硬规矩 4 / KI#168）：
+
+| base | 形态 | 地址 |
+|---|---|---|
+| `0x1400/0x1500/0x1600` | `st Rj` | `r[rj]` |
+| `0x1000/0x1100/0x1200` | `st @(R13,Rj)` | `r13 + r[rj]` |
+| `0x3000/0x5000/0x7000` | `st @(disp,R14)` | `r14 + sx(disp)*scale` |
+| `0x1300` | `st @(udisp6,R15)` | `r15 + udisp6*4` |
+| 其它 | `@-R15` 等 | 不算（栈） |
+
+`dmov` 系列同样写内存，本模块仍**不扫**（目标多是直接页 `0..0x3FF`，见 `bdmov` 未做）。
 """
 
 from . import machine as _machine
@@ -86,6 +110,52 @@ GATE = 0x9F58D08F
 #: 分配器（V47 定，见 `bpool.py`）：等 flag 6 的 bit5
 POOL_FLAG = 6
 POOL_BIT = 0x20
+
+#: `st/sth/stb` 的地址形态（照抄 `fr_emu.py:684-709`，见模块 docstring）
+_ST_SHAPE = {
+    0x1400: ('@Rj', 4), 0x1500: ('@Rj', 2), 0x1600: ('@Rj', 1),
+    0x1000: ('@(R13,Rj)', 4), 0x1100: ('@(R13,Rj)', 2), 0x1200: ('@(R13,Rj)', 1),
+    0x3000: ('@(disp,R14)', 4), 0x5000: ('@(disp,R14)', 2),
+    0x7000: ('@(disp,R14)', 1),
+    0x1300: ('@(udisp6,R15)', 4),
+}
+#: `@(disp,R14)` 的 disp 字段与缩放
+_ST_DISP = {'@(disp,R14)': None}      # 由 base 决定，见下
+_ST_DISP_KEY = {0x3000: ('disp10', 8), 0x5000: ('disp9', 8), 0x7000: ('disp8', 8)}
+
+
+def _sx(v, bits):
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
+def _st_addr(mnem, base, v, regs):
+    """按 `fr_emu` 的分支算 store 的真实地址；算不出返回 None。
+
+    `regs` 是线性扫时的「最近一次 ldi 立即数」缓存，未知为 None。
+    """
+    shape = _ST_SHAPE.get(base)
+    if shape is None:
+        return None                      # @-R15 / dr / ps 等：栈或特殊寄存器
+    kind, scale = shape
+    if kind == '@Rj':
+        rb = v.get('rj')
+        return None if rb is None or regs[rb] is None else regs[rb] & 0xFFFFFFFF
+    if kind == '@(R13,Rj)':
+        rb = v.get('rj')
+        if regs[13] is None or rb is None or regs[rb] is None:
+            return None
+        return (regs[13] + regs[rb]) & 0xFFFFFFFF
+    if kind == '@(disp,R14)':
+        key, bits = _ST_DISP_KEY[base]
+        d = v.get(key)
+        if regs[14] is None or d is None:
+            return None
+        return (regs[14] + _sx(d, bits) * scale) & 0xFFFFFFFF
+    if kind == '@(udisp6,R15)':
+        if regs[15] is None:
+            return None
+        return (regs[15] + v.get('udisp6', 0) * 4) & 0xFFFFFFFF
+    return None
 
 
 def sx8(v):
@@ -153,7 +223,9 @@ class Sweep(object):
         self.calls = []      # [CallSite]
         self.edges = {}      # 目标地址 -> [调用点地址]
         self.funcs = []      # `enter` 指令地址（升序）
-        self.stores = []     # (pc, addr, mnemonic)
+        self.stores = []     # (pc, addr, mnemonic) —— 只收地址可定的
+        self.stores_unknown = 0   # 形态不可定址（栈 / 寄存器未知）的 store 条数
+        self.ldi32 = {}      # 立即数 -> [(pc, size)]，给 `refs_to` 用
         self._sweep()
 
     # ------------------------------------------------------------ 扫描
@@ -184,12 +256,15 @@ class Sweep(object):
             elif mn == 'enter':
                 self.funcs.append(addr)
             elif mn in ('st', 'stb', 'sth'):
-                rb = v.get('rj')
-                if rb is None:
-                    rb = v.get('ri')
-                disp = (v.get('disp8') or v.get('disp9') or v.get('disp10') or 0)
-                if rb is not None and regs[rb] is not None:
-                    self.stores.append((addr, regs[rb] + disp, mn))
+                a = _st_addr(mn, _bs, v, regs)
+                if a is not None:
+                    self.stores.append((addr, a, mn))
+                else:
+                    self.stores_unknown += 1
+            elif mn in ('ldi:32', 'ldi:32m'):
+                imm = v.get('i32')
+                if imm is not None:
+                    self.ldi32.setdefault(imm, []).append((addr, size))
 
             if mn not in NONWRITE:
                 ri = v.get('ri')
@@ -232,6 +307,29 @@ class Sweep(object):
     def callers_of(self, addr):
         return list(self.edges.get(addr, ()))
 
+    def refs_to(self, addr, window=8):
+        """谁**加载**了 addr —— 按 `ldi:32` 立即数查，accept `[addr-window, addr]`。
+
+        为什么要有窗口（V51）：调用者加载的是函数的**序言起点**
+        （`stm1 {..}` 或 `stm1 {..} + st dr1`），而 `enter` 在序言之后 2 或 4 字节。
+        所以拿 `enclosing()` 给的 `enter` 地址去查引用，必然 0 命中 ——
+        V51 初版对 11 个启动器全部报「无调用者」，就是栽在这里。
+
+        -> [(pc, imm, 下一条助记符或 None)]，按 pc 升序。
+        """
+        import fr_emu
+        out = []
+        for imm in range(addr - window, addr + 1):
+            for pc, size in self.ldi32.get(imm, ()):
+                nxt = fr_emu.TABLE.decode(self.rom, pc - self.base + size)
+                out.append((pc, imm, nxt[0] if nxt else None))
+        return sorted(out)
+
+    def callers_strict(self, addr, window=8):
+        """`refs_to` 里下一条是 `call` / `call:d` / `jmp` 的 —— 这才是调用。"""
+        return [(pc, imm, nx) for pc, imm, nx in self.refs_to(addr, window)
+                if nx in ('call', 'call:d', 'jmp')]
+
     def writers_of(self, addr):
         """能算出确切地址、且等于 addr 的 store。"""
         return [(pc, mn) for pc, a, mn in self.stores if a == addr]
@@ -239,6 +337,26 @@ class Sweep(object):
     def writers_near(self, addr, span=0x20):
         return sorted(((a, pc, mn) for pc, a, mn in self.stores
                        if abs(a - addr) <= span), key=lambda x: x[0])
+
+    def structure_writers(self, base, size, include_negative=0):
+        """落在 `[base, base+size)` 的写点，按**结构体内偏移**分组。
+
+        `include_negative` 允许把 `base` 之前若干字节也算进来（写 `base-4` 这种
+        「前一字段」很常见），结果用负偏移表示。
+
+        -> {off: [(pc, mnemonic)]}，off 相对 base，键升序。
+        """
+        lo = base - include_negative
+        hi = base + size
+        by_off = {}
+        for pc, a, mn in self.stores:
+            if lo <= a < hi:
+                by_off.setdefault(a - base, []).append((pc, mn))
+        return {k: sorted(by_off[k]) for k in sorted(by_off)}
+
+    def store_pcs_in(self, lo, hi):
+        """地址落在 `[lo, hi)` 的全部 store 的 PC 集合。"""
+        return sorted({pc for pc, a, _mn in self.stores if lo <= a < hi})
 
     # ------------------------------------------------------------ 总账
     def summary(self):
@@ -252,6 +370,7 @@ class Sweep(object):
             'targets': len(self.edges),
             'funcs': len(self.funcs),
             'stores': len(self.stores),
+            'stores_unknown': self.stores_unknown,
             'by_svc': svc,
         }
 
