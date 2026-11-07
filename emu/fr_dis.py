@@ -14,6 +14,10 @@ FW_DIR = os.environ.get("FRBOX_FW_DIR") or os.path.join(_ROOT, "data")
 SCALE = {"disp10": 4, "disp9": 2, "disp8": 1, "udisp6": 4, "u10": 4,
          "dir10": 4, "dir9": 2, "dir8": 1}
 
+#: `TABLE.decode` 会把 ifmt 编号一并塞进 vals（`op1..op4`），那是**指令格式号**，
+#: 不是操作数。不过滤掉会输出成 `enter op1=0, op2=15, #8` 这种噪声（V51 修）。
+NOISE = ("op1", "op2", "op3", "op4")
+
 
 def fmt_val(k, raw):
     if k == "m4":
@@ -47,13 +51,23 @@ def fmt_val(k, raw):
 
 
 def line(data, off, base_addr):
-    """-> (text, size) ；off 为文件偏移"""
+    """-> (text, size) ；off 为文件偏移
+
+    ⚠️ 操作数顺序：本函数按 `v.items()` 的**字段定义序**输出，而 `TABLE.decode`
+    插入顺序是 `op1, op2, rj, ri`。所以 `ld/st` 会显示成 `st r4, r0`，
+    而 FR 手册的语义是 `st Ri, @(R13, Rj)` —— **`ri` 才是数据寄存器，`rj` 是索引**，
+    读的时候要反过来理解（实测依据见 `fr_emu.py:684-708`：写内存用的是 `r[g("ri")]`，
+    基址/索引用的是 `g("rj")`）。
+
+    V51 只过滤了 `op1..op4` 噪声，没有重排操作数 —— 历史结果文件都是这个序，
+    改了会让新旧输出不可比。要重排请连同旧结果一起重生成。
+    """
     ins = TABLE.decode(data, off)
     if ins is None:
         return f"{base_addr + off:08X}  {data[off:off+2].hex()}          ??", 2
     mn, bs, v, size, w = ins
     raw = data[off:off + size].hex()
-    ops = ", ".join(fmt_val(k, x) for k, x in v.items())
+    ops = ", ".join(fmt_val(k, x) for k, x in v.items() if k not in NOISE)
     return f"{base_addr + off:08X}  {raw:<14} {mn:<8} {ops}", size
 
 
