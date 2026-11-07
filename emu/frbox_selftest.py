@@ -3860,7 +3860,10 @@ def test_static():
     check("调用边 15435 条", s["edges"], 15435)
     check("不同被调目标 1576 个", s["targets"], 1576)
     check("enter 23613 个", s["funcs"], 23613)
-    check("能算出地址的 store 25862 条", s["stores"], 25862)
+    # V51 更正：store 地址改为按 base 分形态算（`_st_addr`）。旧口径 25862 条里
+    # 有一批把 `@(R13,Rj)` 的 r13 丢了、把 rj 当基址，算出的是偏小的假地址。
+    check("能算出地址的 store 19853 条", s["stores"], 19853)
+    check("形态不可定址（栈等）224489 条", s["stores_unknown"], 224489)
 
     # ---- 校验：V47 用**动态证据**定死的两个点，静态必须一模一样
     c1 = [c for c in sw.calls if c.addr == 0x122090][0]
@@ -3885,6 +3888,28 @@ def test_static():
     check("门字节写者 = 0x12ECF4 / 0x12F180",
           sw.writers_of(bgate.GATE), [(0x12ECF4, 'stb'), (0x12F180, 'stb')])
     check("0x12F180 就是 bgate.GATE_WRITER", bgate.GATE_WRITER, 0x12F180)
+    # 上面这条在 V51 修完 store 地址之后**仍然成立** —— 那两条是 `@Rj` 形态
+    # （base 0x1600，`a = r[rj]`），旧算法恰好算对。
+
+    # ---- V51：store 地址形态 / 结构体图 / refs_to 的窗口
+    # 旧算法对 `@(R13,Rj)` 一律取 rj 当基址、丢掉 r13，于是 38 个字段写点
+    # 全部塌到基址上。修完必须是 0。
+    check("修后 writers_of(0x9F5A0284) = 0 个", sw.writers_of(0x9F5A0284), [])
+    st = sw.structure_writers(0x9F5A0284, 0x6BE)
+    check("结构体 0x9F5A0284 有 17 个偏移的写点", len(st), 17)
+    check("共 44 处写", sum(len(v) for v in st.values()), 44)
+    check("偏移 +0 没有写点（btsth #8 读的就是它）", 0 in st, False)
+    check("偏移 +4 没有写点", 4 in st, False)
+    check("偏移 +0x88 只有 1 处写（0x19657C）", st.get(0x88), [(0x19657C, 'st')])
+
+    # ---- V51：refs_to 的窗口 —— 调用者加载的是序言起点，不是 enter
+    check("refs_to(0x1962AA) 里有加载 0x1962A6 的",
+          any(imm == 0x1962A6 for _pc, imm, _nx in sw.refs_to(0x1962AA)), True)
+    check("window=0 时查不到（证明窗口是必要的）",
+          sw.refs_to(0x1962AA, window=0), [])
+    strict = sw.callers_strict(0x1962AA)
+    check("callers_strict 找出 3 个调用点",
+          [pc for pc, _i, _n in strict], [0x1647B8, 0x1708DE, 0x175630])
 
 
 def test_bpix():
