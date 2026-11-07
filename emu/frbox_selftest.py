@@ -3887,6 +3887,77 @@ def test_static():
     check("0x12F180 就是 bgate.GATE_WRITER", bgate.GATE_WRITER, 0x12F180)
 
 
+def test_bpix():
+    """V49：像素判据（bpix）—— 一帧体积、两个连续口径、三条件判定。
+
+    不建机器：boot 一次要 19 万步，自检不该再花这份时间。这里断言的是
+    **计量与判定本身的算法** —— 连续段怎么切、值种数怎么算、
+    填充区为什么不算帧缓冲，以及「值多样 + 被重画」时判定必须能翻成 True
+    （只测 False 一边是假阴性温床）。
+    """
+    print("\n[55 像素判据（V49）]")
+    from frbox import bpix
+
+    check("一帧字节数 38,400", bpix.FRAME_BYTES, 38400)
+    check("一帧位数 307,200", bpix.FRAME_BITS, 307200)
+
+    class FakeBus(object):
+        def __init__(self):
+            self.log = []
+
+        def wr(self, a, n, v, pc=0):
+            self.log.append((a, n, v, pc))
+
+        def rd(self, a, n, pc=0):
+            return 0
+
+    class FakeM(object):
+        def __init__(self):
+            self.bus = FakeBus()
+
+    fk = FakeM()
+    mt = bpix.Meter().attach(fk)
+    base = bpix.SDRAM + 0x1000
+    fk.bus.wr(base, 2, 0x1111, 0x200)
+    fk.bus.wr(base + 2, 2, 0x2222, 0x200)
+    fk.bus.wr(base + 4, 2, 0x3333, 0x200)
+    check("三笔顺写 → R1 = 6 字节", mt.r1[0], 6)
+    check("R1 起点", mt.r1[1], base)
+    check("被写半字 3 个", mt.halfwords(), 3)
+    blk = (base - bpix.SDRAM) // bpix.BLK
+    check("同块值种数 3", len(mt.blk_vals[blk]), 3)
+    check("首次写 hits = 1", mt.hits[(base - bpix.SDRAM) >> 1], 1)
+    fk.bus.wr(base + 6, 2, 0x4444, 0x200)
+    check("再顺写 → R1 = 8 字节", mt.r1[0], 8)
+    check("R2 同 8 字节", mt.r2()[0], 8)
+    fk.bus.wr(base + 0x100, 2, 0x5555, 0x200)     # 跳开一段
+    check("跳写不拉长 R2", mt.r2()[0], 8)
+    check("跳写不拉长 R1（最长仍 8）", mt.r1[0], 8)
+    mt.detach()
+    check("detach 后 wr 还原", fk.bus.wr.__name__, "wr")
+
+    # ---- 反面：64 KB 面积够、但值只有 1 种（整片填充）→ 不算帧缓冲
+    fill = bpix.Meter()
+    for i in range(0, 0x10000, 2):
+        j = i >> 1
+        fill.seen[j] = 1
+        fill.hits[j] = 1
+        fill.blk_vals.setdefault(i >> 12, set()).add(0)
+    check("填充区 R2 = 64 KB", fill.r2()[0], 0x10000)
+    check("填充区不算帧缓冲", bpix.verdict(fill)["framebuffer"][0], False)
+
+    # ---- 正面：同样面积、值多样 + 每个半字写过两次 → 必须判成「有」
+    img = bpix.Meter()
+    for i in range(0, 0x10000, 2):
+        j = i >> 1
+        img.seen[j] = 1
+        img.hits[j] = 2
+        img.blk_vals.setdefault(i >> 12, set()).update(range(32))
+    v = bpix.verdict(img)
+    check("值多样 + 重画 → 判成有帧缓冲", v["framebuffer"][0], True)
+    check("同样的块，重画笔数够", v["rewrite"][0], True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -3937,6 +4008,7 @@ def main():
     test_bpool()
     test_wait()
     test_static()
+    test_bpix()
     test_lists()
     test_bctrl()
     test_dual40()
