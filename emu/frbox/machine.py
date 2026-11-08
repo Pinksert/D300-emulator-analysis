@@ -248,9 +248,15 @@ class Machine:
         self.dp.attach(0x60, 0x68, self.serial)
         # 0x480–0x48F：时钟/复位控制寄存器组，位7 由硬件置位（见 dev_clk.py 的注释）
         self.clk = attach_clk(self, lock_ticks=self.clk_lock_ticks)
-        # 只有两条线有实证，其余留空——推断的绑定要显式加
-        self.icu.bind(0x1B, 0x1B, 8, "串口，实测（ISR 0x0012FDB4）")
-        self.icu.bind(0x20, 0x20, 8, "EXT9，实测（ISR 0x0012FE54）")
+        # 只有两条线有实证，其余留空——推断的绑定要显式加。
+        # V56 注释更正：下面括号里的 0x0012FDB4 / 0x0012FE54 是 **B 段**向量表的
+        # 入口（B 段 TBR=0x000EFC00 实测 vec 0x1B=0x0012FDB4），不是 A 段的。
+        # A 段 TBR=0x000FFC00，同两个向量的实测入口是
+        #   vec 0x1B → 0x00080BD4，vec 0x20 → 0x00080C88
+        # （48 个向量全量注入见 results/frbox/isr-injection.txt，39/48 正确 reti）。
+        # 这里只改注释、不动 bind() 的实参，A/B 两段 43,446 / 191,520 步基线不变。
+        self.icu.bind(0x1B, 0x1B, 8, "串口，实测（B 段 ISR 0x0012FDB4）")
+        self.icu.bind(0x20, 0x20, 8, "EXT9，实测（B 段 ISR 0x0012FE54）")
         self.serial.irq_line = 0x1B
         self.timer.irq_line = None
 
