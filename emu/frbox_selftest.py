@@ -4215,7 +4215,9 @@ def test_v55():
     from frbox import bstatic, bobserve, bpatch
 
     # --- 版本与实证常量（探针 / 自检共用，别各写一份）---
-    check("frbox 版本 = 0.55.0", frbox.__version__, "0.55.0")
+    # V56 起不再在旧版本 test 里锁死版本号，避免每次升版都要改历史断言；
+    # 具体版本由 test_v56() 里的当前版本断言负责。
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
     check("PIO 状态字节 = 0x50000107", bstatic.PIO_STATUS, 0x50000107)
     check("PIO 唯一初始化写点 = 0x0402AA", bstatic.PIO_INIT_PC, 0x0402AA)
     check("PIO 初始化值 = 0x12", bstatic.PIO_INIT_VALUE, 0x12)
@@ -4287,6 +4289,92 @@ def test_v55():
           bobserve.bit_samples(mixed, 0x12345678, 0x08), (0, 0))
 
 
+def test_v56():
+    """V56：`abservice` 服务分发表解析的纯函数单测。
+
+    全用假 ROM / 假 sweep，不扫真固件、不 boot，跑得快且确定性；
+    两段实证数字与动态因果在 `probe/exp_ab_v56.py` / `results/frbox/ab56.txt`。
+    """
+    import collections
+    import frbox
+    from frbox import abservice
+
+    # --- 版本与 V56 实证常量（探针 / 自检共用）---
+    check("frbox 版本 = 0.56.0", frbox.__version__, "0.56.0")
+    check("SVC_VEC = 0x40", abservice.SVC_VEC, 0x40)
+    check("A 段服务表基址 = 0xFE3B8", abservice.A_TABLE, 0x000FE3B8)
+    check("时间驱动服务 = (dly_tsk, tslp_tsk)",
+          abservice.DELAY_SERVICES, (0xAB, 0xDB))
+    check("0xAB 名字 = dly_tsk", abservice.SVC_NAMES[0xAB], "dly_tsk")
+    check("0xDB 名字 = tslp_tsk", abservice.SVC_NAMES[0xDB], "tslp_tsk")
+
+    # --- 8 位补码（硬规矩 23）---
+    check("sx8(0xAB) = -85", abservice.sx8(0xAB), -85)
+    check("sx8(0xDB) = -37", abservice.sx8(0xDB), -37)
+    check("sx8(0xE9) = -23", abservice.sx8(0xE9), -23)
+    check("sx8(0x40) = 64", abservice.sx8(0x40), 64)
+    check("sx8 先截到 8 位", abservice.sx8(0x1AB), -85)
+
+    # --- parse_table：假 ROM，表位于 table_addr-256 .. table_addr-2 ---
+    BASE, TBL, N = 0, 0x800, 0x1000
+    rom = bytearray(N)
+    for i in range(N // 2):                 # 默认桩 delta = 4
+        rom[i * 2], rom[i * 2 + 1] = 0x00, 0x04
+
+    def put(svc_byte, raw):
+        off = TBL + abservice.sx8(svc_byte) * 2
+        rom[off], rom[off + 1] = raw >> 8, raw & 0xFF
+
+    put(0xAB, 0x0000)   # dly_tsk 未实现
+    put(0xDB, 0x0000)   # tslp_tsk 未实现
+    put(0xE9, 0x0100)   # sta_tsk 独立 handler
+    put(0xD0, 0xFF00)   # set_flg 负 delta，测带符号还原
+
+    ent = abservice.parse_table(bytes(rom), BASE, TBL)
+    check("128 个服务槽", len(ent), 128)
+    check("槽键最小 = -128", sorted(ent)[0], -128)
+    check("槽键最大 = -1", sorted(ent)[-1], -1)
+    check("dly_tsk 表项 raw = 0", ent[-85].raw, 0)
+    check("dly_tsk implemented = False", ent[-85].implemented, False)
+    check("dly_tsk handler = 表基址", ent[-85].handler, TBL)
+    check("tslp_tsk 表项 raw = 0", ent[-37].raw, 0)
+    check("sta_tsk delta = 0x100", ent[-23].delta, 0x100)
+    check("sta_tsk handler = 表基址 + delta", ent[-23].handler, TBL + 0x100)
+    check("负 delta 按带符号还原", ent[-48].delta, -256)
+    check("负 delta handler = 表基址 - 256", ent[-48].handler, TBL - 256)
+
+    # --- 默认桩与已实现服务 ---
+    stub, stub_svcs = abservice.default_stub(ent)
+    check("默认桩 handler = 表基址 + 4", stub, TBL + 4)
+    check("默认桩共用 124 槽", len(stub_svcs), 124)
+    check("delta=0 的槽不算进默认桩", -85 in stub_svcs, False)
+    check("implemented_services = [-48, -23]",
+          abservice.implemented_services(ent, stub), [-48, -23])
+    check("不传 stub 时结果相同",
+          abservice.implemented_services(ent), [-48, -23])
+
+    # --- call_profile / delay_report ---
+    Call = collections.namedtuple("Call", "pc svc")
+
+    class _Sweep(object):
+        calls = [Call(0x100, -23), Call(0x200, -23),
+                 Call(0x300, -48), Call(0x400, None)]
+
+    prof = abservice.call_profile(_Sweep())
+    check("call_profile 按服务号聚合", prof[-23], 2)
+    check("call_profile 把 None 单列", prof[None], 1)
+    rep = abservice.delay_report(ent, prof)
+    check("delay_report 两项", len(rep), 2)
+    check("delay_report dly_tsk 结构", rep[0], (0xAB, "dly_tsk", 0, 0, TBL))
+    check("delay_report tslp_tsk 结构",
+          rep[1], (0xDB, "tslp_tsk", 0, 0, TBL))
+    check("name_of 有符号号", abservice.name_of(-23), "sta_tsk")
+    check("name_of 字节号", abservice.name_of(0xE9), "sta_tsk")
+    check("name_of 未实证返回空", abservice.name_of(0x00), "")
+    check("ROM 不足时返回空表",
+          abservice.parse_table(bytes(16), 0, 0x800), {})
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4343,6 +4431,7 @@ def main():
     test_v53()
     test_v54()
     test_v55()
+    test_v56()
     test_lists()
     test_bctrl()
     test_dual40()
