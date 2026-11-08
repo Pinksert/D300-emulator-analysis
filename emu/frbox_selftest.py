@@ -4010,6 +4010,45 @@ def test_tick():
     check("延时哨兵在就绪队列区之后",
           btick.SENTINEL >= bready.queue_addr(31) + bready.QUEUE_STRIDE, True)
 
+    # ---- V52：严格到期的坐标与对象定义表 ----
+    check("剩余 tick 字段 TCB+0x14", btick.TCB_TICKS, 0x14)
+    check("状态字字段 TCB+0x08", btick.TCB_FLAGS, 0x08)
+    check("到期清位掩码 = 0xFFFCFFFB", btick.FLAG_WAIT_CLEAR, 0xFFFCFFFB)
+    check("对象定义表基址 = 0x551B0", btick.OBJ_TABLE, 0x551B0)
+    check("对象表项步长 = 0x10", btick.OBJ_STRIDE, 0x10)
+    check("ID 12 的表项 = 0x55260", btick.object_entry_addr(12), 0x55260)
+    check("ID 1 的表项 = 表基址", btick.object_entry_addr(1), btick.OBJ_TABLE)
+
+
+def test_tick_v52():
+    """V52：严格到期 / 对象等待队列 —— 一台 boot 过的机器做动态核对。
+
+    这里只做**坐标与首轮行为**的回归：对象 ID 12 的队列地址、三个任务的
+    剩余 tick、以及严格口径首轮只唤醒 17/21。更长的推进在
+    `probe/exp_tick_v52.py`（5 台机器 / 30 轮），不放进自检以免拖慢。
+    """
+    from frbox import btick, blive
+
+    m = blive.boot()
+    m.run(max_steps=400000, spin_guard=False)
+
+    q12 = [q for ident, q, _n in btick.object_queues(m) if ident == 12]
+    check("对象 ID 12 的队列 = 0x68000968", q12, [0x68000968])
+    check("ID 12 表项 +4 从 ROM 读回同一地址",
+          m.bus.rd(btick.object_entry_addr(12) + 4, 4), 0x68000968)
+    check("ID 12 表项 +8 高半 = 12",
+          (m.bus.rd(btick.object_entry_addr(12) + 8, 4) >> 16) & 0xFFFF, 12)
+
+    ticks = {tid: m.bus.rd(tcb + btick.TCB_TICKS, 4)
+             for tcb, tid, _p, _w in btick.delay_queue(m)}
+    check("基线剩余 tick：17=1 / 7=9 / 21=0",
+          ticks, {17: 1, 7: 9, 21: 0})
+    check("基线非空对象队列挂着 14 个任务", btick.object_pending(m), 14)
+
+    got = [tid for _tcb, tid in btick.expire_strict(m)]
+    check("严格口径首轮只唤醒 17 / 21", sorted(got), [17, 21])
+    check("首轮后任务 7 剩余 9 → 8", m.bus.rd(0x68000244 + btick.TCB_TICKS, 4), 8)
+
 
 def main():
     print("frbox 自检")
@@ -4063,6 +4102,7 @@ def main():
     test_static()
     test_bpix()
     test_tick()
+    test_tick_v52()
     test_lists()
     test_bctrl()
     test_dual40()
