@@ -4663,6 +4663,139 @@ def frbox_sx(raw):
     return fr_emu.sx(raw, 11)
 
 
+def test_v59():
+    """V59：`flaggraph` 位级服务图的纯函数单测。
+
+    不扫真固件、不 boot、不建运行机器：假 `CallSite` / 假 `Sweep` 覆盖
+    掩码展开、`clr_flg` 的 mask 为 0 语义、等/置/清配对、有等无置、
+    参数不可定、守卫图、静态写点阴性、以及两个纯格式化函数。
+    """
+    import frbox
+    from frbox import bstatic, flaggraph, svcgraph
+
+    # --- 版本与常量（不锁具体版本，V58 踩过）---
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("flag 服务四个", flaggraph.FLAG_SVCS,
+          (bstatic.SET_FLG, bstatic.CLR_FLG,
+           bstatic.WAI_FLG, bstatic.TWAI_FLG))
+    check("置位服务只有 set_flg", flaggraph.SET_SVCS,
+          frozenset((bstatic.SET_FLG,)))
+    check("清位服务只有 clr_flg", flaggraph.CLR_SVCS,
+          frozenset((bstatic.CLR_FLG,)))
+    check("等待服务含 wai/twai", flaggraph.WAIT_SVCS,
+          frozenset((bstatic.WAI_FLG, bstatic.TWAI_FLG)))
+    check("服务号是 8 位补码", (bstatic.SET_FLG, bstatic.CLR_FLG,
+                          bstatic.WAI_FLG, bstatic.TWAI_FLG),
+          (-48, -47, -46, -22))
+
+    # --- 掩码展开 ---
+    check("expand_bits(0x5)", flaggraph.expand_bits(0x5), [1, 4])
+    check("expand_bits(0x8000)", flaggraph.expand_bits(0x8000), [0x8000])
+    check("expand_bits(0)", flaggraph.expand_bits(0), [])
+    check("expand_bits(None)", flaggraph.expand_bits(None), [])
+    check("zero_bits(0xFFFFDFFF) 只清 0x2000",
+          flaggraph.zero_bits(0xFFFFDFFF), [0x2000])
+    check("zero_bits(0xFFFFBFFF) 只清 0x4000",
+          flaggraph.zero_bits(0xFFFFBFFF), [0x4000])
+    check("zero_bits(0xFFFFBDFF) 清 0x200 与 0x4000",
+          flaggraph.zero_bits(0xFFFFBDFF), [0x200, 0x4000])
+    check("zero_bits(0) = 32 个位", len(flaggraph.zero_bits(0)), 32)
+    check("zero_bits(None)", flaggraph.zero_bits(None), [])
+
+    # --- 假服务调用点（用真实的 bstatic.CallSite，参数顺序 r4..r7）---
+    def cs(addr, svc, r4=0, r5=0, r6=0, r7=0):
+        return bstatic.CallSite(addr, svc, r4, r5, r6, r7)
+
+    calls = [
+        cs(0x110, bstatic.SET_FLG, 3, 0x1000),        # 置 flg3 bit12
+        cs(0x120, bstatic.WAI_FLG, 0, 3, 0x2000, 2),  # 等 flg3 bit13
+        cs(0x130, bstatic.CLR_FLG, 3, 0xFFFFDFFF),    # 清 flg3 bit13
+        cs(0x140, bstatic.WAI_FLG, 0, 9, 0x400, 2),   # 等 flg9 0x400
+        cs(0x150, bstatic.SET_FLG, 9, 0x400),         # 置 flg9 0x400
+        cs(0x160, bstatic.SET_FLG, 3, None),          # 参数不可定
+    ]
+
+    class _Sweep(object):
+        base, rom = 0x100, b"\xff" * 0x200
+        funcs = [0x100, 0x200]
+
+        def __init__(self, cs_, stores=()):
+            self.calls = cs_
+            self.stores = list(stores)
+        def of(self, svc):
+            return [c for c in self.calls if c.svc == svc]
+        def enclosing(self, addr):
+            return 0x100 if 0x100 <= addr < 0x200 else None
+
+    sw = _Sweep(calls, [(0x170, 0x45C58, "st"), (0x180, 0x50000, "st")])
+    t = flaggraph.pair_table(sw)
+    check("配对总组数", len(t["pairs"]), 3)
+    check("flg3/0x1000 有置无等",
+          (len(t["pairs"][(3, 0x1000)]["sets"]),
+           len(t["pairs"][(3, 0x1000)]["waits"])), (1, 0))
+    check("flg3/0x2000 有等有清无置",
+          (len(t["pairs"][(3, 0x2000)]["waits"]),
+           len(t["pairs"][(3, 0x2000)]["sets"]),
+           len(t["pairs"][(3, 0x2000)]["clrs"])), (1, 0, 1))
+    check("flg9/0x400 等置各一",
+          (len(t["pairs"][(9, 0x400)]["waits"]),
+           len(t["pairs"][(9, 0x400)]["sets"])), (1, 1))
+    check("参数不可定记到 set_flg", t["unknown"][bstatic.SET_FLG], 1)
+    check("服务总数 set=3", t["totals"][bstatic.SET_FLG], 3)
+    check("服务总数 clr=1", t["totals"][bstatic.CLR_FLG], 1)
+    check("服务总数 wai=2", t["totals"][bstatic.WAI_FLG], 2)
+    check("flgid 不可定 0 处", t["no_flgid"], 0)
+    um = flaggraph.unmatched(t)
+    check("有等无置只有 1 组", len(um), 1)
+    check("有等无置落在 flg3/0x2000",
+          (um[0][0], um[0][1]), (3, 0x2000))
+    check("setters_for 取到置铃点",
+          [c.addr for c in flaggraph.setters_for(t, 9, 0x400)], [0x150])
+    check("setters_for 对无置位返回空",
+          flaggraph.setters_for(t, 3, 0x2000), [])
+    check("waiters_for 取到等待点",
+          [c.addr for c in flaggraph.waiters_for(t, 3, 0x2000)], [0x120])
+    check("group_by_flag 分桶", sorted(flaggraph.group_by_flag(sw, bstatic.SET_FLG)),
+          [3, 9])
+
+    # --- 守卫图 / 静态写点 / 引用簇（假索引）---
+    gm = flaggraph.guard_map(sw, 0x100, [0x145],
+                             wait_svcs=(bstatic.WAI_FLG,))
+    check("守卫图返回一条", len(gm), 1)
+    check("守卫图取到之前最近的等待", gm[0][1].addr, 0x140)
+    check("守卫图限定等待服务后不含 set_flg",
+          all(w is None or w.svc == bstatic.WAI_FLG for _p, w in gm), True)
+    kp = flaggraph.kernel_store_probe(sw, 0x45C38, 0x45CD8)
+    check("静态写点只命中控制块区那一笔", kp, [(0x170, 0x45C58, "st")])
+    check("静态写点阴性是工具口径",
+          flaggraph.kernel_store_probe(sw, 0x60000, 0x70000), [])
+
+    class _Index(object):
+        def classify(self, addr, window=8):
+            return ("ldi20", [svcgraph.Ref(0x110, "ldi20", addr, "call")])
+    cl = flaggraph.cluster(sw, _Index(), [calls[4]])
+    check("引用簇函数一个", cl["funcs"], [0x100])
+    check("引用簇形态 ldi20", cl["classes"][0x100][0], "ldi20")
+    check("引用簇上层函数由 enclosing 给出", cl["upstream"][0x100], [0x100])
+
+    # --- 纯格式化：flow_table / flag_snapshot ---
+    ft = flaggraph.flow_table([(10, 0x081442, -48, 2, 0x4000, 0, 0, 0, 0)],
+                              lambda s: "set_flg")
+    check("flow_table 一条", len(ft), 1)
+    check("flow_table 字段", (ft[0]["step"], ft[0]["pc"], ft[0]["svc"],
+                          ft[0]["name"], ft[0]["r4"], ft[0]["r5"]),
+          (10, 0x081442, -48, "set_flg", 2, 0x4000))
+    fs = flaggraph.flag_snapshot([{"id": 3, "cb": 0x45C58, "pattern": 0,
+                                   "waiters": 1, "head": 0x459FC,
+                                   "tail": 0x459FC}])
+    check("flag_snapshot 精简为 4 键", sorted(fs[0]),
+          ["cb", "id", "pattern", "waiters"])
+    check("flag_snapshot 值", (fs[0]["id"], fs[0]["pattern"], fs[0]["waiters"]),
+          (3, 0, 1))
+    check("mode 不进配对表（不解释组合语义）",
+          any("mode" in d for d in t["pairs"].values()), False)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4722,6 +4855,7 @@ def main():
     test_v56()
     test_v57()
     test_v58()
+    test_v59()
     test_lists()
     test_bctrl()
     test_dual40()
