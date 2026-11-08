@@ -4796,6 +4796,161 @@ def test_v59():
           any("mode" in d for d in t["pairs"].values()), False)
 
 
+def test_v60():
+    """V60：`ablink` 跨机事件链的纯函数 / 假机器单测。
+
+    不扫真固件、不 boot、不建真机器：只用假 bus / 假 Machine 覆盖
+    `AbLink` 收发、`OutputTap` 透传观察、`LinkedPair` 交替推进与注入阈值，
+    以及 `channel_report()` 的纯格式化。渲染函数依赖 PIL 与真机器内存，
+    由正式探针覆盖，不进单测。
+    """
+    import frbox
+    from frbox import ablink
+
+    # --- 版本与常量（不锁具体版本，V58 踩过）---
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("观察端口按地址升序四个", ablink.OBSERVED_PORTS,
+          (0x44, 0xAF, 0x174, 0x524))
+    check("0x44 是派发请求", ablink.KIND_BY_PORT[0x44], "dispatch_req")
+    check("0xAF 是启动位", ablink.KIND_BY_PORT[0xAF], "xfer_start")
+    check("0x174 是启动位", ablink.KIND_BY_PORT[0x174], "xfer_start")
+    check("0x524 是启动位", ablink.KIND_BY_PORT[0x524], "xfer_start")
+    check("启动位共三处", sum(1 for v in ablink.KIND_BY_PORT.values()
+                          if v == "xfer_start"), 3)
+
+    # --- AbLink 生命周期 ---
+    lk = ablink.AbLink(vector=0x2B, threshold=2)
+    check("初始 vector", lk.vector, 0x2B)
+    check("初始 threshold", lk.threshold, 2)
+    check("初始 posts", lk.posts, 0)
+    check("初始 pending", lk.pending, 0)
+    check("初始 injections", lk.injections, 0)
+    check("阈值至少为 1", ablink.AbLink(threshold=0).threshold, 1)
+    check("vector 截成 8 位", ablink.AbLink(vector=0x12B).vector, 0x2B)
+
+    m1 = lk.post("A", "dispatch_req", 0x44, 0x10, 100)
+    check("post 返回 Message", type(m1).__name__, "Message")
+    check("seq 从 1 起", m1.seq, 1)
+    check("side 记 A", m1.side, "A")
+    check("kind 记派发", m1.kind, "dispatch_req")
+    check("addr 记 0x44", m1.addr, 0x44)
+    check("value 记写值", m1.value, 0x10)
+    check("step 记步号", m1.step, 100)
+    lk.post("A", "xfer_start", 0x174, 0x02, 101)
+    check("两笔后 posts", lk.posts, 2)
+    check("两笔后 pending", lk.pending, 2)
+    check("达到阈值", lk.should_inject(), True)
+    check("stats kinds", lk.stats()["kinds"],
+          {"dispatch_req": 1, "xfer_start": 1})
+    check("stats ports", lk.stats()["ports"], {"0x44": 1, "0x174": 1})
+    check("head(1) 一条", len(lk.head(1)), 1)
+    check("head(0) 空", lk.head(0), [])
+    check("head 元素是 dict", isinstance(lk.head(1)[0], dict), True)
+
+    out = lk.drain()
+    check("drain 取走两条", len(out), 2)
+    check("drain 后 delivered", lk.delivered, 2)
+    check("drain 后 pending 清零", lk.pending, 0)
+    check("drain 后 mailbox 空", lk.mailbox, [])
+    check("drain 后不再触发", lk.should_inject(), False)
+    check("drain 不改 posts", lk.posts, 2)
+    check("record_injection 返回 1", lk.record_injection(200), 1)
+    check("injections 累计", lk.injections, 1)
+    lk.reset()
+    check("reset 清 posts", lk.posts, 0)
+    check("reset 清 log", lk.log, [])
+    check("reset 清 injections", lk.injections, 0)
+
+    # --- 假 bus / 假机器 ---
+    class FakeBus(object):
+        def __init__(self):
+            self.mem = {}
+            self.calls = []
+
+        def rd(self, a, n, pc=0):
+            return self.mem.get(a, 0)
+
+        def wr(self, a, n, v, pc=0):
+            self.mem[a] = v
+            self.calls.append((a, n, v, pc))
+
+    class FakeMachine(object):
+        def __init__(self):
+            self.bus = FakeBus()
+            self.step_count = 0
+            self.cpu = type("C", (), {"pc": 0x1000})()
+            self.irqs = []
+
+        def run(self, max_steps=1, spin_guard=True):
+            self.step_count += max_steps
+
+        def raise_irq(self, vec):
+            self.irqs.append(vec)
+
+    class WritingMachine(FakeMachine):
+        """每轮 A 跑完往观察端口写两笔，用来测注入阈值。"""
+        def run(self, max_steps=1, spin_guard=True):
+            super(WritingMachine, self).run(max_steps, spin_guard)
+            self.bus.wr(0x44, 1, 0x01, 0x100)
+            self.bus.wr(0x44, 1, 0x01, 0x100)
+
+    bus = FakeBus()
+    tap = ablink.OutputTap(bus)
+    bus.wr(0x44, 1, 0x10, 0x100)
+    bus.wr(0x174, 1, 0x02, 0x200)
+    bus.wr(0x999, 1, 0xFF, 0x300)
+    check("透传：三笔写都落到原 bus", len(bus.calls), 3)
+    check("透传：0x44 写值未改", bus.mem[0x44], 0x10)
+    check("tap 只记两个观察端口", tap.counts(), {0x44: 1, 0x174: 1})
+    link_t = ablink.AbLink(vector=0x2B, threshold=4)
+    check("collect 新增两笔", tap.collect(link_t, 70000), 2)
+    check("消息 kind 序列", [m.kind for m in link_t.log],
+          ["dispatch_req", "xfer_start"])
+    check("消息 value 序列", [m.value for m in link_t.log], [0x10, 0x02])
+    check("消息 step 用传入步号", link_t.log[0].step, 70000)
+    check("重复 collect 不重记", tap.collect(link_t, 70001), 0)
+    check("重复 collect 后 posts 不变", link_t.posts, 2)
+
+    a, b = FakeMachine(), FakeMachine()
+    pair = ablink.LinkedPair(a, b, inject=False)
+    pair.run(rounds=3, chunk_a=10, chunk_b=20)
+    check("交替 3 轮", pair.rounds, 3)
+    check("A 累计 30 步", pair.steps_a, 30)
+    check("B 累计 60 步", pair.steps_b, 60)
+    check("不注入时 B 没收到 irq", b.irqs, [])
+    check("不接桥组 posts=0", pair.link.posts, 0)
+    check("stats collect 标志", pair.stats()["collect"], True)
+    check("stats 末 PC 是假机器值", pair.stats()["pc_a"], 0x1000)
+
+    a2, b2 = WritingMachine(), FakeMachine()
+    lk2 = ablink.AbLink(vector=0x2B, threshold=2)
+    pair2 = ablink.LinkedPair(a2, b2, link=lk2, inject=True)
+    pair2.run(rounds=3, chunk_a=10, chunk_b=10)
+    check("阈值注入 3 次", lk2.injections, 3)
+    check("注入向量全是 0x2B", b2.irqs, [0x2B, 0x2B, 0x2B])
+    check("三轮共 6 笔消息", lk2.posts, 6)
+    check("全部投递", lk2.delivered, 6)
+    check("投递后在途为 0", lk2.pending, 0)
+    check("stats inject 标志", pair2.stats()["inject"], True)
+    check("stats 轮数", pair2.stats()["rounds"], 3)
+
+    a3, b3 = WritingMachine(), FakeMachine()
+    pair3 = ablink.LinkedPair(a3, b3, inject=False, collect=False)
+    pair3.run(rounds=2, chunk_a=10, chunk_b=10)
+    check("collect=False 不产生消息", pair3.link.posts, 0)
+    check("collect=False 不注入", b3.irqs, [])
+    check("stats collect=False", pair3.stats()["collect"], False)
+
+    rep = ablink.channel_report(lk2.stats())
+    check("报告 4 行", len(rep), 4)
+    check("报告含消息数", "6 笔" in rep[0], True)
+    check("报告含中断注入", "中断注入 3 次" in rep[0], True)
+    check("报告末行是推进轮数", "交替推进" in rep[-1], True)
+    rep2 = ablink.channel_report(lk2.stats(), baseline={"cov_b": 1894})
+    check("带基线时多一行", len(rep2), 5)
+    check("基线行含基线对照", "基线对照" in rep2[-1], True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4856,6 +5011,7 @@ def main():
     test_v57()
     test_v58()
     test_v59()
+    test_v60()
     test_lists()
     test_bctrl()
     test_dual40()
