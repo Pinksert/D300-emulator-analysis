@@ -4300,7 +4300,8 @@ def test_v56():
     from frbox import abservice
 
     # --- 版本与 V56 实证常量（探针 / 自检共用）---
-    check("frbox 版本 = 0.56.0", frbox.__version__, "0.56.0")
+    # V57 起不再在历史 test 里锁死版本号；当前版本由 test_v57() 断言。
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
     check("SVC_VEC = 0x40", abservice.SVC_VEC, 0x40)
     check("A 段服务表基址 = 0xFE3B8", abservice.A_TABLE, 0x000FE3B8)
     check("时间驱动服务 = (dly_tsk, tslp_tsk)",
@@ -4375,6 +4376,123 @@ def test_v56():
           abservice.parse_table(bytes(16), 0, 0x800), {})
 
 
+def test_v57():
+    """V57：`devaudit` 设备策略审计 + 忙等假墙判据的纯函数单测。
+
+    全用假机器 / 假观察日志，不扫真固件、不 boot；两段实证数字与动态因果在
+    `probe/exp_dev_v57.py` / `results/frbox/da57.txt`。
+    """
+    import collections
+    import frbox
+    from frbox import devaudit, dev_xfer
+
+    # --- 版本与策略常量 ---
+    check("frbox 版本 = 0.57.0", frbox.__version__, "0.57.0")
+    check("POLICY 三个开关", sorted(devaudit.POLICY),
+          ["dispatch", "prio", "xfer"])
+    check("xfer 默认关", devaudit.POLICY["xfer"]["default"], False)
+    check("xfer create 参数名", devaudit.POLICY["xfer"]["create_arg"], "xfer")
+    check("xfer 显式启用方法", devaudit.POLICY["xfer"]["enable"],
+          "enable_xfer")
+    check("xfer 基线 = V2–V9", devaudit.POLICY["xfer"]["baseline"], "V2–V9")
+    check("dispatch 默认关", devaudit.POLICY["dispatch"]["default"], False)
+    check("dispatch 显式启用方法", devaudit.POLICY["dispatch"]["enable"],
+          "enable_dispatch")
+    check("dispatch 基线 = V2–V10", devaudit.POLICY["dispatch"]["baseline"],
+          "V2–V10")
+    check("prio 无独立 create 参数",
+          devaudit.POLICY["prio"]["create_arg"], None)
+
+    # --- 三种入口的设备策略（代码事实的镜像）---
+    check("ENTRIES 三个入口", sorted(devaudit.ENTRIES),
+          ["blive.boot()", "boot_realos()", "create(name)"])
+    check("create(name) 三个全关",
+          devaudit.ENTRIES["create(name)"],
+          {"xfer": False, "dispatch": False, "prio": False})
+    check("blive.boot() 只开 dispatch+prio",
+          devaudit.ENTRIES["blive.boot()"],
+          {"xfer": False, "dispatch": True, "prio": True})
+    check("boot_realos() 三个全开",
+          devaudit.ENTRIES["boot_realos()"],
+          {"xfer": True, "dispatch": True, "prio": True})
+
+    # --- 握手指纹与 dev_xfer 对账 ---
+    check("HANDSHAKE 四处", len(devaudit.HANDSHAKE), 4)
+    check("HANDSHAKE 偏移",
+          [s.off for s in devaudit.HANDSHAKE],
+          [0x0AF, 0x174, 0x524, 0x534])
+    check("0x174 启动/完成位", devaudit.handshake_table()[0x174],
+          (0x02, 0x40))
+    check("0x174 轮询 PC", devaudit.HANDSHAKE[1].poll_pc, 0x0009C97A)
+    check("0x0AF 完成位是 bit7", devaudit.handshake_table()[0x0AF][1], 0x80)
+    check("handshake_table 与 dev_xfer.D300_A_TABLE 一致",
+          devaudit.handshake_table(), dev_xfer.D300_A_TABLE)
+
+    # --- audit / missing：假机器 ---
+    class _M(object):
+        name = "fake"
+        xfer = dispatch = prio = cov = None
+        devices = []
+
+    m0 = _M()
+    st0 = devaudit.audit(m0)
+    check("audit 空机器三项全 False",
+          [st0["xfer"], st0["dispatch"], st0["prio"]],
+          [False, False, False])
+    check("audit 空机器 devices=0", st0["devices"], 0)
+    check("audit 空机器 name", st0["name"], "fake")
+    check("audit 不改机器状态", len(m0.devices), 0)
+    check("missing 默认要求两项",
+          devaudit.missing(m0), ["xfer", "dispatch"])
+
+    m1 = _M()
+    m1.xfer, m1.dispatch, m1.prio = object(), object(), object()
+    m1.cov = object()
+    m1.devices = [1, 2, 3, 4, 5, 6, 7]
+    st1 = devaudit.audit(m1)
+    check("audit 挂齐三项全 True",
+          [st1["xfer"], st1["dispatch"], st1["prio"], st1["cov"]],
+          [True, True, True, True])
+    check("audit devices 计数", st1["devices"], 7)
+    check("missing 挂齐返回空", devaudit.missing(m1), [])
+    check("missing 只查 xfer", devaudit.missing(m1, ("xfer",)), [])
+    m1.xfer = None
+    check("missing 摘掉 xfer", devaudit.missing(m1), ["xfer"])
+
+    # --- read_values / stall_verdict：纯函数 ---
+    reads = collections.defaultdict(collections.Counter)
+    reads[(0x174, 0x0009C97A)][0x02] = 6119
+    reads[(0x174, 0x0009C976)][0x00] = 1
+    check("read_values 指定 PC",
+          dict(devaudit.read_values(reads, 0x174, 0x0009C97A)), {0x02: 6119})
+    check("read_values 合并 PC",
+          dict(devaudit.read_values(reads, 0x174)), {0x02: 6119, 0x00: 1})
+    check("read_values 无关地址为空",
+          dict(devaudit.read_values(reads, 0x0AF)), {})
+    check("stall_verdict 假墙（V57 C0 口径）",
+          devaudit.stall_verdict(reads, 0x174, 0x40, 0x0009C97A),
+          (6119, 0, True))
+    check("stall_verdict 空日志不算假墙",
+          devaudit.stall_verdict({}, 0x174, 0x40, 0x0009C97A),
+          (0, 0, False))
+    reads2 = collections.defaultdict(collections.Counter)
+    # 十进制 66 = 0x42（启动位 0x02 + 完成位 0x40）；
+    # bobserve 打印的是十进制，别把它读成十六进制 0x66。
+    reads2[(0x174, 0x0009C97A)][0x02] = 28
+    reads2[(0x174, 0x0009C97A)][0x42] = 4
+    check("stall_verdict 见到完成位（V57 C1 口径）",
+          devaudit.stall_verdict(reads2, 0x174, 0x40, 0x0009C97A),
+          (32, 4, False))
+    reads3 = collections.defaultdict(collections.Counter)
+    reads3[(0x174, 0x0009C97A)][0x42] = 4
+    check("stall_verdict 只有完成位",
+          devaudit.stall_verdict(reads3, 0x174, 0x40, 0x0009C97A),
+          (4, 4, False))
+    check("stall_verdict 换轮询 PC 则无读",
+          devaudit.stall_verdict(reads, 0x174, 0x40, 0x0009C980),
+          (0, 0, False))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4432,6 +4550,7 @@ def main():
     test_v54()
     test_v55()
     test_v56()
+    test_v57()
     test_lists()
     test_bctrl()
     test_dual40()
