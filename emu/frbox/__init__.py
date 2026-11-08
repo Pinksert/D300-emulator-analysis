@@ -15,6 +15,7 @@
     frbox.bpatch   只读打桩：改指定 ld 的读返回值，不改内存/时基（V53，反事实）
     frbox.dev_tick18  INT 0x18 系统节拍：实证的 tick 向量，只补硬件拉线（V54）
     frbox.bobserve 纯观察钩子：只统计读写、返回值原样透传（V55，不改任何值）
+    frbox.abservice μITRON 服务分发表解析：两段通用的纯函数（V56，只读 ROM 数据）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -28,4 +29,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.55.0"
+__version__ = "0.56.0"
