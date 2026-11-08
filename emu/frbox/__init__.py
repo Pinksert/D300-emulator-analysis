@@ -21,6 +21,9 @@
                    4 字节函数指针三种形态，修 A 段 refs_to 的口径盲区）
     frbox.flaggraph 事件标志位级服务图（V59，纯函数；按 (flgid,bit) 配对
                    等 / 置 / 清，clr_flg 按 mask 为 0 的位算，mode 不解释）
+    frbox.ablink   A-B 跨机事件链 + 联合画面取证（V60，模型化假设；
+                   AbLink / OutputTap / LinkedPair 可跑可计数可证伪，
+                   render_screen 产结构重建图、像素非固件）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -34,4 +37,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.59.0"
+__version__ = "0.60.0"
