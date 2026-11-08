@@ -10,7 +10,8 @@
     frbox.monitor  HMP 式命令行（info mtree / x / step / bp / irq ...）
     frbox.bstatic  全 ROM 静态普查：调用点 / 调用边 / store 地址（V48，V51 修地址形态）
     frbox.bpix     「有没有像素」的判据复核：面积 / 值多样 / 重画（V49）
-    frbox.btick    补上缺失的 tick：延时队列 / 到期 / 整机为何停（V50）
+    frbox.btick    补上缺失的 tick：延时队列 / 到期 / 整机为何停（V50，
+                   V52 加严格到期 + 通用对象等待队列）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -24,4 +25,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.51.0"
+__version__ = "0.52.0"
