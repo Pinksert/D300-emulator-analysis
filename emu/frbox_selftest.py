@@ -4050,6 +4050,74 @@ def test_tick_v52():
     check("首轮后任务 7 剩余 9 → 8", m.bus.rd(0x68000244 + btick.TCB_TICKS, 4), 8)
 
 
+def test_v53():
+    """V53：只读打桩设施 + 事件位图相关常量 / 指令解码。
+
+    全部是纯函数或假 bus，不扫全 ROM、不 boot 机器 —— V53 的动态结论在
+    `probe/exp_v53.py`（六台机器）里，不搬进自检以免拖慢。
+    """
+    from frbox import bpatch, bstatic
+
+    # --- 位掩码纯函数 ---
+    check("bpatch.bit_clear 清 bit31",
+          bpatch.bit_clear(0x80000000)(0x80000001), 1)
+    check("bpatch.bit_clear 幂等",
+          bpatch.bit_clear(0x80000000)(1), 1)
+    check("bpatch.bit_set 置 bit3",
+          bpatch.bit_set(0x08)(0x12), 0x1A)
+    check("bpatch.bit_set 幂等",
+          bpatch.bit_set(0x200)(0x200), 0x200)
+
+    # --- patch_read：只认精确的 (地址, PC) ---
+    class _Bus(object):
+        def __init__(self):
+            self.n = 0
+
+        def rd(self, a, n, pc=0):
+            self.n += 1
+            return 0x80000001
+
+        def wr(self, a, n, v, pc=0):
+            return None
+
+    bus = _Bus()
+    log = []
+    key = (0x9F805AD0, 0x1753FC)
+    hits = bpatch.patch_read(bus, {key: bpatch.bit_clear(0x80000000)},
+                             watch=[key], log=log)
+    check("打桩后读值 = 0x00000001", bus.rd(key[0], 4, key[1]), 1)
+    check("打桩命中计数 = 1", hits[key], 1)
+    check("log 记的是打桩前的值", log[0][3], 0x80000001)
+    check("PC 不匹配时不打桩",
+          bus.rd(0x9F805AD0, 4, 0x111111), 0x80000001)
+    check("地址不匹配时不打桩",
+          bus.rd(0x12345678, 4, 0x1753FC), 0x80000001)
+    check("不打桩的读也走原 bus", bus.n, 3)
+
+    # --- patch_write：跨边界写也要记 ---
+    wlog = []
+    bpatch.patch_write(bus, (0x9F805AD0,), wlog)
+    bus.wr(0x9F805ACC, 8, 0x80000001, 0x175274)
+    check("patch_write 记跨边界写", len(wlog), 1)
+    bus.wr(0x11110000, 4, 0, 0)
+    check("patch_write 忽略无关写", len(wlog), 1)
+
+    # --- 服务号常量（V53 把 0x175408 判成 clr_flg 的依据）---
+    check("SET_FLG = -48", bstatic.SET_FLG, -48)
+    check("CLR_FLG = -47", bstatic.CLR_FLG, -47)
+    check("WAI_FLG = -46", bstatic.WAI_FLG, -46)
+
+    # --- 指令解码：ld #1012 / beq 的跳转目标 ---
+    d = TABLE.decode(b"\x2f\xd0" + b"\x00" * 14, 0)
+    check("0x1753FC 机器码 2fd0 是 ld", d[0], "ld")
+    check("disp10 = 253（×4 = 1012）", d[2]["disp10"], 253)
+    db = TABLE.decode(b"\xe2\x7b" + b"\x00" * 14, 0)
+    check("0x175406 机器码 e27b 是 beq", db[0], "beq")
+    check("beq rel9 = 123", db[2]["rel9"], 123)
+    check("beq 目标 = 0x1754FE（派发段入口）",
+          0x175406 + 2 + db[2]["rel9"] * 2, 0x1754FE)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4103,6 +4171,7 @@ def main():
     test_bpix()
     test_tick()
     test_tick_v52()
+    test_v53()
     test_lists()
     test_bctrl()
     test_dual40()
