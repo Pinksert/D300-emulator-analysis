@@ -111,6 +111,20 @@ GATE = 0x9F58D08F
 POOL_FLAG = 6
 POOL_BIT = 0x20
 
+#: V55 实证地址（见 `probe/exp_tick_v55.py` A 段；探针与自检共用，别各写一份）
+#: `PIO_STATUS` 全 ROM 唯一静态写点是 `PIO_INIT_PC stb #PIO_INIT_VALUE`，
+#: bit3 从此恒 0 —— 轮询读的是外部输入，不是固件状态位。
+PIO_STATUS = 0x50000107
+PIO_INIT_PC = 0x0402AA
+PIO_INIT_VALUE = 0x12
+PIO_BIT3 = 0x08
+#: 事件位图在任务 7 栈帧里，靠 `r14 + 253*4` 访问（V53），不是绝对地址常量
+EVT_BITMAP = 0x9F805AD0
+#: flag 12 的对象控制块（V52 / KI#124 的 flag 定义表 ID 12）
+FLAG12_OBJ = 0x68000968
+#: 只读标志字（V51：+0/+4 无静态写点，btsth #8 读的是它）
+STRUCT_FLAG = 0x9F5A0284
+
 #: `st/sth/stb` 的地址形态（照抄 `fr_emu.py:684-709`，见模块 docstring）
 _ST_SHAPE = {
     0x1400: ('@Rj', 4), 0x1500: ('@Rj', 2), 0x1600: ('@Rj', 1),
