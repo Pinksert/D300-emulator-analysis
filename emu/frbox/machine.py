@@ -187,6 +187,7 @@ class Machine:
         self.cb = None                   # 回调槽（见 enable_callbacks / frbox.callback，V18）
         self.isr2b = None                # INT 0x2B 驱动（见 enable_isr2b / frbox.isr2b，V19）
         self.irq2b_clock = None          # INT 0x2B 周期时钟（见 enable_auto_irq2b / frbox.dev_irq2b，V21）
+        self.tick18_clock = None         # INT 0x18 系统节拍（见 enable_auto_tick18 / frbox.dev_tick18，V54）
         self.spin_breaker = SpinBreaker(self, threshold=autospin_threshold)
         for d in self.devices:
             d.trace = self.trace
@@ -638,6 +639,21 @@ class Machine:
         dev = attach_clk(self, period=period)
         dev.trace = self.trace
         return dev
+
+    def enable_auto_tick18(self, period=1024):
+        """给 INT 0x18 配一个周期时钟（见 dev_tick18.py，V54）。
+
+        这是 V54 实证定位到的内核系统节拍向量：向量表槽 0x000EFF9C → ISR
+        0x04046E → `0x04047C ldi:32 #0x040A44` / `0x040482 call r12`，
+        内核 tick 处理自己递增 0x68000110 并递减延时队列。本方法只补
+        「硬件周期性拉线」，不碰内核数据结构（与 btick 反事实补全严格区分）。
+
+        ⚠️ 周期是模型参数，真机频率/器件身份未证（KI#191）。默认不启用。
+        """
+        if self.tick18_clock is not None:
+            return self.tick18_clock
+        from .dev_tick18 import attach as attach_clk
+        return attach_clk(self, period=period)
 
     def enable_cov(self, label=""):
         """打开覆盖率记录（见 cover.py，V15）。reset() 之后仍然有效。"""
