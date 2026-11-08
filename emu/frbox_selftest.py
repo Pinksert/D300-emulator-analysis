@@ -4204,6 +4204,89 @@ def test_v54():
     check("enable_auto_tick18 幂等", m3.enable_auto_tick18(), d3)
 
 
+def test_v55():
+    """V55：`bobserve` 纯观察设施 + V55 实证常量。
+
+    全用假 bus，不扫 ROM、不 boot；动态因果在 `probe/exp_tick_v55.py`。
+    重点锁死「先 observe 后 patch_read」的顺序纪律：观察日志必须是器件真值。
+    """
+    import collections
+    import frbox
+    from frbox import bstatic, bobserve, bpatch
+
+    # --- 版本与实证常量（探针 / 自检共用，别各写一份）---
+    check("frbox 版本 = 0.55.0", frbox.__version__, "0.55.0")
+    check("PIO 状态字节 = 0x50000107", bstatic.PIO_STATUS, 0x50000107)
+    check("PIO 唯一初始化写点 = 0x0402AA", bstatic.PIO_INIT_PC, 0x0402AA)
+    check("PIO 初始化值 = 0x12", bstatic.PIO_INIT_VALUE, 0x12)
+    check("PIO bit3 掩码 = 0x08", bstatic.PIO_BIT3, 0x08)
+    check("bit3 在 0x12 里为 0",
+          bstatic.PIO_INIT_VALUE & bstatic.PIO_BIT3, 0)
+    check("事件位图 = 0x9F805AD0", bstatic.EVT_BITMAP, 0x9F805AD0)
+    check("flag12 对象 = 0x68000968", bstatic.FLAG12_OBJ, 0x68000968)
+    check("只读标志字 = 0x9F5A0284", bstatic.STRUCT_FLAG, 0x9F5A0284)
+
+    # --- observe：只统计、原样透传 ---
+    class _Bus(object):
+        def __init__(self):
+            self.val = 0x12
+            self.written = []
+
+        def rd(self, a, n, pc=0):
+            return self.val
+
+        def wr(self, a, n, v, pc=0):
+            self.written.append((a, n, v, pc))
+
+    bus = _Bus()
+    reads, writes = bobserve.observe(bus, (bstatic.PIO_STATUS, 0x9F805AD0))
+    check("observe 后读返回值不变",
+          bus.rd(bstatic.PIO_STATUS, 1, 0x175882), 0x12)
+    check("observe 记下 (地址,PC) → 值",
+          reads[(bstatic.PIO_STATUS, 0x175882)][0x12], 1)
+    bus.rd(bstatic.PIO_STATUS, 1, 0x175882)
+    check("同一 (地址,PC) 累加",
+          reads[(bstatic.PIO_STATUS, 0x175882)][0x12], 2)
+    check("不同 PC 分开记",
+          reads[(bstatic.PIO_STATUS, 0x175896)][0x12], 0)
+    bus.wr(bstatic.PIO_STATUS, 1, 0x12, 0x0402AA)
+    check("observe 后写仍透传", bus.written, [(bstatic.PIO_STATUS, 1, 0x12, 0x0402AA)])
+    check("observe 记下写点 (目标,PC,地址,宽度,值)",
+          writes[0], (bstatic.PIO_STATUS, 0x0402AA, bstatic.PIO_STATUS, 1, 0x12))
+    check("未命中的观察地址不记写点", len(writes), 1)
+
+    # --- 顺序纪律：observe 先装，patch_read 后装 ---
+    bus2 = _Bus()
+    r2, _w2 = bobserve.observe(bus2, (bstatic.PIO_STATUS,))
+    hits = bpatch.patch_read(
+        bus2, {(bstatic.PIO_STATUS, 0x200): bpatch.bit_set(0x08)})
+    check("打桩后固件读到 bit3=1",
+          bus2.rd(bstatic.PIO_STATUS, 1, 0x200), 0x1A)
+    check("observe 记的仍是器件原始值 0x12",
+          r2[(bstatic.PIO_STATUS, 0x200)][0x12], 1)
+    check("observe 没把打桩后的假值记进去",
+          r2[(bstatic.PIO_STATUS, 0x200)][0x1A], 0)
+    check("patch_read 命中 1 次",
+          hits[(bstatic.PIO_STATUS, 0x200)], 1)
+    check("bit_samples：1 次采样 / bit3=1 共 0 次",
+          bobserve.bit_samples(r2, bstatic.PIO_STATUS, 0x08), (1, 0))
+    check("未打桩的 PC 不命中", len(hits), 1)
+
+    # --- 纯函数汇总 ---
+    mixed = {
+        (bstatic.PIO_STATUS, 0x300): collections.Counter({0x12: 3, 0x1A: 2}),
+        (bstatic.PIO_STATUS, 0x400): collections.Counter({0x12: 1}),
+        (0x9F805AD0, 0x500): collections.Counter({0x80000000: 9}),
+    }
+    check("value_counts 只汇总指定地址",
+          bobserve.value_counts(mixed, bstatic.PIO_STATUS),
+          collections.Counter({0x12: 4, 0x1A: 2}))
+    check("bit_samples 混合值 = (6, 2)",
+          bobserve.bit_samples(mixed, bstatic.PIO_STATUS, 0x08), (6, 2))
+    check("bit_samples 掩码无关地址返回 (0,0)",
+          bobserve.bit_samples(mixed, 0x12345678, 0x08), (0, 0))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4259,6 +4342,7 @@ def main():
     test_tick_v52()
     test_v53()
     test_v54()
+    test_v55()
     test_lists()
     test_bctrl()
     test_dual40()
