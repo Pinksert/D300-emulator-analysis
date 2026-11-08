@@ -4118,6 +4118,92 @@ def test_v53():
           0x175406 + 2 + db[2]["rel9"] * 2, 0x1754FE)
 
 
+def test_v54():
+    """V54：INT 0x18 系统节拍的实证常量 + 周期时钟设施。
+
+    纯函数 / 假机器，不扫全 ROM、不 boot。动态因果在
+    `probe/exp_tick_v54.py`（七台机器）里，不搬进自检以免拖慢。
+    """
+    from frbox import dev_tick18 as t18
+    from frbox import machine as _mach
+
+    # --- 实证常量（全部来自 ROM 里的静态链条）---
+    check("tick 向量 = 0x18", t18.VECTOR, 0x18)
+    check("B 段 TBR = 0x000EFC00", t18.TBR, 0x000EFC00)
+    check("vec 0x18 槽 = 0x000EFF9C",
+          t18.VEC_SLOT, 0x000EFC00 + (255 - 0x18) * 4)
+    check("槽的公式与常量一致", t18.VEC_SLOT, 0x000EFF9C)
+    check("ISR = 0x04046E", t18.ISR, 0x04046E)
+    check("唯一加载点 = 0x04047C", t18.CALL_LDI, 0x04047C)
+    check("call 指令 = 0x040482", t18.CALL, 0x040482)
+    check("tick 处理 = 0x040A44", t18.TICK_HANDLER, 0x040A44)
+    check("ICR 地址 = 0x448", t18.ICR_ADDR, 0x448)
+    check("ICR 级别 = 0x12", t18.ICR_LEVEL, 0x12)
+    check("ICR 初始化 PC = 0x040456", t18.ICR_INIT_PC, 0x040456)
+    check("直接页 0x48 / 0x4E",
+          (t18.DIRECT_48, t18.DIRECT_4E), (0x48, 0x4E))
+    check("tick 计数器 = 0x68000110", t18.TICK_COUNTER, 0x68000110)
+    check("延时队列哨兵 = 0x68000118", t18.DELAY_SENTINEL, 0x68000118)
+    check("默认周期是模型参数 1024", t18.DEFAULT_PERIOD, 1024)
+
+    # --- 设施：只拉线，ICR 没配就不拉，待决时合并 ---
+    class _Cpu(object):
+        def __init__(self):
+            self.irq_pending = []
+            self.irq_log = []
+
+    class _Machine(object):
+        def __init__(self):
+            self.cpu = _Cpu()
+            self.level = 0
+            self.raised = []
+            self.devices = []
+            self.tick18_clock = None
+            self.trace = None
+
+        def irq_level(self, vec):
+            return self.level
+
+        def raise_irq(self, vec):
+            self.raised.append(vec)
+
+    mm = _Machine()
+    dev = t18.Tick18Clock(mm, period=256)
+    check("设施名 = tick18clk", dev.name, "tick18clk")
+    check("设施向量 = 0x18", dev.vector, 0x18)
+    check("state() 带向量与 ISR",
+          (dev.state()["向量"], dev.state()["ISR"]), ("0x18", "0x04046E"))
+    dev.tick(256)
+    check("ICR 未配 → skipped = 1", dev.skipped, 1)
+    check("ICR 未配 → 不拉线", dev.fired, 0)
+    mm.level = 0x12
+    dev.tick(256)
+    check("ICR 配好 → fired = 1", dev.fired, 1)
+    check("拉的是 vec 0x18", mm.raised, [0x18])
+    mm.cpu.irq_pending = [(0x12, 0x18)]
+    dev.tick(256)
+    check("已有待决 → coalesced = 1", dev.coalesced, 1)
+    check("合并后不重复拉线", dev.fired, 1)
+
+    # --- attach / detach ---
+    m2 = _Machine()
+    d2 = t18.attach(m2, period=512)
+    check("attach 挂进 devices", d2 in m2.devices, True)
+    check("attach 设 tick18_clock", m2.tick18_clock, d2)
+    check("attach 尊重 period", d2.period, 512)
+    check("detach 返回该设备", t18.detach(m2), d2)
+    check("detach 后 devices 清空", len(m2.devices), 0)
+    check("detach 后 tick18_clock 清空", m2.tick18_clock, None)
+
+    # --- 真机器上有开关，且幂等 ---
+    m3 = _mach.create("d300-b")
+    m3.load()
+    check("Machine 有 tick18_clock 槽", hasattr(m3, "tick18_clock"), True)
+    d3 = m3.enable_auto_tick18(period=2048)
+    check("enable_auto_tick18 返回设备", m3.tick18_clock, d3)
+    check("enable_auto_tick18 幂等", m3.enable_auto_tick18(), d3)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4172,6 +4258,7 @@ def main():
     test_tick()
     test_tick_v52()
     test_v53()
+    test_v54()
     test_lists()
     test_bctrl()
     test_dual40()
