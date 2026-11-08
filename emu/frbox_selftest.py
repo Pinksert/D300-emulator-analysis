@@ -4387,7 +4387,10 @@ def test_v57():
     from frbox import devaudit, dev_xfer
 
     # --- 版本与策略常量 ---
-    check("frbox 版本 = 0.57.0", frbox.__version__, "0.57.0")
+    # V58 更正：V57 自己又锁了一次具体版本（V56 那次已解过同样的问题）。
+    # 从本版起所有 test_vXX 一律只验「版本可读且属 0.x」，不再锁 0.XX.0，
+    # 避免每加一版就要回来改上一版的断言。
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
     check("POLICY 三个开关", sorted(devaudit.POLICY),
           ["dispatch", "prio", "xfer"])
     check("xfer 默认关", devaudit.POLICY["xfer"]["default"], False)
@@ -4493,6 +4496,173 @@ def test_v57():
           (0, 0, False))
 
 
+def test_v58():
+    """V58：`svcgraph` 函数地址引用图的纯函数单测。
+
+    不扫真固件、不 boot、不建运行机器：内嵌 16 字节实证机器码 +
+    假索引 / 假 Sweep 覆盖四种引用形态、`sx11` 位宽、互斥与独立两种口径。
+    """
+    import collections
+    import frbox
+    from frbox import bstatic, svcgraph
+
+    # --- 版本与常量 ---
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("互斥分类优先级", svcgraph.PRIORITY,
+          ("ldi20", "ldi32", "rel12", "data32"))
+    check("代码类形态三种", svcgraph.CODE_KINDS,
+          ("ldi20", "ldi32", "rel12"))
+    check("等待类服务含 wai_flg", bstatic.WAI_FLG in svcgraph.WAIT_SVCS, True)
+    check("等待类服务含 twai_flg", bstatic.TWAI_FLG in svcgraph.WAIT_SVCS, True)
+    check("等待类服务含 sem_wai", bstatic.SEM_WAI in svcgraph.WAIT_SVCS, True)
+    check("等待类服务含 rcv_msg", -61 in svcgraph.WAIT_SVCS, True)
+    check("Ref 字段", svcgraph.Ref._fields,
+          ("pc", "kind", "imm", "next_mnem"))
+
+    # --- sx11：符号位是 bit10，不是 bit11（fr_emu.py:777）---
+    check("sx11(0)=0", svcgraph.sx11(0), 0)
+    check("sx11(0x3FF)=1023", svcgraph.sx11(0x3FF), 1023)
+    check("sx11(0x400)=-1024", svcgraph.sx11(0x400), -1024)
+    check("sx11(0x7FF)=-1", svcgraph.sx11(0x7FF), -1)
+    check("sx11(0x800)=+2048（bit11 不是符号位）",
+          svcgraph.sx11(0x800), 2048)
+    check("sx11 与 fr_emu.sx 对齐",
+          [svcgraph.sx11(x) for x in (0, 0x3FF, 0x400, 0x7FF, 0x800)],
+          [frbox_sx(x) for x in (0, 0x3FF, 0x400, 0x7FF, 0x800)])
+
+    # --- 内嵌实证机器码：0x08148C..0x08149C（V58 探针 D2 反汇编）---
+    code = bytes.fromhex("cd2c978c1f40144d2fe49b45001fd182")
+    idx = svcgraph.ImmIndex(code, 0x08148C)
+    p = idx.profile()
+    check("内嵌码指令数", p["ins"], 7)
+    check("内嵌码 ldi:8 一条", p["ldi"].get("i8"), 1)
+    check("内嵌码 ldi:20 一条", p["ldi"].get("i20"), 1)
+    check("内嵌码没有 ldi:32", p["ldi"].get("i32", 0), 0)
+    check("内嵌码 ldi:20 立即数落在别处，inrom 为空", p["inrom"], {})
+    check("内嵌码只有一条 call", p["call"], {"call": 1})
+    check("内嵌码 rel12 边一条", p["rel12_edges"], 1)
+    check("内嵌码 rel12 目标一个", p["rel12_targets"], 1)
+    check("内嵌码立即数种类", p["imm_kinds"], 1)
+    check("内嵌码 i32 占比 0", p["i32_share"], 0.0)
+    check("ldi:20 立即数 = 0x4001F", 0x4001F in idx.imm_refs, True)
+    check("ldi:20 引用 PC = 0x081496",
+          idx.imm_refs[0x4001F], [(0x081496, 4, "ldi20")])
+    rel_tgt = 0x08149A + 2 + svcgraph.sx11(386) * 2
+    check("rel12 目标按 pc+2+sx11*2", dict(idx.rel_edges),
+          {rel_tgt: [0x08149A]})
+    r0 = idx.refs(0x4001F, 0)
+    check("refs 命中 ldi20", [x.kind for x in r0], ["ldi20"])
+    check("refs 的下一条助记符", [x.next_mnem for x in r0], ["call"])
+    check("refs 窗口内可命中", len(idx.refs(0x40021, 2)), 1)
+    check("refs 窗口外不命中", idx.refs(0x40025, 0), [])
+    check("refs 关掉 ldi20 只剩 rel12",
+          [x.kind for x in idx.refs(rel_tgt, 0, kinds=("rel12",))], ["rel12"])
+    check("纯代码段没有 data32 命中", idx.data32(0x4001F), [])
+
+    # --- data32 与 classify 优先级（假 ROM / 假索引）---
+    raw = b"\xff" * 8 + (0x081404 - 4).to_bytes(4, "big")
+    idx2 = svcgraph.ImmIndex(raw, 0x1000)
+    check("data32 命中 -4 序言起点", idx2.data32(0x081404), [(0x1008, -4)])
+    check("data32 不命中别的地址", idx2.data32(0x081410), [])
+    k2, rs2 = idx2.classify(0x081404)
+    check("只有 data32 时归 data32", k2, "data32")
+    check("data32 的 Ref.next_mnem", [r.next_mnem for r in rs2], ["data"])
+    k3, rs3 = idx.classify(0x4001F, 0)
+    check("classify 命中 ldi20", k3, "ldi20")
+    check("classify 带窗口 8", idx.classify(0x40021, 8)[0], "ldi20")
+    check("classify 没命中返回 none", idx.classify(0x30000, 8), ("none", []))
+
+    class _Mix(object):
+        """同时给出三种代码引用 + 数据出现，验互斥优先级。"""
+        def refs(self, addr, window=8, kinds=svcgraph.CODE_KINDS):
+            return [svcgraph.Ref(0x10, "ldi20", addr, "call"),
+                    svcgraph.Ref(0x20, "rel12", addr, "call"),
+                    svcgraph.Ref(0x30, "ldi32", addr, "call")]
+        def data32(self, addr, deltas=(0, -2, -4)):
+            return [(0x40, 0)]
+
+    mix = _Mix()
+    check("优先级 ldi20 压过 ldi32/rel12",
+          svcgraph.ImmIndex.classify(mix, 0x100)[0], "ldi20")
+    check("优先级命中的条数", len(svcgraph.ImmIndex.classify(mix, 0x100)[1]), 1)
+    check("independent_hits 不去重",
+          svcgraph.ImmIndex.independent_hits(mix, [0x100, 0x200]),
+          collections.Counter({"ldi20": 2, "rel12": 2,
+                               "ldi32": 2, "data32": 2}))
+
+    # --- body_range / wait_guards（假 Sweep）---
+    class _Sweep(object):
+        base, rom = 0x100, b"\xff" * 0x200
+        funcs = [0x100, 0x200]
+
+        def __init__(self, calls):
+            self.calls = calls
+        def of(self, svc):
+            return [c for c in self.calls if c.svc == svc]
+        def enclosing(self, addr):
+            return 0x100 if 0x100 <= addr < 0x200 else None
+
+    def cs(addr, svc, r4=1, r5=3, r6=0x2000, r7=2):
+        return bstatic.CallSite(addr, svc, r4, r5, r6, r7)
+
+    calls = [cs(0x120, bstatic.WAI_FLG), cs(0x140, -23),
+             cs(0x160, bstatic.WAI_FLG), cs(0x180, -23),
+             cs(0x1F0, -23)]
+    sw = _Sweep(calls)
+    check("body_range 取下一个 enter", svcgraph.body_range(sw, 0x100),
+          (0x100, 0x200))
+    check("body_range 末函数到 ROM 尾", svcgraph.body_range(sw, 0x200),
+          (0x200, 0x300))
+    pts = sw.of(-23)
+    wg = svcgraph.wait_guards(sw, 0x100, pts)
+    check("wait_guards 返回每个点一条", len(wg), 3)
+    check("wait_guards 最近等待 = 0x120 / 0x160 / 0x160",
+          [w.addr if w else None for _p, w in wg], [0x120, 0x160, 0x160])
+    check("wait_guards 等待服务参数可读", wg[0][1].flgid, 3)
+    check("wait_guards 无等待时返回 None",
+          svcgraph.wait_guards(_Sweep([cs(0x110, -23)]), 0x100,
+                               [cs(0x110, -23)])[0][1], None)
+    check("wait_guards 只看本函数体",
+          svcgraph.wait_guards(sw, 0x200, [cs(0x210, -23)])[0][1], None)
+
+    # --- chain_profile：互斥 / 独立两种口径分开报 ---
+    class _Idx(object):
+        def classify(self, addr, window=8):
+            return {0x100: ("ldi20", [svcgraph.Ref(0x10, "ldi20", 0x100, "call")]),
+                    0x200: ("rel12", [svcgraph.Ref(0x20, "rel12", 0x200, "call")]),
+                    0x300: ("data32", [svcgraph.Ref(0x30, "data32", 0x300, "data")]),
+                    0x400: ("none", [])}[addr]
+        def independent_hits(self, addrs, window=8):
+            return collections.Counter({"ldi20": 3, "rel12": 2, "data32": 1})
+        def data32(self, addr):
+            return [(0x30, 0)] if addr == 0x300 else []
+
+    sw2 = _Sweep([cs(0x110, -23), cs(0x210, -23), cs(0x310, -23),
+                  cs(0x410, -23), cs(0x120, bstatic.WAI_FLG)])
+    sw2.funcs = [0x100, 0x200, 0x300, 0x400, 0x500]
+    def encl2(addr):
+        return max(f for f in sw2.funcs if f <= addr)
+    sw2.enclosing = encl2
+    ch = svcgraph.chain_profile(sw2, _Idx(), -23)
+    check("chain_profile 调用点数", len(ch["points"]), 4)
+    check("chain_profile 函数数", len(ch["funcs"]), 4)
+    check("chain_profile by_kind 互斥",
+          dict(ch["by_kind"]),
+          {"ldi20": 1, "rel12": 1, "data32": 1, "none": 1})
+    check("chain_profile 代码类引用边", ch["code_edges"], 2)
+    check("chain_profile table_locs 只收 data32",
+          sorted(ch["table_locs"]), [0x300])
+    check("chain_profile independent 是另一把尺子",
+          dict(ch["independent"]), {"ldi20": 3, "rel12": 2, "data32": 1})
+    check("chain_profile 无 enter 归属计数", ch["no_enter"], 0)
+
+
+def frbox_sx(raw):
+    """测试专用：直接调 `fr_emu.sx`，验证 svcgraph.sx11 与执行口径一致。"""
+    import fr_emu
+    return fr_emu.sx(raw, 11)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -4551,6 +4721,7 @@ def main():
     test_v55()
     test_v56()
     test_v57()
+    test_v58()
     test_lists()
     test_bctrl()
     test_dual40()
