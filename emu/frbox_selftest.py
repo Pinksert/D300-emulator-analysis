@@ -5294,6 +5294,132 @@ def test_v63():
           D.rel12_target(0x042B58, 110), D.rel12_target(0x042B66, 103))
 
 
+def test_v64():
+    """V64：`taskchain64` 任务表 / 启动链 / 写点归属 + rel9 符号修复。
+
+    与 V62/V63 同款做法：不扫真固件、不 boot，用玩具 ROM、玩具
+    `Sweep` 验证纯函数；全 ROM 数字（29 条 / 14 个显示任务 /
+    27 个 sta_tsk / 2364 条 / 47 写点 / 四组 0 命中）由
+    `probe/exp_task_v64.py` 与 `results/frbox/task64.txt` 覆盖。
+    """
+    import struct
+    import frbox
+    from frbox import dispatch62 as D, taskchain64 as T
+
+    # ---- 实证常量
+    check("V64 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("任务表 = 0x054C00", T.TASK_TABLE, 0x054C00)
+    check("任务记录 0x1C 字节", T.TASK_REC, 0x1C)
+    check("任务表 29 条", T.TASK_COUNT, 29)
+    check("入口字段 +0x10", T.TASK_ENTRY_OFF, 0x10)
+    check("显示区下界", T.DISP_LO, 0x120000)
+    check("显示区上界", T.DISP_HI, 0x140000)
+    check("对象池 = 0x9F58D500", T.POOL_BASE, 0x9F58D500)
+    check("对象池 12 字节步长", T.POOL_STRIDE, 12)
+    check("对象池 70 槽", T.POOL_COUNT, 0x46)
+    check("对象池状态字段 +8", T.POOL_STATUS_OFF, 8)
+    check("对象池占 840 字节", T.POOL_STRIDE * T.POOL_COUNT, 840)
+    check("初始化函数 = 0x12E602", T.POOL_INIT_PC, 0x12E602)
+    check("初始化 stb = 0x12E61C", T.POOL_INIT_STB, 0x12E61C)
+    check("循环回跳 = 0x12E624", T.POOL_INIT_LOOP, 0x12E624)
+    check("公共状态查询 = 0x12E6F8", T.DSP_FN, 0x12E6F8)
+    check("巨型函数 = 0x171184", T.BIG_FN, 0x171184)
+    check("巨型函数末 = 0x1728B6", T.BIG_FN_END, 0x1728B6)
+    check("巨型函数 2364 条", T.BIG_FN_INSNS, 2364)
+    check("巨型函数 43 个 ret", T.BIG_FN_RETS, 43)
+    check("sta_tsk 服务号 -23", T.STA_TSK, -23)
+    check("V63 人为区间下界", T.WRITER_LO, 0x1714EE)
+    check("V63 人为区间上界", T.WRITER_HI, 0x172400)
+
+    # ---- u32 大端读与玩具任务表
+    rom = bytearray(0x1000)
+    base = 0x054000
+    off = T.TASK_TABLE - base
+    struct.pack_into(">I", rom, off + 0x10, 0x001200AC)
+    check("u32 大端读", T.u32(rom, base, T.TASK_TABLE + 0x10), 0x001200AC)
+    check("u32 越界给 0", T.u32(rom, base, base + 0x2000), 0)
+    for n in range(T.TASK_COUNT):
+        a = off + n * T.TASK_REC
+        struct.pack_into(">I", rom, a + T.TASK_ENTRY_OFF,
+                         0x120000 + n * 0x1000)
+        struct.pack_into(">I", rom, a + T.TASK_STACK_OFF,
+                         0x9F800000 + n * 0x100)
+        struct.pack_into(">I", rom, a, 0x68000000 + n * 0x2C)
+    recs = T.task_table(rom, base)
+    check("玩具任务表 29 条", len(recs), 29)
+    check("记录 0 = 任务 1", recs[0].tid, 1)
+    check("记录 0 地址", recs[0].rec, T.TASK_TABLE)
+    check("记录 1 地址 +0x1C", recs[1].rec, T.TASK_TABLE + 0x1C)
+    check("记录 0 入口", recs[0].entry, 0x120000)
+    check("记录 1 入口", recs[1].entry, 0x121000)
+    check("记录 1 栈顶", recs[1].stack, 0x9F800100)
+    dt = T.display_tasks(recs)
+    check("玩具显示任务 29 个", len(dt), 29)
+    check("玩具显示任务 ID 1 入口", dt[1], 0x120000)
+    recs2 = list(recs)
+    recs2[0] = recs2[0]._replace(entry=0x00150D1A)
+    recs2[6] = recs2[6]._replace(entry=0x00175192)   # 任务 7 移到代码区
+    check("非显示区任务被排除", len(T.display_tasks(recs2)), 27)
+
+    # ---- 玩具 Sweep：sta_tsk 启动链与写点归属
+    class _Call(object):
+        def __init__(self, addr, svc, r4):
+            self.addr, self.svc, self.r4 = addr, svc, r4
+
+    class _Sweep(object):
+        def __init__(self):
+            self.calls = [
+                _Call(0x12DFAA, -23, 5),      # 显示任务，紧邻入口
+                _Call(0x1352E6, -23, 9),      # 显示任务
+                _Call(0x17518E, -23, 7),      # 非显示任务（链起点）
+                _Call(0x130B5E, -23, None),   # 读不出 ID
+                _Call(0x1A0000, -37, 5),      # 别的服务，不算
+            ]
+            self._stores = {
+                0x65000008: [(0x17184A, "st")],
+                0x6500010C: [(0x170D70, "st"), (0x1710C0, "st")],
+            }
+
+        def enclosing(self, pc):
+            return 0x171184 if 0x171000 <= pc < 0x172800 else 0x170AEE
+
+        def writers_of(self, addr):
+            return self._stores.get(addr, [])
+
+    sw = _Sweep()
+    la = T.launchers(sw, recs2)
+    check("玩具启动点 4 处", len(la), 4)
+    check("启动点按 PC 升序", [x.pc for x in la],
+          [0x12DFAA, 0x130B5E, 0x1352E6, 0x17518E])
+    check("启动点任务 ID", [x.tid for x in la], [5, None, 9, 7])
+    displ = [x for x in la if x.display]
+    check("显示任务启动点 2 处", len(displ), 2)
+    check("紧邻入口 delta", displ[0].delta, recs2[4].entry - 0x12DFAA)
+    check("非显示启动点 display=False", la[3].display, False)
+    check("读不出 ID 的启动点 entry=0", la[1].entry, 0)
+    rows, owners, outside = T.writer_owners(sw)
+    check("玩具写点 3 笔", len(rows), 3)
+    check("玩具写点 owner 2 组", len(owners), 2)
+    check("owner 计数", dict(owners), {0x170AEE: 1, 0x171184: 2})
+    check("玩具人为区外 2 笔", len(outside), 2)
+    check("写点行结构", rows[0][1:3], (0x6500010C, "st"))
+
+    # ---- rel9 符号修复（V64）与 rel12 回归
+    check("sx(0xFA,8) = -6", D.sx(0xFA, 8), -6)
+    check("sx(0x04,8) = 4", D.sx(0x04, 8), 4)
+    check("rel9 向前跳 = 0x042E50", D.rel9_target(0x042E46, 4), 0x042E50)
+    check("rel9 分派器 bra = 0x171830", D.rel9_target(0x17175E, 0x68),
+          0x171830)
+    check("rel9 向后循环 = 0x12E61A", D.rel9_target(0x12E624, 0xFA),
+          0x12E61A)
+    check("rel9 向后循环旧式（无符号）", (0x12E624 + 2 + 0xFA * 2),
+          0x12E81A)
+    check("rel12 回归 = 0x042C36", D.rel12_target(0x042B58, 110),
+          0x042C36)
+    check("rel9 与 CPU 语义：负位移", D.rel9_target(0x100, 0xFF), 0x100)
+    check("rel9 与 CPU 语义：零位移", D.rel9_target(0x100, 0), 0x102)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5358,6 +5484,7 @@ def main():
     test_v61()
     test_v62()
     test_v63()
+    test_v64()
     test_lists()
     test_bctrl()
     test_dual40()
