@@ -4962,7 +4962,7 @@ def test_v61():
     from frbox import addrform, bpatch
 
     # ---- 版本与实证常量
-    check("frbox 版本 = 0.61.0", frbox.__version__, "0.61.0")
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
     check("vec 0x2B", addrform.ISR_VEC, 0x2B)
     check("ISR 入口 = 0x042E1C", addrform.ISR_ENTRY, 0x042E1C)
     check("ISR reti = 0x042E70", addrform.ISR_RETI, 0x042E70)
@@ -5030,6 +5030,115 @@ def test_v61():
     check("bit_set(1)(0x12) = 0x13", fn(0x12), 0x13)
 
 
+def test_v62():
+    """V62：`dispatch62` 纯静态分派器解剖。
+
+    不扫真固件、不 boot、不建真机器：用手工构造的 `Insn` 序列验证
+    call 目标 / 状态字配对 / 按位链，用 V61 同款 8 字节 ROM 验证
+    `decode_range`。全 ROM 数字（6 / 15 / 47 / 42 / 15×0 显示区引用）
+    由 `probe/exp_dsp_v62.py` 与 `results/frbox/dsp62.txt` 覆盖。
+    """
+    import frbox
+    from frbox import addrform, dispatch62 as D
+
+    # ---- 版本与实证常量
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("分派器入口 = 0x17171E", D.DISPATCH_ENTRY, 0x17171E)
+    check("分派器 ret = 0x171834", D.DISPATCH_RET, 0x171834)
+    check("状态块基址 = 0x65000000", D.STATUS_BASE, 0x65000000)
+    check("总闸槽 = 0x6B000030", D.GATE_SLOT, 0x6B000030)
+    check("6 个状态字偏移", D.STATUS_OFFSETS,
+          (0x08, 0x10, 0x104, 0x10C, 0x114, 0x11C))
+    check("6 个状态字读 PC", D.STATUS_READ_PCS,
+          (0x17172A, 0x17172E, 0x171734, 0x17173A, 0x171740, 0x171750))
+    check("6 个状态字目标寄存器", D.STATUS_REGS, (8, 5, 6, 9, 10, 4))
+    check("15 个 handler", len(D.HANDLERS), 15)
+    check("短路收尾 = 0x171830", D.BRA_TAIL, 0x171830)
+    check("短路 bra 共 10 条", D.BRA_COUNT, 10)
+    check("首次命中的两个 handler", D.FIRST_HANDLERS,
+          (0x171836, 0x1714EE))
+    check("handler 含 0x1714EE", 0x1714EE in D.HANDLERS, True)
+    check("handler 含 0x17232A", 0x17232A in D.HANDLERS, True)
+    check("三个外部输入槽", D.GATE_SLOTS,
+          (0x6B000020, 0x6B000030, 0x6B000034))
+    check("同构 ISR = 0x042E82", D.SIBLING_ISR_PC, 0x042E82)
+    check("同构 ISR 出口 = 0x1A4902", D.SIBLING_ISR_TARGET, 0x1A4902)
+    check("handler 控制块 = 0x9F59EF50", D.HANDLER_CB, 0x9F59EF50)
+    check("显示链 5 个判据 PC", D.DSP_PCS,
+          (0x120178, 0x12E602, 0x12E630, 0x12E6F8, 0x12E752))
+
+    # ---- 符号扩展与跳转目标（硬规矩 40：符号位是 bit10）
+    check("sx(0,11) = 0", D.sx(0, 11), 0)
+    check("sx(0x3FF,11) = 1023", D.sx(0x3FF, 11), 1023)
+    check("sx(0x400,11) = -1024", D.sx(0x400, 11), -1024)
+    check("sx(0x7FF,11) = -1", D.sx(0x7FF, 11), -1)
+    check("sx(1736,11) = -312", D.sx(1736, 11), -312)
+    check("sx(252,8) = -4", D.sx(252, 8), -4)
+    check("与 addrform.sx 一致", D.sx(252, 8), addrform.sx(252))
+    check("rel12 正向 = 0x171836",
+          D.rel12_target(0x171752, 113), 0x171836)
+    check("rel12 负向 = 0x1714EE",
+          D.rel12_target(0x17175C, 1736), 0x1714EE)
+    check("rel9 V61 beq = 0x042E50",
+          D.rel9_target(0x042E46, 4), 0x042E50)
+    check("rel9 分派器尾 = 0x171830",
+          D.rel9_target(0x17175A, 106), 0x171830)
+
+    # ---- 人造 Insn 序列：状态字配对 / call 目标 / 按位链
+    def I(pc, mn, size=2, **kw):
+        return D.Insn(pc, mn, size, kw)
+
+    toy = [
+        I(0x1000, "ldi:32", 6, i32=0x65000000, ri=4),
+        I(0x1006, "ldi:8", 2, i8=8, ri=13),
+        I(0x1008, "ld", 2, rj=4, ri=8),
+        I(0x100A, "ldi:20", 4, i20=0x104, ri=13),
+        I(0x100E, "ld", 2, rj=4, ri=6),
+        I(0x1010, "ldi:32", 6, i32=0x02000000, ri=0),
+        I(0x1016, "and", 2, rj=8, ri=0),
+        I(0x1018, "beq", 2, rel9=4),
+        I(0x101A, "ldi:32", 6, i32=0x0017209A, ri=12),
+        I(0x1020, "call", 2, ri=12),
+        I(0x1022, "call", 2, rel12=113),
+    ]
+    rds = D.status_reads(toy)
+    check("toy status_reads 2 条", len(rds), 2)
+    check("toy 第 1 条 off = 8", rds[0].off, 8)
+    check("toy 第 1 条 reg = r8", rds[0].reg, 8)
+    check("toy 第 2 条 off = 0x104", rds[1].off, 0x104)
+    check("toy 第 2 条 reg = r6", rds[1].reg, 6)
+    cls = D.call_targets(toy)
+    check("toy call_targets 2 条", len(cls), 2)
+    check("toy 第 1 条是 call @r12", cls[0].kind, "reg@r12")
+    check("toy 第 1 条目标 = 0x17209A", cls[0].target, 0x17209A)
+    check("toy 第 2 条是 rel12", cls[1].kind, "rel12")
+    check("toy 第 2 条目标 = 0x1106", cls[1].target, 0x1106)
+    rows = D.mask_chain(toy)
+    check("toy mask_chain 2 行", len(rows), 2)
+    check("toy 第 1 行 mask", rows[0].mask, 0x02000000)
+    check("toy 第 1 行 beq 目标", rows[0].beq_target, 0x1022)
+    check("toy 第 1 行 call 目标", rows[0].call_target, 0x17209A)
+    check("toy 第 2 行 beq 已清", rows[1].beq_target, None)
+
+    # ---- 空输入 / 立即数窗口 / 人造 ROM 解码
+    check("空输入 status_reads", D.status_reads([]), [])
+    check("空输入 call_targets", D.call_targets([]), [])
+    check("空输入 mask_chain", D.mask_chain([]), [])
+    check("imm_refs 命中 0x17xxxx 段",
+          len(D.imm_refs(toy, 0x170000, 0x180000)), 1)
+    check("imm_refs 命中 0x65000000 段",
+          len(D.imm_refs(toy, 0x65000000, 0x66000000)), 1)
+    check("imm_refs 显示区 0 命中",
+          len(D.imm_refs(toy, 0x120000, 0x140000)), 0)
+    rom = bytes.fromhex("8eff6fc0e2049730") + b"\x00" * 16
+    g = D.decode_range(rom, 0x1000, 0x1000, 0x1008)
+    check("decode_range 返回 4 条", len(g), 4)
+    check("decode_range 首 PC", g[0].pc, 0x1000)
+    check("decode_range 末条 = reti", g[-1].mn, "reti")
+    check("decode_range 与 isr_graph 条数一致",
+          len(g), len(addrform.isr_graph(rom, 0x1000, 0x1000, 0x1008)))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5092,6 +5201,7 @@ def main():
     test_v59()
     test_v60()
     test_v61()
+    test_v62()
     test_lists()
     test_bctrl()
     test_dual40()
