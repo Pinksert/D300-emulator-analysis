@@ -39,6 +39,9 @@
     frbox.stastat66 sta_tsk 调用四层判定：受理 / 已激活 / 上过 CPU /
                    收敛状态（V66，纯函数；判「已激活」用 state≠DORMANT
                    +有栈，不能用 state==0 或「在就绪队列上」）
+    frbox.waitstat67 等待原因按立即数宽度 / 16 位补码解码、对象队列归属
+                   闭环、唤醒条件（V67，纯函数；0xFF56 = −170 不是 +86，
+                   TCB+0x14 在 flag 等待时是位模式而非剩余 tick）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -52,4 +55,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.66.0"
+__version__ = "0.67.0"
