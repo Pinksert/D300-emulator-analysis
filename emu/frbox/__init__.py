@@ -24,6 +24,8 @@
     frbox.ablink   A-B 跨机事件链 + 联合画面取证（V60，模型化假设；
                    AbLink / OutputTap / LinkedPair 可跑可计数可证伪，
                    render_screen 产结构重建图、像素非固件）
+    frbox.addrform 访存地址形态分类：dir*=直接页、disp*=栈帧相对（V61，
+                   纯静态；修「把 ldub #252 当成直接页 0xFC」的口径盲区）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -37,4 +39,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.60.0"
+__version__ = "0.61.0"
