@@ -42,6 +42,9 @@
     frbox.waitstat67 等待原因按立即数宽度 / 16 位补码解码、对象队列归属
                    闭环、唤醒条件（V67，纯函数；0xFF56 = −170 不是 +86，
                    TCB+0x14 在 flag 等待时是位模式而非剩余 tick）
+    frbox.setsrc68 等待位的静态置位源 / 覆盖缺口 / ISR 归属 / 反事实差分
+                   （V68，纯函数；存在性 / 执行性 / 触发性三层必须一起报，
+                   clr_flg 清 mask 里为 0 的位，反事实须等形对照 + 归因分离）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -55,4 +58,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.67.0"
+__version__ = "0.68.0"
