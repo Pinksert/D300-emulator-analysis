@@ -5139,6 +5139,161 @@ def test_v62():
           len(g), len(addrform.isr_graph(rom, 0x1000, 0x1000, 0x1008)))
 
 
+def test_v63():
+    """V63：`isrfam63` 向量表 / 同族门 / 序言形态 / 写点归类。
+
+    与 V62 同款做法：不扫真固件、不 boot、不建真机器，用玩具 `Insn`
+    序列与假 sweep 验证纯函数；全 ROM 数字（256 槽 / 312 调用点 /
+    47 写点 / 五组 0 差集）由 `probe/exp_gate_v63.py` 与
+    `results/frbox/gate63.txt` 覆盖。
+    """
+    import frbox
+    from frbox import dispatch62 as D, isrfam63 as F
+
+    def I(pc, mn, **kw):
+        return D.Insn(pc, mn, 2, kw)
+
+    # ---- 版本与实证常量
+    check("frbox 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("TBR = 0x000EFC00", F.TBR, 0x000EFC00)
+    check("向量表 256 槽", F.VEC_COUNT, 256)
+    check("默认入口 = 0x0404F8", F.DEFAULT_HANDLER, 0x0404F8)
+    check("四条门 ISR 向量", tuple(g.vec for g in F.GATES),
+          (0x26, 0x2B, 0x2C, 0x3C))
+    check("三条门的槽", F.GATE_SLOTS,
+          (0x6B000020, 0x6B000030, 0x6B000034))
+    check("vec 0x26 出口 = 0x042C36", F.GATES[0].exits, (0x042C36,))
+    check("vec 0x2B 出口 = 0x17171E", F.GATES[1].exits, (0x17171E,))
+    check("vec 0x2C 出口 = 0x1A4902", F.GATES[2].exits, (0x1A4902,))
+    check("vec 0x3C 出口 = 0x1A4A32", F.GATES[3].exits, (0x1A4A32,))
+    check("vec 0x2C 是双调用", F.GATES[2].calls, 2)
+    check("vec 0x26 是双调用", F.GATES[0].calls, 2)
+    check("vec 0x2B 是单调用", F.GATES[1].calls, 1)
+    check("双调用 rel12 目标 = 0x042C36", F.THIRD_DOUBLE, 0x042C36)
+    check("通道表 80 步长 = 0x8400", F.CHAN_TABLE_80, 0x8400)
+    check("通道表 4 步长 = 0x1BBD30", F.CHAN_TABLE_4, 0x001BBD30)
+    check("显示公共函数 = 0x12E6F8", F.DSP_FN, 0x12E6F8)
+    check("显示公共函数 39 条", F.DSP_FN_SIZE, 39)
+    check("显示公共函数 312 个加载点", F.DSP_FN_REFS, 312)
+    check("其中 302 条 call:d", F.DSP_FN_CALLD, 302)
+    check("对象池步长 12", F.DSP_FN_OBJ_STRIDE, 12)
+    check("对象池 = 0x9F58D508", F.DSP_FN_OBJ, 0x9F58D508)
+    check("状态块基址 = 0x65000000", F.STATUS_BASE, 0x65000000)
+    check("外部槽基址 = 0x6B000000", F.GATE_BASE, 0x6B000000)
+    check("第 4 个槽 = 0x6B7335B0", F.EXTRA_SLOT, 0x6B7335B0)
+    check("显示链 5 判据 PC 口径不变", F.DSP_PCS, D.DSP_PCS)
+
+    # ---- 向量表公式（V54 实证 vec 0x18 槽 0x000EFF9C）
+    check("vec_slot(0x18) = 0x000EFF9C", F.vec_slot(0x18), 0x000EFF9C)
+    check("vec_slot(0x2B) = 0x000EFF50", F.vec_slot(0x2B), 0x000EFF50)
+    check("vec_slot(0x2C) = 0x000EFF4C", F.vec_slot(0x2C), 0x000EFF4C)
+    check("vec_slot(0x3C) = 0x000EFF0C", F.vec_slot(0x3C), 0x000EFF0C)
+    check("vec_of_slot(0x000EFF9C) = 0x18",
+          F.vec_of_slot(0x000EFF9C), 0x18)
+    check("vec_of_slot(vec_slot(0x2C)) = 0x2C",
+          F.vec_of_slot(F.vec_slot(0x2C)), 0x2C)
+    check("vec_of_slot 与 vec_slot 互逆",
+          all(F.vec_of_slot(F.vec_slot(v)) == v for v in range(256)), True)
+
+    # ---- 人造向量表：4 个特定槽 + 其余填默认入口
+    rom = bytearray(b"\x00" * (1024 + 16))
+    base = F.TBR
+    for v, entry in ((0x18, 0x04046E), (0x26, 0x042B2A),
+                     (0x2B, 0x042E1C), (0x2C, 0x042E72),
+                     (0x3C, 0x042ECC)):
+        off = F.vec_slot(v) - base
+        rom[off:off + 4] = entry.to_bytes(4, "big")
+    tab = F.vector_table(bytes(rom), base)
+    check("vector_table 返回 256 项", len(tab), 256)
+    check("人造表 vec 0x18 = 0x04046E", tab[0x18].entry, 0x04046E)
+    check("人造表 vec 0x26 = 0x042B2A", tab[0x26].entry, 0x042B2A)
+    check("人造表 vec 0x2B = 0x042E1C", tab[0x2B].entry, 0x042E1C)
+    check("人造表 vec 0x2C = 0x042E72", tab[0x2C].entry, 0x042E72)
+    check("人造表 vec 0x3C = 0x042ECC", tab[0x3C].entry, 0x042ECC)
+    check("人造表 vec 0 未填 = 0", tab[0].entry, 0)
+    check("人造表 4 条门全部一致",
+          all(ok for g, e, ok in F.gate_rows(tab)), True)
+    bad = list(tab)
+    bad[0x2B] = F.Vec(0x2B, F.vec_slot(0x2B), 0x999999)
+    check("改错表项后 gate_rows 判不一致",
+          [ok for g, e, ok in F.gate_rows(bad)], [True, False, True, True])
+
+    # ---- 序言形态：有 enter / 无 enter 的 ISR（硬规矩 43）
+    pro_enter = [I(0x1000, "stm0"), I(0x1002, "stm1"),
+                 I(0x1004, "st"), I(0x1006, "enter")]
+    pro_noenter = [I(0x2000, "stm0"), I(0x2002, "stm1"),
+                   I(0x2004, "st"), I(0x2006, "st"),
+                   I(0x2008, "ldi:32", i32=0x6B000020, ri=12)]
+    check("有 enter 的序言", F.is_prologue(pro_enter), "enter")
+    check("无 enter 的 ISR 序言", F.is_prologue(pro_noenter),
+          "no-enter-isr")
+    # vec 0x2B 的 enter 在第 6 条：初版 max_scan=5 误判，V63 修
+    pro6 = [I(0x6000, "stm0"), I(0x6002, "stm1"), I(0x6004, "st"),
+            I(0x6006, "st"), I(0x6008, "st"), I(0x600A, "enter"),
+            I(0x600C, "ldi:32", i32=1115, ri=8), I(0x6012, "ldi:8")]
+    check("第 6 条才出现 enter 仍判 enter",
+          F.is_prologue(pro6), "enter")
+    check("6 条以内显式短窗口不误报 no-enter",
+          F.is_prologue(pro6[:5]) == "no-enter-isr", True)
+    check("普通指令段不是序言",
+          F.is_prologue([I(0x3000, "ldi:8", i8=1), I(0x3002, "and")]), None)
+    check("空输入不是序言", F.is_prologue([]), None)
+
+    # ---- call:d 延迟槽参数（硬规矩 19）
+    calls = [
+        I(0x4000, "ldi:32", i32=0x001A4902, ri=12),
+        I(0x4006, "call:d", ri=12),
+        I(0x4008, "ldi:8", i8=0, ri=4),
+        I(0x400A, "ldub", disp8=252),
+        I(0x400C, "ldi:32", i32=0x001A4902, ri=12),
+        I(0x4012, "call:d", ri=12),
+        I(0x4014, "ldi:8", i8=1, ri=4),
+        I(0x4016, "ret"),
+    ]
+    check("delayed_args 取到两条", len(F.delayed_args(b"", 0, calls)), 2)
+    check("delayed_args 第 1 条 r4=0",
+          F.delayed_args(b"", 0, calls)[0], (0x4006, 0))
+    check("delayed_args 第 2 条 r4=1",
+          F.delayed_args(b"", 0, calls)[1], (0x4012, 1))
+    check("延迟槽不是 r4 时不取",
+          F.delayed_args(b"", 0, [I(0x5000, "call:d"),
+                                  I(0x5002, "ldi:8", i8=7, ri=5)]), [])
+    check("空输入 delayed_args", F.delayed_args(b"", 0, []), [])
+
+    # ---- ref_kinds / status_writer_buckets（假 sweep）
+    class _Sweep(object):
+        def refs_to(self, addr, window=0):
+            return [(0x120196, addr, "call:d"),
+                    (0x184814, addr, "call:d"),
+                    (0x1A0010, addr, "call")]
+
+        def writers_of(self, addr):
+            return [(0x17184A, "st"), (0x171AD6, "st"),
+                    (0x170D70, "st")] if addr == 0x65000008 else []
+
+    sw = _Sweep()
+    refs, kinds, segs = F.ref_kinds(sw, 0x12E6F8)
+    check("ref_kinds 返回 3 条", len(refs), 3)
+    check("ref_kinds 形态计数", dict(kinds),
+          {"call:d": 2, "call": 1})
+    check("ref_kinds 段分布", dict(segs), {0x12: 1, 0x18: 1, 0x1A: 1})
+    allw, inside, outside = F.status_writer_buckets(
+        sw, (0x65000008, 0x65000010))
+    check("写点去重 3 个", len(allw), 3)
+    check("写点 handler 区内 2 个", inside, 2)
+    check("写点 handler 区外 1 个", outside, 1)
+    check("空地址列表 0 写点",
+          F.status_writer_buckets(sw, ())[0], [])
+
+    # ---- rel12 目标（硬规矩 40：符号位 bit10）
+    check("rel12_target(0x042B58,110) = 0x042C36",
+          D.rel12_target(0x042B58, 110), 0x042C36)
+    check("rel12_target(0x042B66,103) = 0x042C36",
+          D.rel12_target(0x042B66, 103), 0x042C36)
+    check("两次 rel12 目标相同",
+          D.rel12_target(0x042B58, 110), D.rel12_target(0x042B66, 103))
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5202,6 +5357,7 @@ def main():
     test_v60()
     test_v61()
     test_v62()
+    test_v63()
     test_lists()
     test_bctrl()
     test_dual40()
