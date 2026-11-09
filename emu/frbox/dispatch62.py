@@ -80,8 +80,16 @@ def rel12_target(pc, rel12):
 
 
 def rel9_target(pc, rel9):
-    """`beq/bra rel9` 目标（V61 实证：rel9=4 → pc+0xA）。"""
-    return (pc + 2 + rel9 * 2) & 0xFFFFFFFF
+    """`beq/bra/blt rel9` 目标（V61 实证：rel9=4 → pc+0xA）。
+
+    ⚠️ V64 更正：`fr_emu.py:807-818` 用 ``sx(g("rel9"), 8)``，
+    即 **8 位有符号**字段。V62 初版按无符号 ``rel9 * 2`` 算：
+    向前跳（rel9 < 0x80）两种算法一致，所以本设施 10 条 `bra`
+    目标与 V62 数字不变；但向后循环会算到函数外，例如
+    `0x12E624 blt:d rel9=0xFA`，正确目标是 `0x12E61A`（循环回跳），
+    旧式算成 `0x12E81A`。V64 起与 CPU 逐字一致（硬规矩 37/44）。
+    """
+    return (pc + 2 + sx(rel9, 8) * 2) & 0xFFFFFFFF
 
 
 def _decode(rom, off):
