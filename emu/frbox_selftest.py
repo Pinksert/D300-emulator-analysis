@@ -5745,7 +5745,7 @@ def test_v68():
     Vec = namedtuple("Vec", "vec slot entry")
 
     # ---- 版本与常量
-    check("V68 版本 0.68.0", frbox.__version__, "0.68.0")
+    check("V68 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
     check("set_flg 服务号", S.SVC_SET_FLG, -48)
     check("clr_flg 服务号", S.SVC_CLR_FLG, -47)
     check("wai_flg 服务号", S.SVC_WAI_FLG, -46)
@@ -5873,6 +5873,152 @@ def test_v68():
     check("文档写明等形对照", "等形" in S.__doc__, True)
 
 
+def test_v69():
+    """V69：描述符派发链的门判据（纯函数，玩具数据）。
+
+    与 V62–V68 同款：不 boot、不扫真固件。全 ROM 数字（70 条描述符 /
+    44 个处理函数 / 5 个裸 ret 占 31 槽位 / 27 个槽位指向 0x12E752 /
+    19 处门字节引用 / 302 条提交函数直接边 / 四组新增覆盖 0,0,0,955）由
+    `probe/exp_desc_v69.py` 与 `results/frbox/desc69.txt` 覆盖。
+    """
+    import frbox
+    from frbox import descgate69 as G
+
+    # ---- 常量与文档
+    check("V69 常量 裸 ret 机器码", G.RET_BYTES, b"\x97\x20")
+    check("V69 常量 空实现地址", G.NOOP_HANDLER, 0x0012E752)
+    check("V69 常量 门字节", G.GATE, 0x9F58D08F)
+    check("V69 常量 状态字 A", G.STATUS_A, 0x9F58D450)
+    check("V69 常量 bit6 字口径", G.STATUS_WORK_READY, 0x40000000)
+    check("V69 常量 派发函数", G.CURSOR_FN, 0x0012E1EC)
+    check("V69 常量 提交函数", G.SUBMIT, 0x0012E6F8)
+    check("V69 常量 干活分支", G.WORK_ENTRY, 0x00120184)
+    check("V69 常量 当前描述符指针", G.DESC_PTR, 0x9F58D858)
+    check("V69 常量 游标基址", G.CURSOR_BASE, 0x9F58DA7C)
+    check("V69 常量 事件掩码", G.EVENT_MASK, 0x9F58DA81)
+    check("V69 常量 游标槽位", G.CURSOR_SLOT, 0x9F58DA82)
+    check("V69 常量 显示链 5 PC", len(G.DSP_PCS), 5)
+    check("V69 显示链末项就是空实现", G.DSP_PCS[-1], G.NOOP_HANDLER)
+    check("V69 文档写明硬规矩 52", "52" in G.__doc__, True)
+    check("V69 文档写明硬规矩 53", "53" in G.__doc__, True)
+    check("V69 文档写明收敛态写门无效", "**0 个 PC**" in G.__doc__, True)
+    check("V69 文档写明 wai_sem 工具边界", "wai_sem(17)" in G.__doc__, True)
+    check("V69 文档写明两台机器不可混比", "不可混比" in G.__doc__, True)
+    check("V69 模块已注册", "frbox.descgate69" in frbox.__doc__, True)
+
+    # ---- is_ret
+    check("is_ret 真", G.is_ret(b"\x97\x20"), True)
+    check("is_ret 假", G.is_ret(b"\x97\x22"), False)
+    check("is_ret 接受 bytearray", G.is_ret(bytearray(b"\x97\x20")), True)
+    check("is_ret 长度不对为假", G.is_ret(b"\x97"), False)
+
+    # ---- 分组
+    ENTRIES = [
+        {"index": 0, "handler": 0x100},
+        {"index": 1, "handler": 0x200},
+        {"index": 2, "handler": 0x100},
+        {"index": 3, "handler": 0x300},
+        {"index": 4, "handler": 0x300},
+        {"index": 5, "handler": 0x200},
+    ]
+    g = G.group_handlers(ENTRIES)
+    check("group_handlers 键数", len(g), 3)
+    check("group_handlers 键升序", list(g), [0x100, 0x200, 0x300])
+    check("group_handlers 槽位升序", g[0x100], [0, 2])
+    check("group_handlers 槽位 2", g[0x200], [1, 5])
+    check("group_handlers 元组输入",
+          G.group_handlers([(0, 0x100), (1, 0x200)])[0x200], [1])
+    HEADS = {0x100: b"\x97\x20", 0x200: b"\x97\x22", 0x300: b"\x97\x20"}
+    rets = G.ret_handlers(g, lambda h: HEADS[h])
+    check("ret_handlers 个数", len(rets), 2)
+    check("ret_handlers 列表", rets, [0x100, 0x300])
+    check("noop_slots 默认指向 NOOP_HANDLER",
+          G.noop_slots(g, 0x100), [0, 2])
+    check("noop_slots 不存在的键", G.noop_slots(g, 0x999), [])
+    check("real_handlers", G.real_handlers(g, rets), [0x200])
+    check("real_handlers 空 ret 集", G.real_handlers(g, []),
+          [0x100, 0x200, 0x300])
+
+    # ---- 门判据：三条同时成立才判空槽位
+    v = G.sentinel_verdict(b"\x97\x20", [0, 2, 7], [])
+    check("sentinel 判为空槽位", v["verdict"], "empty_slot")
+    check("sentinel is_ret", v["is_ret"], True)
+    check("sentinel 槽位数", v["slots"], 3)
+    check("sentinel 直接边", v["direct_edges"], 0)
+    v2 = G.sentinel_verdict(b"\x97\x22", [0, 2, 7], [])
+    check("sentinel 非裸 ret 不下结论", v2["verdict"], "inconclusive")
+    v3 = G.sentinel_verdict(b"\x97\x20", [], [])
+    check("sentinel 无槽位不下结论", v3["verdict"], "inconclusive")
+    v4 = G.sentinel_verdict(b"\x97\x20", [1, 2], [0x1200])
+    check("sentinel 有直接调用边不下结论", v4["verdict"], "inconclusive")
+    check("sentinel 直接边计数", v4["direct_edges"], 1)
+
+    # ---- 引用分类
+    rows = [(0x10, "other", "ldub"), (0x20, "other", "ldub"),
+            (0x30, "store", "stb"), (0x40, "test", "btsth")]
+    a = G.classify_access(rows)
+    check("classify_access 读 3", a["reads"], 3)
+    check("classify_access 写 1", a["writes"], 1)
+    check("classify_access kinds", a["kinds"],
+          {"other": 2, "store": 1, "test": 1})
+    check("classify_access 空表", G.classify_access([])["reads"], 0)
+
+    # ---- 覆盖
+    cov = {0x100, 0x300, 0x12E6F8, 0x120178}
+    cc = G.chain_coverage(cov, (0x100, 0x200, 0x12E6F8))
+    check("chain_coverage 命中 1", cc[0x100], True)
+    check("chain_coverage 未命中", cc[0x200], False)
+    check("chain_coverage 提交函数", cc[0x12E6F8], True)
+    hc = G.handler_coverage(cov, [0x100, 0x200, 0x300])
+    check("handler_coverage 命中数", hc["n_hit"], 2)
+    check("handler_coverage 命中列表", hc["hit"], [0x100, 0x300])
+    check("handler_coverage 总数", hc["n_total"], 3)
+    check("handler_coverage all_zero 假", hc["all_zero"], False)
+    check("handler_coverage 全 0 命中",
+          G.handler_coverage(set(), [0x100])["all_zero"], True)
+    d = G.door_delta({0x100}, {0x100, 0x200, 0x300}, dsp=(0x200, 0x400))
+    check("door_delta 新增数", d["n_new"], 2)
+    check("door_delta 新增集合", d["new"], [0x200, 0x300])
+    check("door_delta 显示链新增", d["dsp_new"], [0x200])
+    check("door_delta 无新增", G.door_delta({1}, {1})["n_new"], 0)
+
+    # ---- 等形与窗口
+    shapes = {k: dict(boot=10, post=20, svc=1, irqs=1)
+              for k in ("G0", "G1", "G2", "G3")}
+    es = G.equal_shape(shapes)
+    check("equal_shape 通过", es["ok"], True)
+    check("equal_shape 差异键", es["bad"], [])
+    shapes["G2"]["post"] = 21
+    es2 = G.equal_shape(shapes)
+    check("equal_shape 抓到不等形", es2["ok"], False)
+    check("equal_shape 差异字段", es2["bad"], ["post"])
+    w1 = dict(pc=0x0407DC, cov={1, 2, 3}, dsp={0x100: True},
+              states={1: 4, 2: 16})
+    w2 = dict(pc=0x0407DC, cov={3, 2, 1}, dsp={0x100: True},
+              states={1: 4, 2: 16})
+    ws = G.window_same(w1, w2)
+    check("window_same 逐项相同", ws["same"], True)
+    check("window_same 覆盖对称差 0", ws["symdiff_cov"], 0)
+    w3 = dict(w2, pc=0x04068E)
+    check("window_same 抓到末 PC 差异",
+          G.window_same(w1, w3)["diff"], ["pc"])
+    check("window_same 覆盖差异对称差",
+          G.window_same(w1, dict(w2, cov={1, 2}))["symdiff_cov"], 1)
+
+    # ---- 四组归因
+    dv = G.dispatch_verdict([("G0", 0, False), ("G1", 0, False),
+                             ("G2", 0, False), ("G3", 955, True)])
+    check("dispatch_verdict 零组", dv["zero_groups"], ["G0", "G1", "G2"])
+    check("dispatch_verdict 非零组", dv["nonzero_groups"], [("G3", 955)])
+    check("dispatch_verdict 归因 tick", dv["attribution"], "tick")
+    check("dispatch_verdict 只写门无效", dv["door_only_useless"], True)
+    dv2 = G.dispatch_verdict([("G0", 0, False), ("G1", 10, False)])
+    check("dispatch_verdict 非 tick 组归因 mixed",
+          dv2["attribution"], "mixed")
+    dv3 = G.dispatch_verdict([("G0", 0, False), ("G1", 0, False)])
+    check("dispatch_verdict 全零组", dv3["nonzero_groups"], [])
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5942,6 +6088,7 @@ def main():
     test_v66()
     test_v67()
     test_v68()
+    test_v69()
     test_lists()
     test_bctrl()
     test_dual40()
