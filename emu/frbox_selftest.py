@@ -5614,6 +5614,121 @@ def test_v66():
     check("文档写明 kernel_call 预热", "kernel_call" in S.__doc__, True)
 
 
+def test_v67():
+    """V67：等待原因按宽度/16 位解码、对象队列归属闭环、唤醒条件（纯函数）。
+
+    与 V62–V66 同款：不 boot、不扫真固件，用玩具数据验证纯函数；
+    全 ROM 数字（2297 个 int 点 / 91 个 −170 / 17 个等待任务 / 7 条队列 /
+    14 个 pat&want=0）由 `probe/exp_wait_v67.py` 与 `results/frbox/wait67.txt` 覆盖。
+    """
+    import frbox
+    from frbox import waitstat67 as W
+
+    # ---- 服务号解码：按立即数宽度，不统一取低 8 位
+    check("V67 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("sx8(0xD2) = −46（ldi:8 正确口径）", W.sx8(0xD2), -46)
+    check("sx16(0xFFD2) = −46", W.sx16(0xFFD2), -46)
+    check("sx16(0xFF56) = −170", W.sx16(0xFF56), -170)
+    check("sx8(0x56) = 86（旧口径错值）", W.sx8(0x56), 86)
+    check("sx32(0xFFFFFF56) = −170", W.sx32(0xFFFFFF56), -170)
+    check("svc_of_r12 ldi:8 #0xD2", W.svc_of_r12(0xD2, 8), -46)
+    check("svc_of_r12 ldi:32 #0xFFFFFF56", W.svc_of_r12(0xFFFFFF56, 32), -170)
+    check("svc_of_r12 ldi:32 #0xFFFFFF55", W.svc_of_r12(0xFFFFFF55, 32), -171)
+    check("svc_of_r12 width=16 0xFF56", W.svc_of_r12(0xFF56, 16), -170)
+    try:
+        W.svc_of_r12(0, 7)
+        bad_width = False
+    except ValueError:
+        bad_width = True
+    check("非法立即数宽度抛 ValueError", bad_width, True)
+    check("why_svc(0xFF56) = −170", W.why_svc(0xFF56), -170)
+    check("why_old(0xFF56) = 86（对照）", W.why_old(0xFF56), 86)
+    check("why_svc(0xFFDB) = −37", W.why_svc(0xFFDB), -37)
+    check("why_svc(0xFFAB) = −85", W.why_svc(0xFFAB), -85)
+    check("服务名 −170", W.svc_name(-170), "twai_flg(-170)")
+    check("宽服务号共 2 种", W.WIDE_SERVICES, (-170, -171))
+
+    # ---- 内核对象地址（V33 / KI#124）
+    check("flag 1 对象 0x680008B8", W.flag_obj(1), 0x680008B8)
+    check("flag 3 对象 0x680008D8", W.flag_obj(3), 0x680008D8)
+    check("flag 6 对象 0x68000908", W.flag_obj(6), 0x68000908)
+    check("flag 12 对象 0x68000968", W.flag_obj(12), 0x68000968)
+    check("flag 17 对象 0x680009B8", W.flag_obj(17), 0x680009B8)
+    check("反查 0x68000988 → flag 14", W.flag_id_of(0x68000988), 14)
+    check("反查延时哨兵不是 flag", W.flag_id_of(W.DELAY_SENTINEL), None)
+    check("owner_name 延时队列", W.owner_name(W.DELAY_SENTINEL), "延时队列")
+    check("owner_name flag 17", W.owner_name(0x680009B8), "flag 17")
+    check("静态证据：等待位模式写入指令", W.WANT_STORE_PC, 0x041B54)
+    check("静态证据：set_flg 读写 +8", W.PAT_OR_PCS, (0x041A5C, 0x041A60))
+    check("静态证据：wai_flg 读 +8", W.PAT_LOAD_PC, 0x041B32)
+    check("TCB 等待位模式/剩余 tick 共用 +0x14", W.TCB_WANT, 0x14)
+    check("对象当前位模式 +0x08", W.OBJ_PAT, 0x08)
+
+    # ---- 队列归属：玩具环链
+    rows = {
+        0x100: {"next": 0x200, "prev": 0x900},
+        0x200: {"next": 0x900, "prev": 0x100},
+        0x300: {"next": 0x300, "prev": 0x300},
+    }
+    owner, chain = W.queue_owner(rows, 0x100)
+    check("沿 next 找到队列哨兵", owner, 0x900)
+    check("链上只有 2 个 TCB", chain, [0x100, 0x200])
+    check("自指坏链返回未定", W.queue_owner(rows, 0x300)[0], None)
+    assign = W.build_assignments(rows, [0x100, 0x200])
+    cl = W.closure(assign, [0x100, 0x200])
+    check("玩具闭环成立", cl["ok"], True)
+    check("玩具队列 1 条", cl["queues"], 1)
+    check("玩具归到 2 个 TCB", cl["assigned"], 2)
+    bad = W.closure({0x900: [0x100, 0x100], 0xA00: [0x999]}, [0x100, 0x200])
+    check("有遗漏", bad["missing"], [0x200])
+    check("有外来节点", bad["extra"], [0x999])
+    check("有重复归属", bad["duplicated"], [0x100])
+    check("不闭环", bad["ok"], False)
+
+    # ---- 真实 7 条队列（V67 wait67.txt 的归属图，玩具复刻）
+    real = {
+        0x680008D8: [0x680001EC, 0x68000168, 0x68000588],
+        0x680008F8: [0x68000194],
+        0x68000908: [0x680001C0, 0x68000218, 0x6800029C, 0x680002C8,
+                     0x680002F4, 0x680005B4, 0x680005E0],
+        0x68000928: [0x6800013C],
+        0x68000988: [0x68000480],
+        0x680009B8: [0x680003D0],
+        0x68000118: [0x680003FC, 0x68000244, 0x680004AC],
+    }
+    flat = [t for lst in real.values() for t in lst]
+    r = W.closure(real, flat)
+    check("真实归属闭环成立", r["ok"], True)
+    check("真实归属 7 条队列", r["queues"], 7)
+    check("真实归属 17 个等待 TCB", r["assigned"], 17)
+    check("其中 6 条是 flag 对象",
+          sum(1 for o in real if W.flag_id_of(o) is not None), 6)
+    check("flag 6 上有 7 个等待者", len(real[0x68000908]), 7)
+    check("延时队列 3 个等待者", len(real[W.DELAY_SENTINEL]), 3)
+
+    # ---- 唤醒条件：不依赖 mode 字段
+    check("pat=0 / want=0x20 两种模式都不唤醒",
+          W.wakeable(0x00000000, 0x00000020), (False, False, True))
+    check("pat=0x780 / want=0x9 两种模式都不唤醒",
+          W.wakeable(0x00000780, 0x00000009), (False, False, True))
+    check("pat=0x50000000 / want=0x80000000 都不唤醒",
+          W.wakeable(0x50000000, 0x80000000), (False, False, True))
+    check("只有一位重合：OR 满足 AND 不满足",
+          W.wakeable(0x00000008, 0x00000018), (True, False, False))
+    check("全部位置齐：两种模式都满足",
+          W.wakeable(0x00000018, 0x00000018), (True, True, False))
+    check("want=0 不算 blocked", W.wakeable(0, 0), (False, True, False))
+    check("classify_wait −46 是 flag", W.classify_wait(-46, 0), "flag")
+    check("classify_wait −170 是 flag", W.classify_wait(-170, 0), "flag")
+    check("classify_wait −85 是 delay", W.classify_wait(-85, 0), "delay")
+    check("classify_wait −37 是 delay", W.classify_wait(-37, 0), "delay")
+
+    # ---- 设施文档把三条最容易踩的纪律写明
+    check("文档写明立即数宽度", "立即数宽度" in W.__doc__, True)
+    check("文档写明 TCB+0x20 按 16 位", "TCB+0x20" in W.__doc__, True)
+    check("文档写明 TCB+0x14 语义随原因变化", "语义随等待原因变化" in W.__doc__, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5681,6 +5796,7 @@ def main():
     test_v64()
     test_v65()
     test_v66()
+    test_v67()
     test_lists()
     test_bctrl()
     test_dual40()
