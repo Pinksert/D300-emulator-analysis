@@ -33,6 +33,9 @@
     frbox.taskchain64 任务表 29 条 / 14 个显示任务 / sta_tsk 启动链 /
                    对象池 70 槽布局 / 写点归属（V64，纯静态；
                    同时更正 dispatch62.rel9_target 的 8 位有符号口径）
+    frbox.bootchain65 任务 2 开机装配函数 / 18 连串 call → sta_tsk 启动器 /
+                   ROM 表扫描循环（V65，纯静态；add2 的 m4 是 m4-16 的
+                   负立即数，bgt 条件来自 add2 的 CCR 而非 ld 读值）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -46,4 +49,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.64.0"
+__version__ = "0.65.0"
