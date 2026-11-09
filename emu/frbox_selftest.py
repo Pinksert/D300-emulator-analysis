@@ -4951,6 +4951,85 @@ def test_v60():
     check("基线行含基线对照", "基线对照" in rep2[-1], True)
 
 
+def test_v61():
+    """V61：`addrform` 纯静态地址形态分类 + ISR 控制流图。
+
+    不扫真固件、不 boot、不建真机器：只用手工构造的 8 字节 ROM
+    验证解码形态、控制流标注与 V61 实证常量。全 ROM 数字（528 / 52 / 37 /
+    35 / +50）由 `probe/exp_isr_v61.py` 与 `results/frbox/isr61.txt` 覆盖。
+    """
+    import frbox
+    from frbox import addrform, bpatch
+
+    # ---- 版本与实证常量
+    check("frbox 版本 = 0.61.0", frbox.__version__, "0.61.0")
+    check("vec 0x2B", addrform.ISR_VEC, 0x2B)
+    check("ISR 入口 = 0x042E1C", addrform.ISR_ENTRY, 0x042E1C)
+    check("ISR reti = 0x042E70", addrform.ISR_RETI, 0x042E70)
+    check("ISR PC 数 = 37", addrform.ISR_PC_COUNT, 37)
+    check("ISR 分支 = 0x042E46", addrform.ISR_BRANCH, 0x042E46)
+    check("beq 跳过两条", addrform.ISR_SKIPPED, (0x042E48, 0x042E4E))
+    check("打桩两 PC", addrform.ISR_PATCH_PCS, (0x042E40, 0x042E50))
+    check("总闸槽 = 0x6B000030", addrform.GATE_SLOT, 0x6B000030)
+    check("ICR = 0x45B", addrform.ICR_2B, 0x45B)
+    check("分派器入口 = 0x17171E", addrform.DISPATCH_ENTRY, 0x17171E)
+    check("状态窗口 = 0x65000000", addrform.STATUS_WINDOW, 0x65000000)
+
+    # ---- 符号扩展
+    check("sx(252,8) = -4", addrform.sx(252), -4)
+    check("sx(0x1F,8) = 31", addrform.sx(0x1F), 31)
+    check("sx(0,8) = 0", addrform.sx(0), 0)
+
+    # ---- 形态分类（V61 的核心更正）
+    f = addrform.classify("ldub", {"disp8": 252, "ri": 0})
+    check("ldub #252 是栈帧相对", f.kind, "frame_rel")
+    check("ldub #252 表达式 = r14-4", f.expr, "r14-4")
+    check("ldub #252 不能静态定址", f.addr, None)
+    check("ldub #252 scale = 1", f.scale, 1)
+    g = addrform.classify("stb", {"disp8": 252, "ri": 0})
+    check("stb #252 同样是栈帧相对", g.expr, "r14-4")
+    h = addrform.classify("dmovb", {"dir8": 252, "ri": 0})
+    check("dmovb #252 是真直接页", h.kind, "direct_page")
+    check("dmovb #252 地址 = 0xFC", h.addr, 0xFC)
+    check("dmov dir10=3 地址 = 12",
+          addrform.classify("dmov", {"dir10": 3}).addr, 12)
+    check("ld disp10=253 = r14-12",
+          addrform.classify("ld", {"disp10": 253}).expr, "r14-12")
+    check("ld udisp6=3 = r15+12",
+          addrform.classify("ld", {"udisp6": 3}).expr, "r15+12")
+    check("ld @Rj 归寄存器间接",
+          addrform.classify("ld", {"rj": 1, "ri": 12}).kind, "reg_indirect")
+    check("nop 归 none", addrform.classify("nop", {}).kind, "none")
+    check("vals 不是 dict 归 none", addrform.classify("nop", None).kind, "none")
+    check("describe 栈帧相对", "不是直接页" in addrform.describe(f), True)
+    check("describe 直接页", addrform.describe(h), "直接页 0xFC")
+
+    # ---- 人造 ROM 上的 ISR 控制流图
+    rom = bytes.fromhex("8eff6fc0e2049730") + b"\x00" * 16
+    graph = addrform.isr_graph(rom, 0x1000, 0x1000, 0x1008)
+    check("isr_graph 返回 4 条", len(graph), 4)
+    check("isr_graph 首 PC", graph[0].pc, 0x1000)
+    check("isr_graph 末 PC", graph[-1].pc, 0x1006)
+    check("isr_graph 末条 = reti", graph[-1].mn, "reti")
+    check("beq 被标为控制流", graph[2].control, "beq")
+    check("reti 被标为控制流", graph[3].control, "reti")
+    check("stm0 不标控制流", graph[0].control, "")
+    check("isr_graph 里 ldub 形态", graph[1].form.expr, "r14-4")
+
+    # ---- scan / direct_page_hits
+    cnt, detail = addrform.scan(rom, 0x1000, 252)
+    check("scan frame_rel/disp8 = 1", cnt.get("frame_rel/disp8", 0), 1)
+    check("scan direct_page/dir8 = 0", cnt.get("direct_page/dir8", 0), 0)
+    check("scan 明细 PC = 0x1002", detail["frame_rel/disp8"][0][0], 0x1002)
+    check("direct_page_hits(0xFC) = 0",
+          len(addrform.direct_page_hits(rom, 0x1000, 0xFC)), 0)
+
+    # ---- 反事实打桩是纯函数
+    fn = bpatch.bit_set(1)
+    check("bit_set(1)(0) = 1", fn(0), 1)
+    check("bit_set(1)(0x12) = 0x13", fn(0x12), 0x13)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5012,6 +5091,7 @@ def main():
     test_v58()
     test_v59()
     test_v60()
+    test_v61()
     test_lists()
     test_bctrl()
     test_dual40()
