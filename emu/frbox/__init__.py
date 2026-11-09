@@ -36,6 +36,9 @@
     frbox.bootchain65 任务 2 开机装配函数 / 18 连串 call → sta_tsk 启动器 /
                    ROM 表扫描循环（V65，纯静态；add2 的 m4 是 m4-16 的
                    负立即数，bgt 条件来自 add2 的 CCR 而非 ld 读值）
+    frbox.stastat66 sta_tsk 调用四层判定：受理 / 已激活 / 上过 CPU /
+                   收敛状态（V66，纯函数；判「已激活」用 state≠DORMANT
+                   +有栈，不能用 state==0 或「在就绪队列上」）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -49,4 +52,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.65.0"
+__version__ = "0.66.0"
