@@ -5514,6 +5514,106 @@ def test_v65():
     check("同构轮询两段", len(B.SIBLING_POLLS), 2)
 
 
+def test_v66():
+    """V66：`sta_tsk` 四层判定 / 服务返回码配对 / 返回点派发重放。
+
+    与 V62–V65 同款：不 boot、不扫真固件，用玩具数据验证纯函数；
+    全 ROM 数字（27 点 / 23 任务号 / 16 个 E_OK / 11 个 DORMANT /
+    4 个无启动点任务）由 `probe/exp_sta_v66.py` 与 `results/frbox/sta66.txt` 覆盖。
+    """
+    import frbox
+    from frbox import stastat66 as S
+
+    # ---- 实证常量与状态口径
+    check("V66 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("TCB 状态字节偏移", 0x0B, 0x0B)
+    check("READY/WAIT/DORMANT", (S.READY, S.WAIT, S.DORMANT), (0, 4, 0x10))
+    check("int #0x40 长度 = 2", S.INT_SIZE, 2)
+    check("真内核陷阱入口", S.TRAP_ENTRY, 0x040668)
+    check("系统调用后派发器", S.DISPATCH_ENTRY, 0x040D32)
+    check("E_OK", S.E_OK, 0)
+
+    # ---- 32 位补码返回码（B 段反例实测：−35 / −63 / −17）
+    check("signed(0)=0", S.signed(0), 0)
+    check("signed(-35 编码)=-35", S.signed(0xFFFFFFDD), -35)
+    check("signed(-63 编码)=-63", S.signed(0xFFFFFFC1), -63)
+    check("signed(-17 编码)=-17", S.signed(0xFFFFFFEF), -17)
+    check("signed(0x68000130) 不变", S.signed(0x68000130), 0x68000130)
+
+    # ---- 返回点映射与配对（只取调用后第一次 +2 命中）
+    check("return_pcs 映射", S.return_pcs((0x100, 0x200)),
+          {0x102: 0x100, 0x202: 0x200})
+    log = [
+        (10, 0x100, 7, 1, 0xFFFFFFE9, 0x6800013C),   # int #0x40
+        (39, 0x102, 7, 1, 0x00000000, 0x6800013C),   # reti 回来，r12=E_OK
+        (40, 0x040D32, 7, 1, 0x00000000, 0x6800013C),  # 立刻派发
+        (88, 0x102, 7, 1, 0x68000130, 0x6800013C),   # 任务恢复，从 +2 续跑
+    ]
+    p = S.pair_returns(log, (0x100,))
+    check("配对条数", len(p), 1)
+    check("配对取第一次返回点的 err", p[0][1], 0)
+    check("返回点重放 2 次不等于调用 2 次", p[0][2], 2)
+    check("无返回点时 err 为 None",
+          S.pair_returns([(1, 0x100, 7, 1, 0xFFFFFFE9, 0)], (0x100,))[0][1],
+          None)
+    check("错误码能被配对读出",
+          S.pair_returns([(1, 0x100, 7, 1, 0, 0),
+                          (2, 0x102, 7, 1, 0xFFFFFFDD, 0)], (0x100,))[0][1],
+          -35)
+
+    # ---- 「已激活」判据：绝不能拿 state==0 / 队列占用当条件
+    check("WAIT + 有栈 ⇒ 已激活",
+          S.is_activated({"state": S.WAIT, "sp": 0x9F80027C, "queues": []}),
+          True)
+    check("DORMANT + 无栈 ⇒ 未激活",
+          S.is_activated({"state": S.DORMANT, "sp": 0, "queues": []}), False)
+    check("READY + 有栈 ⇒ 已激活（不看队列）",
+          S.is_activated({"state": S.READY, "sp": 0x68000B98, "queues": []}),
+          True)
+    check("READY + 无栈 ⇒ 未激活",
+          S.is_activated({"state": S.READY, "sp": 0, "queues": [5]}), False)
+
+    # ---- 四层分类
+    pairs = [{"tid": t, "err": S.E_OK}
+             for t in (1, 3, 4, 5, 6, 7, 9, 10, 11, 16, 17, 20, 21, 26, 27, 28)]
+    tcbs = ([{"tid": t, "state": S.WAIT, "sp": 0x9F800000 + t, "ran": True,
+              "queues": []} for t in
+             (1, 3, 4, 5, 6, 7, 9, 10, 11, 16, 17, 20, 21, 26, 27, 28)]
+            + [{"tid": t, "state": S.DORMANT, "sp": 0, "ran": False,
+                "queues": []} for t in
+               (8, 12, 13, 14, 15, 18, 19, 22, 23, 24, 25)]
+            + [{"tid": 2, "state": S.WAIT, "sp": 0x9F800A84, "ran": True,
+                "queues": []},
+               {"tid": 29, "state": S.READY, "sp": 0x68000B98, "ran": True,
+                "queues": []}])
+    static = set((1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 16, 17, 18, 19, 20, 21,
+                  22, 23, 24, 25, 26, 27, 28))
+    r = S.classify(pairs, tcbs, static)
+    check("第 1 层受理 16 个", len(r["accepted"]), 16)
+    check("第 2 层已激活 16 个", len(r["activated"]), 16)
+    check("第 3 层上过 CPU 16 个", len(r["ran"]), 16)
+    check("第 4 层等待 16 个", len(r["waiting"]), 16)
+    check("DORMANT 11 个", len(r["dormant"]), 11)
+    check("1→2 层差集空", r["gap_1_2"], [])
+    check("2→3 层差集空", r["gap_2_3"], [])
+    check("三层完全重合", S.layers_overlap(r), True)
+    check("全 ROM 无启动点的休眠任务 = 12/13/14/15",
+          r["no_launcher"], [12, 13, 14, 15])
+
+    bad = S.classify([{"tid": 1, "err": -63}, {"tid": 3, "err": S.E_OK}],
+                     [{"tid": 1, "state": S.DORMANT, "sp": 0, "ran": False},
+                      {"tid": 3, "state": S.WAIT, "sp": 0x9F800000,
+                       "ran": False}], static)
+    check("err≠0 不进第 1 层", bad["accepted"], [3])
+    check("ran=False 不进第 3 层", bad["ran"], [])
+    check("有差集时 layers_overlap 为假", S.layers_overlap(bad), False)
+
+    # ---- 设施文档把三条最容易踩的纪律写明
+    check("文档写明 svc_hook 陷阱", "svc_hook" in S.__doc__, True)
+    check("文档写明返回点重放", "返回点" in S.__doc__, True)
+    check("文档写明 kernel_call 预热", "kernel_call" in S.__doc__, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5580,6 +5680,7 @@ def main():
     test_v63()
     test_v64()
     test_v65()
+    test_v66()
     test_lists()
     test_bctrl()
     test_dual40()
