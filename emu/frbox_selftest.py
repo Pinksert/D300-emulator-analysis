@@ -5729,6 +5729,150 @@ def test_v67():
     check("文档写明 TCB+0x14 语义随原因变化", "语义随等待原因变化" in W.__doc__, True)
 
 
+def test_v68():
+    """V68：等待位的静态置位源 / 覆盖缺口 / ISR 归属 / 反事实差分（纯函数）。
+
+    与 V62–V67 同款：不 boot、不扫真固件，用玩具数据验证纯函数；
+    全 ROM 数字（866 个 set_flg / 133 个去重置位点 / 收敛态 0 命中 /
+    13 组 ISR / 反事实 459 与 1370 个新增 PC）由
+    `probe/exp_set_v68.py` 与 `results/frbox/set68.txt` 覆盖。
+    """
+    import frbox
+    from collections import namedtuple
+    from frbox import setsrc68 as S
+
+    Call = namedtuple("Call", "addr svc flgid bits")
+    Vec = namedtuple("Vec", "vec slot entry")
+
+    # ---- 版本与常量
+    check("V68 版本 0.68.0", frbox.__version__, "0.68.0")
+    check("set_flg 服务号", S.SVC_SET_FLG, -48)
+    check("clr_flg 服务号", S.SVC_CLR_FLG, -47)
+    check("wai_flg 服务号", S.SVC_WAI_FLG, -46)
+    check("等形对照用的无害服务 get_tid", S.SVC_GET_TID, -24)
+    check("默认 ISR 入口", S.DEFAULT_ISR, 0x0404F8)
+    check("V67 实测 14 个 flag 等待者", len(S.WAITERS_V67), 14)
+    check("V67 等待者覆盖 6 个 flag",
+          sorted({f for f, _t, _w in S.WAITERS_V67}), [3, 5, 6, 8, 14, 17])
+    check("flag 3 的等待位 OR", S.wants_by_flag(S.WAITERS_V67)[3], 0x00210009)
+    check("flag 6 的等待位 OR", S.wants_by_flag(S.WAITERS_V67)[6], 0x000063E0)
+    check("flag 17 的等待位 OR", S.wants_by_flag(S.WAITERS_V67)[17], 0x2)
+    check("wants_by_flag 只有 6 个键", len(S.wants_by_flag(S.WAITERS_V67)), 6)
+    check("空等待表 → 空字典", S.wants_by_flag([]), {})
+
+    # ---- 位展开
+    check("bits_of(0x9)", S.bits_of(0x9), [0x1, 0x8])
+    check("bits_of(0x80000000)", S.bits_of(0x80000000), [0x80000000])
+    check("bits_of(0) 空", S.bits_of(0), [])
+    check("bits_of(None) 空（常量不可见）", S.bits_of(None), [])
+    check("bits_of(0x63E0) 共 7 位", len(S.bits_of(0x63E0)), 7)
+
+    # ---- 玩具调用点
+    calls = [
+        Call(0x100, -48, 3, 0x1),           # 能置 flag3 的 bit0
+        Call(0x102, -48, 3, 0x8),           # 能置 flag3 的 bit3
+        Call(0x104, -48, 3, 0x500),         # 置的是别的位
+        Call(0x106, -47, 3, 0xFFFFFFFE),    # clr_flg：清 mask 里为 0 的位 = bit0
+        Call(0x108, -48, 6, 0x20),          # flag6 bit5
+        Call(0x10A, -48, None, 0x20),       # flgid 不可定
+        Call(0x10C, -48, 3, None),          # bits 不可定
+        Call(0x10E, -46, 3, 0x9),           # wai_flg 不是置位源
+        Call(0x110, -47, 3, 0xFFFFFFF9),    # clr_flg：mask 覆盖 want 全部位，不清等待位
+    ]
+    check("is_setter 命中", S.is_setter(calls[0], 3, 0x9), True)
+    check("is_setter 位不重合", S.is_setter(calls[2], 3, 0x9), False)
+    check("is_setter 服务号不对", S.is_setter(calls[7], 3, 0x9), False)
+    check("is_setter flgid 不对", S.is_setter(calls[4], 3, 0x9), False)
+    check("is_setter bits=None 不算", S.is_setter(calls[6], 3, 0x9), False)
+    check("is_clearer：清的是 mask 里为 0 的位",
+          S.is_clearer(calls[3], 3, 0x9), True)
+    check("is_clearer：只清别的位不算",
+          S.is_clearer(calls[8], 3, 0x9), False)
+    check("is_clearer 对 set_flg 不算", S.is_clearer(calls[0], 3, 0x9), False)
+    check("setters_for(flag3, 0x9) 两个",
+          [c.addr for c in S.setters_for(calls, 3, 0x9)], [0x100, 0x102])
+    check("setters_for(flag6, 0x20) 一个",
+          [c.addr for c in S.setters_for(calls, 6, 0x20)], [0x108])
+    check("setters_for 不收 flgid=None",
+          all(c.flgid is not None for c in S.setters_for(calls, 3, 0x9)), True)
+    check("clearers_for(flag3, 0x9) 一个",
+          [c.addr for c in S.clearers_for(calls, 3, 0x9)], [0x106])
+    check("unique_pcs 去重", S.unique_pcs([calls[0], calls[0], calls[1]]),
+          [0x100, 0x102])
+
+    # ---- 覆盖总账（按等待者累加 vs 全局去重）
+    cov = {0x100}
+    check("covered 只留命中的", S.covered([0x100, 0x102], cov), [0x100])
+    rep = S.coverage_report([(3, 5, 0x9), (6, 9, 0x20)], calls, cov)
+    check("coverage_report 两行", len(rep), 2)
+    check("第一行置位点", rep[0]["pcs"], [0x100, 0x102])
+    check("第一行命中", rep[0]["hit"], [0x100])
+    check("第一行 points", rep[0]["points"], 2)
+    check("第一行 hit_count", rep[0]["hit_count"], 1)
+    check("第二行零命中", rep[1]["hit_count"], 0)
+    g = S.gap_total(rep)
+    check("gap_total 累加点数", g["points"], 3)
+    check("gap_total 累加命中", g["hit"], 1)
+    check("gap_total 去重点数", g["unique_points"], 3)
+    check("gap_total 去重命中", g["unique_hit"], 1)
+    check("gap_total 等待者数", g["waiters"], 2)
+    check("gap_total 零命中等待者", g["zero_hit"], 1)
+    check("全覆盖时零命中等待者 0",
+          S.gap_total(S.coverage_report([(3, 5, 0x9)], calls,
+                                        {0x100, 0x102}))["zero_hit"], 0)
+
+    # ---- ISR 归属（默认槽排除、多个向量共享同一 enter 区间）
+    vecs = [Vec(1, 0x100, 0x0404F8), Vec(2, 0x104, 0x12D3E2),
+            Vec(3, 0x108, 0x12D456), Vec(4, 0x10C, None),
+            Vec(5, 0x110, 0xFFFFFFFF)]
+    check("real_vectors 排除默认/空", S.real_vectors(vecs),
+          [(2, 0x12D3E2), (3, 0x12D456)])
+    funcs = [0x12D3BA, 0x12DA02]
+    rng = S.isr_ranges([0x12D3E2, 0x12D456], funcs)
+    check("isr_ranges 两条", len(rng), 2)
+    check("两个向量共享同一 enter 区间",
+          rng[0][1:] == rng[1][1:], True)
+    check("共享区间是 0x12D3BA..0x12DA02",
+          (rng[0][1], rng[0][2]), (0x12D3BA, 0x12DA02))
+    inh = S.points_in_ranges([0x12D5F2, 0x999999], rng)
+    check("points_in_ranges 两组都命中", len(inh), 2)
+    check("每组只含区间内的点", [x[3] for x in inh],
+          [[0x12D5F2], [0x12D5F2]])
+    check("点全在区间外时返回空",
+          S.points_in_ranges([0x999999], rng), [])
+
+    # ---- 反事实差分
+    before = {"st": {1: 4, 2: 4, 3: 0}, "cov": {0x100},
+              "pats": {3: 0x0, 6: 0x0}}
+    after = {"st": {1: 0, 2: 4, 3: 0}, "cov": {0x100, 0x200},
+             "pats": {3: 0x9, 6: 0x0}}
+    check("state_diff 只报变了的任务", S.state_diff(before["st"], after["st"]),
+          [1])
+    check("state_diff 相同为空", S.state_diff(before["st"], before["st"]), [])
+    check("state_diff 新增键也算", S.state_diff({1: 4}, {1: 4, 2: 0}), [2])
+    check("new_coverage 新增一个", S.new_coverage(before["cov"], after["cov"]),
+          {0x200})
+    check("new_coverage 无新增", S.new_coverage(after["cov"], before["cov"]),
+          set())
+    check("pattern_diff 只报变化的 flag",
+          S.pattern_diff(before["pats"], after["pats"]), [(3, 0, 0x9)])
+    check("pattern_diff 相同为空",
+          S.pattern_diff(before["pats"], before["pats"]), [])
+    d = S.diff_summary(before, after, dsp_pcs=(0x200, 0x300))
+    check("diff_summary state_diff", d["state_diff"], [1])
+    check("diff_summary 新增覆盖数", d["new_cov"], 1)
+    check("diff_summary 显示链新增命中", d["dsp_new"], [0x200])
+    check("diff_summary 位模式变化", d["pattern_diff"], [(3, 0, 0x9)])
+    check("等形对照：完全相同的快照零差异",
+          S.diff_summary(before, before, dsp_pcs=(0x100,))["new_cov"], 0)
+
+    # ---- 设施文档把三层口径与两条纪律写明
+    check("文档写明存在/执行/触发三层", "三层" in S.__doc__, True)
+    check("文档写明 clr_flg 清 0 位", "mask 里为 0 的位" in S.__doc__, True)
+    check("文档写明 kernel_call 恢复上下文", "恢复 CPU 上下文" in S.__doc__, True)
+    check("文档写明等形对照", "等形" in S.__doc__, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5797,6 +5941,7 @@ def main():
     test_v65()
     test_v66()
     test_v67()
+    test_v68()
     test_lists()
     test_bctrl()
     test_dual40()
