@@ -30,6 +30,9 @@
                    按位派发表（V62，纯静态；rel12 按 fr_emu.py:777 算）
     frbox.isrfam63 256 槽中断向量表 / 四条同族门 / 无 enter 的 ISR 序言 /
                    显示状态查询函数（V63，纯静态；判 ISR 归属先反查向量表）
+    frbox.taskchain64 任务表 29 条 / 14 个显示任务 / sta_tsk 启动链 /
+                   对象池 70 槽布局 / 写点归属（V64，纯静态；
+                   同时更正 dispatch62.rel9_target 的 8 位有符号口径）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -43,4 +46,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.63.0"
+__version__ = "0.64.0"
