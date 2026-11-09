@@ -5420,6 +5420,100 @@ def test_v64():
     check("rel9 与 CPU 语义：零位移", D.rel9_target(0x100, 0), 0x102)
 
 
+def test_v65():
+    """V65：任务 2 开机装配链 / add2 负立即数 / 确定性有限扫描循环。
+
+    与 V62–V64 同款：不扫真固件、不 boot，用玩具数据验证纯函数；
+    全 ROM 数字（353 条 / 32 call / 26 服务 / 12 条 call→sta_tsk /
+    4962 轮 / 11 个 sta_tsk 命中）由 `probe/exp_boot_v65.py` 与
+    `results/frbox/boot65.txt` 覆盖。
+    """
+    import collections
+    import frbox
+    from frbox import dispatch62 as D, bootchain65 as B
+
+    # ---- 实证常量
+    check("V65 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("任务 2 入口", B.BOOT_TASK2, 0x1200AC)
+    check("任务 2 函数 ret", B.BOOT_RET, 0x12046E)
+    check("第一条 call", B.FIRST_CALL_PC, 0x1200D0)
+    check("第一条 call 的目标", B.FIRST_CALLEE, 0x1A4DD2)
+    check("循环四 PC", B.POLL_PCS,
+          (0x1A4E54, 0x1A4E56, 0x1A4E58, 0x1A4E5A))
+    check("循环出口", B.POLL_EXIT, 0x1A4E5C)
+    check("循环 rel9 字段", B.POLL_REL9, 0xFD)
+    check("循环回跳目标", B.POLL_TARGET, 0x1A4E54)
+    check("r13 初值", B.R13_INIT, 0x6B1C)
+    check("r6 基址", B.R6_BASE, 0x001D7124)
+    check("扫描首地址", B.SCAN_TOP, 0x001DDC3C)
+    check("门字节地址", B.BOOT_GATE_BYTE, 0x9F58D08F)
+    check("门字节判定 PC", B.BOOT_GATE_CMP, 0x120178)
+
+    # ---- add2 的 m4 是 4 位负立即数（fr_emu.py:454 `m4-16`）
+    check("add2 m4=0xC → -4", B.m4_delta(0xC), -4)
+    check("add2 m4=0x0 → -16", B.m4_delta(0x0), -16)
+    check("add2 m4=0xF → -1", B.m4_delta(0xF), -1)
+    check("m4 只取低 4 位", B.m4_delta(0x1C), -4)
+    check("m4 恒为负", all(B.m4_delta(v) < 0 for v in range(16)), True)
+
+    # ---- 分支位移：V64 修好的 8 位有符号 rel9
+    check("负 rel9 回跳目标",
+          B.rel9_target(B.POLL_BRANCH, B.POLL_REL9), B.POLL_TARGET)
+    check("正 rel9 前跳", B.rel9_target(0x042E46, 4), 0x042E50)
+    check("POLL_TARGET 与公式自洽",
+          B.POLL_TARGET, D.rel9_target(B.POLL_BRANCH, B.POLL_REL9))
+
+    # ---- 扫描窗口
+    w = B.scan_window()
+    check("扫描首地址公式", w["first"], B.SCAN_TOP)
+    check("扫描末地址 = r6", w["last"], B.R6_BASE)
+    check("扫描轮数", w["rounds"], B.LOOP_ROUNDS)
+    check("扫描步数", w["steps"], B.LOOP_STEPS)
+    check("步数 = 轮数 × 4", w["steps"], w["rounds"] * 4)
+    check("LOOP_STEPS 常量 = 27420", B.LOOP_STEPS, 27420)
+    check("扫描跨度", w["span"], B.SCAN_TOP - B.R6_BASE)
+    w2 = B.scan_window(r13_init=8, delta=-4, r6=0x1000)
+    check("玩具窗口轮数", w2["rounds"], 2)
+    check("玩具窗口步数", w2["steps"], 8)
+    check("玩具窗口首地址", w2["first"], 0x1004)
+    check("玩具窗口末地址", w2["last"], 0x1000)
+
+    # ---- launch_map：调用者一侧的映射，不依赖 enclosing()
+    C = collections.namedtuple("C", "pc target")
+    L = collections.namedtuple("L", "pc tid")
+    ls = [L(0x200008, 4), L(0x200060, 9), L(0x300010, 17)]
+    got = B.launch_map([C(0x100, 0x200000), C(0x110, 0x200050),
+                        C(0x120, 0x400000)], ls)
+    check("launch_map 命中数", len(got), 2)
+    check("launch_map 首项任务号", got[0][3], 4)
+    check("launch_map 首项偏移", got[0][4], 8)
+    check("launch_map 次项任务号", got[1][3], 9)
+    check("launch_map 次项偏移", got[1][4], 0x10)
+    check("launch_map 窗口外不收",
+          len(B.launch_map([C(0x100, 0x200000)], ls, window=4)), 0)
+
+    # ---- wait_points：只按地址区间过滤
+    S = collections.namedtuple("S", "calls")
+    K = collections.namedtuple("K", "addr svc")
+    sw = S([K(0x12027E, -85), K(0x1202F4, -46),
+            K(0x120364, -46), K(0x1203BE, -46), K(0x130000, -46)])
+    wp = B.wait_points(sw)
+    check("wait_points 区间过滤", len(wp), 4)
+    check("wait_points 服务号序列", [x.svc for x in wp],
+          [-85, -46, -46, -46])
+    check("WAIT_PCS 常量", B.WAIT_PCS,
+          (0x12027E, 0x1202F4, 0x120364, 0x1203BE))
+
+    # ---- 硬规矩 45：不许拿 ld 读值解释 bgt 条件
+    check("设施文档写明 m4 负立即数",
+          "m4 - 16" in B.__doc__, True)
+    check("设施文档写明 bgt 条件来自 add2",
+          "bgt" in B.__doc__ and "add2" in B.__doc__, True)
+    check("设施文档写明延迟槽",
+          "延迟槽" in B.__doc__, True)
+    check("同构轮询两段", len(B.SIBLING_POLLS), 2)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -5485,6 +5579,7 @@ def main():
     test_v62()
     test_v63()
     test_v64()
+    test_v65()
     test_lists()
     test_bctrl()
     test_dual40()
