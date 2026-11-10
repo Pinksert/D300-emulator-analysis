@@ -52,6 +52,11 @@
                    call:d @rN 与 call rel12 是两套直接边，edges 0 要先问口径；
                    0x12E1EC 的调用者是任务 5 入口 0x12DFAE，收敛态卡在
                    0x12DFBA 的 wai_flg，不是没人调用）
+    frbox.wait271 第二道等待的掩码判据与四级状态机（V71，纯函数；
+                   0x74 是等待模式 + 检查掩码，不是要被置的位；
+                   通过条件是 (flgptn & 0x74) == 0x10，
+                   0x12DFD0 是 0x12DFC4 bne 的直接目标；
+                   服务号 ldi:32 #0xFFFFFF56 = -170，取低 8 位报 86 是假象）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -65,4 +70,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.70.0"
+__version__ = "0.71.0"
