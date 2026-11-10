@@ -6784,6 +6784,173 @@ def test_v74():
     check("window_same 差集 2", D.window_same({1, 2}, {2, 3}), 2)
 
 
+def test_v75():
+    print("\n[V75] L4 恒过、r10 门默认开、处理函数首次命中")
+    import frbox
+    from frbox import gate75 as G
+
+    # 版本断言必须版本无关（KI#270）
+    check("V75 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量
+    check("TASK5_FN", G.TASK5_FN, 0x12DFB2)
+    check("LOOP_HEAD", G.LOOP_HEAD, 0x12DFBA)
+    check("L4_FN", G.L4_FN, 0x12E412)
+    check("L4_RET", G.L4_RET, 0x12E48A)
+    check("L4_RET_SLOT", G.L4_RET_SLOT, 0x12E48C)
+    check("L4_BNE", G.L4_BNE, 0x12DFF6)
+    check("FIFTH_CALL", G.FIFTH_CALL, 0x12DFFE)
+    check("FIFTH_FN", G.FIFTH_FN, 0x12E674)
+    check("WAIT3_FN", G.WAIT3_FN, 0x12E326)
+    check("L3_WAIT", G.L3_WAIT, 0x12E3F6)
+    check("L3_CLEAR", G.L3_CLEAR, 0x12E34A)
+    check("BIG_PROLOGUE", G.BIG_PROLOGUE, 0x12E48E)
+    check("R10_ONE", G.R10_ONE, 0x12E69E)
+    check("R10_ZERO", G.R10_ZERO, 0x12E6BA)
+    check("R10_BEQD", G.R10_BEQD, 0x12E69C)
+    check("GATE_PC", G.GATE_PC, 0x12E6E0)
+    check("GATE_BEQ", G.GATE_BEQ, 0x12E6E2)
+    check("INDIRECT_CALL", G.INDIRECT_CALL, 0x12E6F0)
+    check("SUBMIT", G.SUBMIT, 0x12E6F8)
+    check("DESC_LOAD", G.DESC_LOAD, 0x12E6EE)
+    check("NOOP_HANDLER", G.NOOP_HANDLER, 0x12E752)
+    check("HANDLER_A", G.HANDLER_A, 0x12E806)
+    check("HANDLER_A_END", G.HANDLER_A_END, 0x12E854)
+    check("HANDLER_B", G.HANDLER_B, 0x12E856)
+    check("HANDLER_B_END", G.HANDLER_B_END, 0x12E8E0)
+    check("WAIT41_A", G.WAIT41_A, 0x12E5AA)
+    check("WAIT41_B", G.WAIT41_B, 0x12E5EA)
+    check("WAIT41_IMM_A", G.WAIT41_IMM_A, 0x12E59E)
+    check("WAIT41_IMM_B", G.WAIT41_IMM_B, 0x12E5DE)
+    check("DESC_TABLE", G.DESC_TABLE, 0x001BC020)
+    check("DESC_COUNT", G.DESC_COUNT, 70)
+    check("DESC_STRIDE", G.DESC_STRIDE, 0x10)
+    check("DESC_HANDLER_OFF", G.DESC_HANDLER_OFF, 0x0C)
+    check("DESC_PTR", G.DESC_PTR, 0x9F58D858)
+    check("DA82", G.DA82, 0x9F58DA82)
+    check("DA83", G.DA83, 0x9F58DA83)
+    check("DA84", G.DA84, 0x9F58DA84)
+    check("WORD_A", G.WORD_A, 0x9F5A0284)
+    check("WORD_B", G.WORD_B, 0x9F59EF50)
+    check("SLOTS8", G.SLOTS8, 0x9F59F7C8)
+    check("GATE_BYTE", G.GATE_BYTE, 0x9F58D08F)
+    check("N_HANDLERS", G.N_HANDLERS, 44)
+    check("空槽位 27 槽", len(G.NOOP_SLOTS), 27)
+    check("FLAG_ID", G.FLAG_ID, 3)
+    check("BIT10", G.BIT10, 0x10)
+    check("MASK74", G.MASK74, 0x74)
+    check("WANTPTN_1", G.WANTPTN_1, 9)
+    check("WAIT41", G.WAIT41, 0x41)
+    check("SET_FLG", G.SET_FLG, -48)
+    check("CLR_FLG", G.CLR_FLG, -47)
+    check("WAI_FLG", G.WAI_FLG, -46)
+    check("GET_TID", G.GET_TID, -24)
+    check("SVC_WAI_32", G.SVC_WAI_32, -170)
+    check("SVC_WAI_LOW8", G.SVC_WAI_LOW8, 86)
+    check("SUBMIT_REFS", G.SUBMIT_REFS, 312)
+    check("SUBMIT_EDGES", G.SUBMIT_EDGES, 302)
+    check("SUBMIT_REL12", G.SUBMIT_REL12, 5)
+    check("LDI32_LEN", G.LDI32_LEN, 6)
+    check("六级唤醒组", len(G.LEVEL_GROUPS), 6)
+    check("六组索引组", len(G.INDEX_GROUPS), 6)
+    check("多级唤醒三组", len(G.EXTRA_AWAKEN), 3)
+
+    # ---- 文档规矩
+    doc = G.__doc__
+    check("文档写明规矩 63", "规矩 63" in doc, True)
+    check("文档写明规矩 54", "规矩 54" in doc, True)
+    check("文档写明规矩 48", "规矩 48" in doc, True)
+    check("文档写明规矩 55", "规矩 55" in doc, True)
+    check("文档写明规矩 57", "规矩 57" in doc, True)
+    check("文档写明 L4 恒过", "恒过" in doc, True)
+    check("文档写明门默认开", "默认是开的" in doc, True)
+    check("文档写明反事实边界", "不是固件行为" in doc, True)
+    check("文档写明不能报出画面", "出画面" in doc, True)
+
+    # ---- 符号扩展与分支目标
+    check("sx8 0xFA", G.sx(0xFA, 8), -6)
+    check("sx32 0xFFFFFF56", G.sx(0xFFFFFF56, 32), -170)
+    check("rel9 目标", G.rel9_target(0x12DFD4, 5), 0x12DFE0)
+    check("rel12 目标", G.rel12_target(0x12DFFE, 0x33A), 0x12E674)
+
+    # ---- 描述符与处理函数
+    check("desc_ptr 0", G.desc_ptr(0), 0x001BC020)
+    check("desc_ptr 1", G.desc_ptr(1), 0x001BC030)
+    check("desc_ptr 5", G.desc_ptr(5), 0x001BC070)
+    check("desc_ptr 6", G.desc_ptr(6), 0x001BC080)
+    check("desc_ptr 0x45", G.desc_ptr(0x45), 0x001BC470)
+    check("handler_slot 5", G.handler_slot(5), 0x001BC07C)
+    check("handler_slot 1", G.handler_slot(1), 0x001BC03C)
+    check("in_table 0", G.in_table(0), True)
+    check("in_table 69", G.in_table(69), True)
+    check("in_table 70", G.in_table(70), False)
+    check("空槽判定 0x12E752", G.is_noop_handler(G.HANDLER_NOOP), True)
+    check("空槽判定 0x12E806", G.is_noop_handler(G.HANDLER_A), False)
+    ptrs = {0: G.HANDLER_NOOP, 1: G.HANDLER_NOOP,
+            5: G.HANDLER_A, 6: G.HANDLER_B}
+    check("index_to_handler 5", G.index_to_handler(5, ptrs), G.HANDLER_A)
+    check("index_to_handler 6", G.index_to_handler(6, ptrs), G.HANDLER_B)
+    check("index_to_handler 1 空槽", G.index_to_handler(1, ptrs),
+          G.HANDLER_NOOP)
+    check("index_to_handler 越界", G.index_to_handler(70, ptrs), None)
+
+    # ---- L4 恒过与判据（规矩 63）
+    check("L4 延迟槽返回值 1", G.l4_return_value(), 1)
+    check("L4 恒过", G.l4_always_passes(), True)
+    check("L4 恒过与比较值无关", G.l4_always_passes(0), True)
+    check("mask_check 0x10", G.mask_check(0x10), True)
+    check("mask_check 0x74", G.mask_check(0x74), False)
+    check("mask_check 0x30", G.mask_check(0x30), False)
+    check("mask_check 0x41 不成立", G.mask_check(0x41), False)
+    check("mask_check 0x41 命中 0x40", 0x41 & G.MASK74, 0x40)
+    check("r10 延迟槽默认 1", G.r10_from_delay_slot(), 1)
+    check("门 r10=1 开", G.gate_open(1), True)
+    check("门 r10=0 关", G.gate_open(0), False)
+    check("level_needed 2", G.level_needed(2), 2)
+    check("level_needed 3", G.level_needed(3), 3)
+    check("level_needed 5", G.level_needed(5), 3)
+    check("reaches_l4 有事件三级", G.reaches_l4(True, 3), True)
+    check("reaches_l4 有事件两级", G.reaches_l4(True, 2), False)
+    check("reaches_l4 无事件三级", G.reaches_l4(False, 3), False)
+    check("extra_awaken_noop 3", G.extra_awaken_noop(3), True)
+    check("extra_awaken_noop 2", G.extra_awaken_noop(2), False)
+
+    # ---- 三形态调用边（规矩 54）
+    # 构造有真实偏移关系的点集：refs 是 ldi:32 加载点，
+    # edges 是同一批调用里 +6 字节的 call:d 指令点。
+    refs = {0x120000 + i * 8 for i in range(312)}
+    edges = {p + 6 for p in sorted(refs)[:302]}
+    rel12 = {0x12E800 + i * 4 for i in range(5)}
+    rel = G.call_site_relations(refs, edges, rel12)
+    check("call_site refs", rel["refs"], 312)
+    check("call_site edges", rel["edges"], 302)
+    check("call_site rel12", rel["rel12"], 5)
+    check("call_site union", rel["union"], 307)
+    check("call_site 交集 0", rel["overlap"], 0)
+    check("call_site 不同 PC 口径", rel["different_pc_kinds"], True)
+    check("call_site 加 6 字节可对齐", rel["shift_matches"], 302)
+
+    # ---- 等形 / 归因 / 链判据 / 窗口
+    shapes = [(191520, 3, 200000), (191520, 3, 200000),
+              (191520, 0, 200000)]
+    check("equal_shape 等形", G.equal_shape(shapes)["ok"], True)
+    check("equal_shape 检出不等形",
+          G.equal_shape([(191520, 3, 200000),
+                         (191520, 3, 300000)])["ok"], False)
+    gr = {"N2": {"l4": False}, "N3": {"l4": True}, "N5": {"l4": True}}
+    check("attribution l4", G.attribution(gr, "l4"), ["N3", "N5"])
+    check("chain_verdict 只有处理函数", G.chain_verdict(True, False,
+                                                        False, False), False)
+    check("chain_verdict 全条件", G.chain_verdict(True, True,
+                                                  True, True), True)
+    check("window_same 同覆盖", G.window_same({1, 2}, {2, 1}), 0)
+    check("window_same 差集 2", G.window_same({1, 2}, {2, 3}), 2)
+    check("three_layer 需事件", G.three_layer(True, 0, True)["needs_event"],
+          True)
+    check("three_layer 已执行", G.three_layer(True, 1, True)["needs_event"],
+          False)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6859,6 +7026,7 @@ def main():
     test_v72()
     test_v73()
     test_v74()
+    test_v75()
     test_lists()
     test_bctrl()
     test_dual40()
