@@ -57,6 +57,12 @@
                    通过条件是 (flgptn & 0x74) == 0x10，
                    0x12DFD0 是 0x12DFC4 bne 的直接目标；
                    服务号 ldi:32 #0xFFFFFF56 = -170，取低 8 位报 86 是假象）
+    frbox.level72  五级链与 0x12E1EC 两条数据早退路径（V72，纯函数；
+                   0x12E1EC 返回 0 是 0x9F58DA84==0 的早退，不是空实现；
+                   DA83>=70 是描述符越界早退；正常路径把 0x9F58D858 填成
+                   0x001BC020 + idx*0x10；四级全过后 0x12DFFE 才调
+                   0x12E674（门 0x12E6E0 / 间接调用 0x12E6F0）；
+                   enclosing() 函数边界不等于真实函数边界）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -70,4 +76,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.71.0"
+__version__ = "0.72.0"
