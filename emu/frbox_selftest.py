@@ -6452,6 +6452,176 @@ def test_v72():
                           False)["closed"], True)
 
 
+def test_v73():
+    print("\n[V73] KI#282 第一条前提证伪：DA84 由固件写、DA83 由事件链驱动")
+    import frbox
+    from frbox import cursor73 as K
+
+    # 版本断言必须版本无关（KI#270）
+    check("V73 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量
+    check("TBR", K.TBR, 0x000EFC00)
+    check("VEC_CONV 收敛向量", K.VEC_CONV, 0x2B)
+    check("VEC_A", K.VEC_A, 0x20)
+    check("VEC_B", K.VEC_B, 0x1B)
+    check("ISR_A", K.ISR_A, 0x12FE54)
+    check("ISR_B", K.ISR_B, 0x12FDB4)
+    check("DISPATCH_CALL_A", K.DISPATCH_CALL_A, 0x12FE70)
+    check("DISPATCH_CALL_B", K.DISPATCH_CALL_B, 0x12FE04)
+    check("CB_TABLE_A", K.CB_TABLE_A, 0x001BC480)
+    check("CB_TABLE_B", K.CB_TABLE_B, 0x001BC490)
+    check("CB_COUNT", K.CB_COUNT, 24)
+    check("IDX_A", K.IDX_A, 0x9F58DA85)
+    check("IDX_B", K.IDX_B, 0x9F58DA86)
+    check("CB_FN", K.CB_FN, 0x12F77A)
+    check("CB_WRITE", K.CB_WRITE, 0x12F780)
+    check("CB_CLEAR", K.CB_CLEAR, 0x12F78A)
+    check("CB_SETFLG", K.CB_SETFLG, 0x12F794)
+    check("CB_RET", K.CB_RET, 0x12F796)
+    check("WAIT1_FN", K.WAIT1_FN, 0x12E0F8)
+    check("WAIT1_ENTER", K.WAIT1_ENTER, 0x12E0FC)
+    check("QUERY_FN", K.QUERY_FN, 0x12E636)
+    check("SEMPOOL", K.SEMPOOL, 0x9F58D500)
+    check("SEM_ID", K.SEM_ID, 17)
+    check("IDX_BYTE", K.IDX_BYTE, 0x9F58DA83)
+    check("VALID_BYTE", K.VALID_BYTE, 0x9F58DA84)
+    check("DESC_PTR", K.DESC_PTR, 0x9F58D858)
+    check("D87B", K.D87B, 0x9F58D87B)
+    check("DA84 写点三条", len(K.DA84_WRITERS), 3)
+    check("置位点四条", len(K.SETFLG_POINTS), 4)
+    check("反事实六组", len(K.GROUPS), 6)
+    check("SET_FLG", K.SET_FLG, -48)
+    check("CLR_FLG", K.CLR_FLG, -47)
+    check("WAI_FLG", K.WAI_FLG, -46)
+    check("WAI_SEM", K.WAI_SEM, -55)
+    check("GET_TID", K.GET_TID, -24)
+    check("FLAG_ID", K.FLAG_ID, 3)
+    check("BIT10", K.BIT10, 0x10)
+    check("WANTPTN_1", K.WANTPTN_1, 9)
+
+    # ---- 文档规矩
+    doc = K.__doc__
+    check("文档写明规矩 60", "规矩 60" in doc, True)
+    check("文档写明规矩 61", "规矩 61" in doc, True)
+    check("文档写明规矩 59", "规矩 59" in doc, True)
+    check("文档写明规矩 53", "规矩 53" in doc, True)
+    check("文档写明规矩 58 推广", "规矩 58 的推广" in doc, True)
+    check("文档写明倒序映射", "倒序" in doc, True)
+    check("文档写明反事实边界", "不是固件行为" in doc, True)
+    check("文档写明不能报出画面", "出画面" in doc, True)
+
+    # ---- 倒序向量换算（规矩 60）
+    check("sx8 0x20", K.sx(0x20, 8), 32)
+    check("sx8 0xFA", K.sx(0xFA, 8), -6)
+    check("slot_of_vec 0x20", K.slot_of_vec(0x20), 0x0EFF7C)
+    check("slot_of_vec 0x1B", K.slot_of_vec(0x1B), 0x0EFF90)
+    check("slot_of_vec 0x2B", K.slot_of_vec(0x2B), 0x0EFF50)
+    check("vec/slot 互逆 0x2B", K.vec_of_slot(K.slot_of_vec(0x2B)), 0x2B)
+    check("slot_of_vec 0xFF = TBR", K.slot_of_vec(0xFF), K.TBR)
+    check("vec_of_slot 槽 223", K.vec_of_slot(0x0EFF7C), 0x20)
+    check("vec_of_slot 槽 228", K.vec_of_slot(0x0EFF90), 0x1B)
+    check("vec_of_slot 复位槽", K.vec_of_slot(0x0EFFFC), 0x00)
+    check("vec/slot 互逆 0x20", K.vec_of_slot(K.slot_of_vec(0x20)), 0x20)
+    check("vec/slot 互逆 0x1B", K.vec_of_slot(K.slot_of_vec(0x1B)), 0x1B)
+    check("vec_of_slot 未对齐", K.vec_of_slot(K.TBR + 1), None)
+    check("vec_of_slot 越界", K.vec_of_slot(K.TBR + 0x400), None)
+    check("正序槽号 223 不是 vec 223", K.vec_of_slot(K.TBR + 223 * 4), 32)
+
+    # ---- 回调表索引
+    check("cb_entry A idx5", K.cb_entry_addr(K.CB_TABLE_A, 5), 0x1BC494)
+    check("cb_entry A idx0", K.cb_entry_addr(K.CB_TABLE_A, 0), 0x1BC480)
+    check("cb_entry B idx1", K.cb_entry_addr(K.CB_TABLE_B, 1), 0x1BC494)
+    check("cb_index A 0x1BC494", K.cb_index_of(0x1BC494, K.CB_TABLE_A), 5)
+    check("cb_index B 0x1BC494", K.cb_index_of(0x1BC494, K.CB_TABLE_B), 1)
+    check("cb_index 越界", K.cb_index_of(0x1BC470, K.CB_TABLE_A), None)
+    check("cb_index 未对齐", K.cb_index_of(0x1BC482, K.CB_TABLE_A), None)
+
+    # ---- DA84 写入源分类（规矩 61）
+    kinds = K.da84_writers_kinds()
+    check("DA84 常量 0 写点 1 条", kinds["const0"], 1)
+    check("DA84 返回值写点 2 条", kinds["query_ret"], 2)
+    check("收敛态固件写过 DA84 判据", K.da84_is_firmware_written({0x12E140}), True)
+    check("收敛态未写 DA84 判据", K.da84_is_firmware_written({0x12E274}), False)
+    check("延迟槽写点 2 条",
+          sum(1 for _p, _k, s in K.DA84_WRITERS if s), 2)
+
+    # ---- 规矩 59 函数边界
+    rets = [0x12F776, 0x12F778, 0x12F796, 0x12F950 - 2,
+            0x12F966, 0x12FB20, 0x12FDB2]
+    check("real_bounds 回调体",
+          K.real_bounds(0x12F794, rets, 0x12F540)[0], 0x12F77A)
+    check("real_bounds 回调体 hi",
+          K.real_bounds(0x12F794, rets, 0x12F540)[1], 0x12F796)
+    check("enclosing 归属不一致",
+          K.enclosing_mismatch(0x12F780, K.SETFLG_ENCLOSING,
+                               rets, 0x12F540), True)
+    check("enclosing 归属一致时",
+          K.enclosing_mismatch(0x12F780, 0x12F77A, rets, 0x12F540), False)
+    check("四个置位点真实起点各不同",
+          len({p[1] for p in K.SETFLG_POINTS}), 4)
+    check("四个置位点 enclosing 全同",
+          K.SETFLG_ENCLOSING, 0x12F540)
+    check("DA83 写点与置位点1 同函数",
+          K.SETFLG_POINTS[0][1], K.CB_FN)
+
+    # ---- 三层判据 / 等形 / 归因
+    tl = K.three_layer(True, 0, True)
+    check("three_layer 存在性", tl["exists"], True)
+    check("three_layer 零执行", tl["executed"], 0)
+    check("three_layer 需事件", tl["needs_event"], True)
+    check("three_layer 已执行不需事件",
+          K.three_layer(True, 3, True)["needs_event"], False)
+    check("three_layer 没代码不需事件",
+          K.three_layer(False, 0, True)["needs_event"], False)
+    shapes = [(191520, 0, 200000), (191520, 1, 200000),
+              (191520, 1, 200000), (191520, 0, 200000)]
+    es = K.equal_shape(shapes)
+    check("equal_shape 等形", es["ok"], True)
+    check("equal_shape boot 单值", len(es["keys"]["boot"]), 1)
+    check("equal_shape post 单值", len(es["keys"]["post"]), 1)
+    check("equal_shape 检出不等形",
+          K.equal_shape([(191520, 0, 200000),
+                         (191520, 0, 300000)])["ok"], False)
+    gr = {"J0": {"cb": False, "new": 0},
+          "J3": {"cb": True, "new": 31},
+          "J5": {"cb": False, "new": 0}}
+    check("attribution 命中组", K.attribution(gr, "cb"), ["J3"])
+    check("attribution 空命中", K.attribution(gr, "missing"), [])
+
+    # ---- 事件链
+    ev = K.event_chain(K.VEC_A, 5, None, K.CB_FN)
+    check("event_chain A 有效", ev["valid"], True)
+    check("event_chain A ISR", ev["isr"], K.ISR_A)
+    check("event_chain A 表", ev["table"], K.CB_TABLE_A)
+    check("event_chain A 表项", ev["entry"], 0x1BC494)
+    check("event_chain A 目标", ev["target"], K.CB_FN)
+    evb = K.event_chain(K.VEC_B, 1, None, K.CB_FN)
+    check("event_chain B ISR", evb["isr"], K.ISR_B)
+    check("event_chain B 表项", evb["entry"], 0x1BC494)
+    check("event_chain 错配向量",
+          K.event_chain(K.VEC_CONV, 5, None, K.CB_FN)["valid"], False)
+    check("event_chain 错配原因",
+          K.event_chain(0x2B, 5, None, K.CB_FN)["reason"],
+          "vector_mismatch")
+    check("wants_after_event 推进到 0x74", K.wants_after_event(9, True), 0x74)
+    check("wants_after_event 无事件不变", K.wants_after_event(9, False), 9)
+    check("wants_after_event 非第一道不变",
+          K.wants_after_event(0x74, True), 0x74)
+
+    # ---- 链判据 / 窗口
+    check("chain_verdict 回调未命中不闭合",
+          K.chain_verdict(False, False, False, 0), False)
+    check("chain_verdict 回调命中但 L2 未跨不闭合",
+          K.chain_verdict(True, False, False, 0), False)
+    check("chain_verdict 跨 L2 但无处理函数不闭合",
+          K.chain_verdict(True, True, False, 0x001BC030), False)
+    check("chain_verdict 全条件闭合",
+          K.chain_verdict(True, True, True, 0x001BC030), True)
+    check("window_same 同覆盖", K.window_same({1, 2}, {2, 1}), 0)
+    check("window_same 差集 2", K.window_same({1, 2}, {2, 3}), 2)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6525,6 +6695,7 @@ def main():
     test_v70()
     test_v71()
     test_v72()
+    test_v73()
     test_lists()
     test_bctrl()
     test_dual40()
