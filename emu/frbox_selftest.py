@@ -6019,6 +6019,156 @@ def test_v69():
     check("dispatch_verdict 全零组", dv3["nonzero_groups"], [])
 
 
+def test_v70():
+    """V70：四形态调用边口径 / r10 局部标志 / 执行前沿（纯函数）。
+
+    与 V62–V69 同款：不 boot、不扫真固件，用玩具数据验证纯函数；
+    全 ROM 数字（5 个 blindspot PC / 12 条 call / 262 条指令 /
+    执行前沿 0x12DFBA / 反事实 54 个新 PC / 1M 步对称差集 0）由
+    `probe/exp_caller_v70.py` 与 `results/frbox/caller70.txt` 覆盖。
+    """
+    import collections
+    import frbox
+    from frbox import caller70 as C
+
+    # ---- 常量与文档
+    check("V70 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("任务 5 入口函数", C.DISPATCH_FN, 0x12DFB2)
+    check("任务 5 入口序言起点", C.TASK5_ENTRY, 0x12DFAE)
+    check("任务表字段", C.TASK5_FIELD, 0x54C80)
+    check("派发函数", C.CURSOR_FN, 0x12E1EC)
+    check("大函数入口 / 序言", (C.BIG_FN, C.BIG_PRE),
+          (0x12E490, 0x12E48E))
+    check("调派发函数的唯一 rel12 点", C.CALL_CURSOR, 0x12DFD0)
+    check("前置门 / r10 两条置位源",
+          (C.GATE_PC, C.R10_ONE, C.R10_ZERO),
+          (0x12E6E0, 0x12E69E, 0x12E6BA))
+    check("基线与唤醒后的执行前沿",
+          (C.FRONTIER_BASE, C.FRONTIER_WAKE),
+          (0x12DFBA, 0x12DFC0))
+    check("wai_flg 服务号", C.WAIT_SVC, -46)
+    check("等待位 9 / flag 3", (C.FLAG_ID, C.WANT_BASE), (3, 9))
+    check("任务 5 TCB 与队列",
+          (C.TCB_TASK5, C.QUEUE_TASK5), (0x680001EC, 0x680008D8))
+    check("KEY_PCS 含 20 个关键 PC", len(C.KEY_PCS), 20)
+    check("文档写明硬规矩 54", "54" in C.__doc__, True)
+    check("文档写明硬规矩 55", "55" in C.__doc__, True)
+    check("文档写明 call rel12 盲区", "call rel12" in C.__doc__, True)
+    check("文档写明反事实不是固件行为", "不是固件行为" in C.__doc__, True)
+
+    # ---- 分支目标必须回查执行实现（硬规矩 44 / V64）
+    check("rel12_target 正偏移 0x12DFD0",
+          C.rel12_target(0x12DFD0, 269), 0x12E1EC)
+    check("rel12_target 正偏移 0x12DFB8",
+          C.rel12_target(0x12DFB8, 38), 0x12E006)
+    check("rel12_target 序言起点 0x12E48E",
+          C.rel12_target(0x12DFCA, 609), 0x12E48E)
+    check("rel12_target 符号位 bit10 为 1",
+          C.rel12_target(0x1000, 0x7FF), 0x1000)
+    check("rel9_target 是 8 位有符号（V64 0xFA）",
+          C.rel9_target(0x12E624, 0xFA), 0x12E61A)
+    check("rel9_target 正偏移", C.rel9_target(0x12E6B2, 3), 0x12E6BA)
+    check("rel9_target 高位为 1 不能按 9 位读",
+          C.rel9_target(0x12E6B8, 0xF0), 0x12E69A)
+
+    # ---- 四形态口径
+    Ref = collections.namedtuple("Ref", "pc kind imm next_mnem")
+    refs = [Ref(1, "rel12", 0, "call"), Ref(2, "rel12", 0, "call"),
+            Ref(3, "ldi32", 0, "call:d"), Ref(4, "data32", 0, "data")]
+    check("kind_counts 分类", C.kind_counts(refs),
+          {"data32": 1, "ldi32": 1, "rel12": 2})
+    check("kind_counts 空表", C.kind_counts([]), {})
+    check("direct_edges 合并两种直接边", C.direct_edges(5, 302), 307)
+    check("missing_edge_verdict 口径盲区",
+          C.missing_edge_verdict(0, 1, 1)["verdict"], "blindspot")
+    check("missing_edge_verdict 真阴性",
+          C.missing_edge_verdict(0, 0, 0)["verdict"], "true_negative")
+    check("missing_edge_verdict 一致",
+          C.missing_edge_verdict(302, 307, 5)["verdict"], "consistent")
+    check("missing_edge_verdict 保留三口径",
+          C.missing_edge_verdict(0, 5, 5),
+          {"old": 0, "all": 5, "rel12": 5, "verdict": "blindspot"})
+
+    # ---- r10 数据流：草稿 A 的 repr 子串假阳性不能被复现
+    check("is_write_ri ldi:8", C.is_write_ri("ldi:8"), True)
+    check("is_write_ri mov", C.is_write_ri("mov"), True)
+    check("is_write_ri cmp 只读", C.is_write_ri("cmp"), False)
+    check("is_write_ri stb 只读", C.is_write_ri("stb"), False)
+    check("is_write_ri btsth 只读", C.is_write_ri("btsth"), False)
+    rows = [
+        (0x10, "ldi:8", {"ri": 10, "i8": 1}),
+        (0x12, "cmp", {"ri": 10, "u4": 0}),
+        (0x14, "stb", {"ri": 0, "rj": 8, "op1": 10}),
+        (0x16, "nop", {"op1": 9, "op4": 0}),
+        (0x18, "ldi:8", {"ri": 10, "i8": 0}),
+    ]
+    sp = C.split_reg_writes(rows, reg=10)
+    check("split_reg_writes 写 2 条", sp["n_writes"], 2)
+    check("split_reg_writes 读 1 条", sp["n_reads"], 1)
+    check("split_reg_writes 不把 op1:10 当寄存器",
+          [p for p, _m, _v in sp["writes"]], [0x10, 0x18])
+    check("sources_before 取最近两条",
+          [p for p, _m, _v in C.sources_before(sp["writes"], 0x20, 2)],
+          [0x10, 0x18])
+    check("sources_before 不含门之后写点",
+          [p for p, _m, _v in C.sources_before(sp["writes"], 0x14, 2)],
+          [0x10])
+
+    # ---- 执行前沿 / 唤醒 / 反事实差分
+    cov = {0x12DFAE, 0x12DFB0, 0x12DFB2, 0x12DFB4, 0x12DFB8, 0x12DFBA}
+    # 入口段真实指令 PC（有 6 字节 ldi:32，不是每 2 字节一条）
+    seg = [0x12DFAE, 0x12DFB0, 0x12DFB2, 0x12DFB4, 0x12DFB8,
+           0x12DFBA, 0x12DFBC, 0x12DFBE, 0x12DFC0, 0x12DFC2,
+           0x12DFC4, 0x12DFC6]
+    fr = C.frontier(cov, seg)
+    check("frontier 收敛基线", fr["frontier"], 0x12DFBA)
+    check("frontier 第一条未命中", fr["first_miss"], 0x12DFBC)
+    check("frontier 命中 6/12", (fr["n_hit"], fr["n_total"]), (6, 12))
+    check("frontier 全不命中", C.frontier(set(), seg)["frontier"], None)
+    check("wait_reason 0xFFD2 = -46", C.wait_reason(0xFFD2), -46)
+    check("wait_reason 0xFF56 = -170", C.wait_reason(0xFF56), -170)
+    check("wait_reason 正数不动", C.wait_reason(0x002A), 42)
+    check("flag_ready pat=9 want=9", C.flag_ready(9, 9), True)
+    check("flag_ready want=0 不唤醒", C.flag_ready(9, 0), False)
+    check("flag_ready 位不相交不唤醒", C.flag_ready(0x10, 9), False)
+
+    # advance 的跨区域语义：不能用全局地址最大的命中当「前沿」
+    base = {0x12E006, 0x12DFBA}
+    end = set(base) | {0x12DFBC, 0x12DFBE, 0x12DFC0}
+    pcs = (0x12DFAE, 0x12DFBA, 0x12DFBC, 0x12DFBE,
+           0x12DFC0, 0x12E006, 0x12E1EC)
+    adv = C.advance(base, end, pcs)
+    check("advance 新增 3 条", adv["n_new"], 3)
+    check("advance 新增命中", adv["new"],
+          [0x12DFBC, 0x12DFBE, 0x12DFC0])
+    check("advance 前沿是新增的最后一条而非 0x12E006",
+          adv["frontier"], 0x12DFC0)
+    check("advance 无新增", C.advance(base, base, pcs)["n_new"], 0)
+
+    # ---- 等形 / 窗口 / 综合判据
+    shape = {"G0": dict(boot=191520, post=200000, svc=1, irqs=1),
+             "G3": dict(boot=191520, post=200000, svc=1, irqs=1)}
+    check("equal_shape 四组同尺通过", C.equal_shape(shape)["ok"], True)
+    shape["G3"]["post"] = 1
+    check("equal_shape 检出不等形", C.equal_shape(shape)["bad"], ["post"])
+    w = C.window_same({"pc": 0x0407DC, "cov": [1, 2], "key": {1: True}},
+                      {"pc": 0x0407DC, "cov": [2, 1], "key": {1: True}})
+    check("window_same 逐项相同", w["same"], True)
+    check("window_same 对称差集 0", w["symdiff_cov"], 0)
+    check("window_same 检出末 PC 不同",
+          C.window_same({"pc": 1, "cov": [], "key": {}},
+                        {"pc": 2, "cov": [], "key": {}})["diff"], ["pc"])
+    v = C.chain_verdict(True, 0x12DFBA, 0x12DFC0, False)
+    check("chain_verdict 调用者存在", v["caller"], True)
+    check("chain_verdict 唤醒推进", v["wake_advanced"], True)
+    check("chain_verdict 链未闭合", v["closed"], False)
+    check("chain_verdict 空槽位命中不算闭合",
+          C.chain_verdict(True, 0x12DFBA, 0x12DFC0, True,
+                          noop_hit=True)["closed"], False)
+    check("chain_verdict 门命中且不靠空槽位才闭合",
+          C.chain_verdict(True, 0x12DFBA, 0x12DFC0, True)["closed"], True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6089,6 +6239,7 @@ def main():
     test_v67()
     test_v68()
     test_v69()
+    test_v70()
     test_lists()
     test_bctrl()
     test_dual40()
