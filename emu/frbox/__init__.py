@@ -71,6 +71,12 @@
                    -> 读 DA85 查 0x1BC480 回调表 -> call @r0；
                    向量表是倒序映射 vector(n)=TBR+(255-n)*4（规矩 60）；
                    报「某字节等真机填」前先扫固件写点（规矩 61））
+    frbox.cursor74 KI#286 第一条结案与 24 项回调表语义（V74，纯函数；
+                   回调 0x12F77A 写 DA83 用的是中断现场 r4，派发器 A 不赋值；
+                   全 ROM flag3 无 0x74 置位源，判据 (pat&0x74)==0x10 下
+                   0x20/0x40 是干扰位；D858 算式的 idx 实际来自 DA82 中转
+                   0x12E242 stb -> 0x12E268 ldub -> lsl #4（规矩 62）；
+                   L4 首次不靠外部写字节由固件自身事件链算出 D858=0x001BC070）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -84,4 +90,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.73.0"
+__version__ = "0.74.0"
