@@ -37,9 +37,9 @@ B7 决定值的查询函数 0x12E636：wai_sem(17) / 读对象池 0x9F58D500，�
 C. 静态：真机事件链定位（向量表倒序 / 规矩 60）
 ==============================================================================
 C1 向量表倒序映射 vector(n) = TBR + (255-n)*4；TBR=0x000EFC00
-     vec 0x20 -> 槽 223 @0x0EFF7C -> ISR 0x12FE54
-     vec 0x1B -> 槽 228 @0x0EFF90 -> ISR 0x12FDB4
-     vec 0x2B -> 槽 212 @0x0EFF50 -> ISR 0x12FDB4
+     vec 0x20 -> 槽 223 @0x0EFF7C -> ISR 0x0012FE54（向量表实测）
+     vec 0x1B -> 槽 228 @0x0EFF90 -> ISR 0x0012FDB4（向量表实测）
+     vec 0x2B -> 槽 212 @0x0EFF50 -> ISR 0x00042E1C（向量表实测）
 C2 槽 223 实测字 = 0x0012FE54 / 槽 228 实测字 = 0x0012FDB4
 C3 派发器 A 0x12FE54：0x12FE5E ldi:32 #0x9F58DA85,r12 / 0x12FE64 ldub @r12,r0 / 0x12FE66 lsl r0,#2 / 0x12FE68 ldi:32 #0x001BC480,r13 / 0x12FE6E ld @(r0,r13),r0 / 0x12FE70 call @r0 / 0x12FE82 reti
 C4 派发器 B 0x12FDB4：0x12FDF2 ldi:32 #0x9F58DA86,r12 / 0x12FDF8 ldub @r12,r0 / 0x12FDFA lsl r0,#2 / 0x12FDFC ldi:32 #0x001BC490,r13 / 0x12FE02 ld @(r0,r13),r0 / 0x12FE04 call @r0 / 0x12FE10 reti
