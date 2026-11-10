@@ -6622,6 +6622,168 @@ def test_v73():
     check("window_same 差集 2", K.window_same({1, 2}, {2, 3}), 2)
 
 
+def test_v74():
+    print("\n[V74] KI#286 第一条结案、24 项回调表语义与 D858 的 DA82 中转")
+    import frbox
+    from frbox import cursor74 as D
+
+    # 版本断言必须版本无关（KI#270）
+    check("V74 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量
+    check("TBR", D.TBR, 0x000EFC00)
+    check("VEC_A", D.VEC_A, 0x20)
+    check("VEC_B", D.VEC_B, 0x1B)
+    check("VEC_CONV", D.VEC_CONV, 0x2B)
+    check("ISR_A", D.ISR_A, 0x12FE54)
+    check("ISR_B", D.ISR_B, 0x12FDB4)
+    check("CB_TABLE_A", D.CB_TABLE_A, 0x001BC480)
+    check("CB_TABLE_B", D.CB_TABLE_B, 0x001BC490)
+    check("CB_COUNT", D.CB_COUNT, 24)
+    check("CB_FN", D.CB_FN, 0x12F77A)
+    check("CB_WRITE", D.CB_WRITE, 0x12F780)
+    check("CB_SETFLG", D.CB_SETFLG, 0x12F794)
+    check("IDX_A", D.IDX_A, 0x9F58DA85)
+    check("IDX_B", D.IDX_B, 0x9F58DA86)
+    check("DA82", D.DA82, 0x9F58DA82)
+    check("DA83", D.DA83, 0x9F58DA83)
+    check("DA84", D.DA84, 0x9F58DA84)
+    check("DESC_PTR", D.DESC_PTR, 0x9F58D858)
+    check("DESC_TABLE", D.DESC_TABLE, 0x001BC020)
+    check("DESC_STRIDE", D.DESC_STRIDE, 0x10)
+    check("DESC_COUNT", D.DESC_COUNT, 70)
+    check("LOAD_DA82", D.LOAD_DA82, 0x12E242)
+    check("READ_DA82", D.READ_DA82, 0x12E268)
+    check("SHIFT_DA82", D.SHIFT_DA82, 0x12E270)
+    check("WRITE_D858", D.WRITE_D858, 0x12E274)
+    check("QUERY_FN", D.QUERY_FN, 0x12E636)
+    check("SEM_POOL", D.SEM_POOL, 0x9F58D500)
+    check("MASK", D.MASK, 0x74)
+    check("EXPECT", D.EXPECT, 0x10)
+    check("BIT10", D.BIT10, 0x10)
+    check("BIT20", D.BIT20, 0x20)
+    check("BIT40", D.BIT40, 0x40)
+    check("SET_FLG", D.SET_FLG, -48)
+    check("CLR_FLG", D.CLR_FLG, -47)
+    check("WAI_FLG", D.WAI_FLG, -46)
+    check("GET_TID", D.GET_TID, -24)
+    check("FLAG_ID", D.FLAG_ID, 3)
+    check("WANTPTN_1", D.WANTPTN_1, 9)
+    check("DA84 写点三条", len(D.DA84_WRITERS), 3)
+    check("置0x10 四点", len(D.SETTERS_10), 4)
+    check("置0x20 七点", len(D.SETTERS_20), 7)
+    check("置0x40 一点", len(D.SETTERS_40), 1)
+    check("清0x76 两点", len(D.CLR_76), 2)
+    check("24 项回调表", len(D.CALLBACKS), 24)
+    check("位域反事实六组", len(D.BIT_GROUPS), 6)
+    check("r4 反事实四组", len(D.R4_GROUPS), 4)
+    check("组合反事实五组", len(D.COMBO_GROUPS), 5)
+
+    # ---- 文档规矩
+    doc = D.__doc__
+    check("文档写明规矩 62", "规矩 62" in doc, True)
+    check("文档写明规矩 56", "规矩 56" in doc, True)
+    check("文档写明规矩 60", "规矩 60" in doc, True)
+    check("文档写明 DA82 中转", "DA82 中转" in doc, True)
+    check("文档写明反事实边界", "不是固件行为" in doc, True)
+    check("文档写明不能报出画面", "出画面" in doc, True)
+    check("文档写明已交付口径更正", "已交付口径更正" in doc, True)
+
+    # ---- 倒序向量（规矩 60）
+    check("sx8 0xFA", D.sx(0xFA, 8), -6)
+    check("slot_of_vec 0x20", D.slot_of_vec(0x20), 0x0EFF7C)
+    check("slot_of_vec 0x1B", D.slot_of_vec(0x1B), 0x0EFF90)
+    check("slot_of_vec 0x2B", D.slot_of_vec(0x2B), 0x0EFF50)
+    check("vec_of_slot 槽223", D.vec_of_slot(0x0EFF7C), 0x20)
+    check("vec_of_slot 槽228", D.vec_of_slot(0x0EFF90), 0x1B)
+    check("vec/slot 互逆", D.vec_of_slot(D.slot_of_vec(0x20)), 0x20)
+    check("vec_of_slot 未对齐", D.vec_of_slot(D.TBR + 1), None)
+
+    # ---- 判据位域（规矩 56）
+    check("mask_verdict 0x10", D.mask_verdict(0x10), True)
+    check("mask_verdict 0x00", D.mask_verdict(0x00), False)
+    check("mask_verdict 0x20", D.mask_verdict(0x20), False)
+    check("mask_verdict 0x40", D.mask_verdict(0x40), False)
+    check("mask_verdict 0x30", D.mask_verdict(0x30), False)
+    check("mask_verdict 0x74", D.mask_verdict(0x74), False)
+    check("mask_verdict 0x11", D.mask_verdict(0x11), True)
+    check("mask_verdict 0x90", D.mask_verdict(0x90), True)
+    check("interfering_bits 0x30", D.interfering_bits(0x30), 0x20)
+    check("interfering_bits 0x50", D.interfering_bits(0x50), 0x40)
+    check("interfering_bits 0x10", D.interfering_bits(0x10), 0)
+    check("bit_group 0x10", D.bit_group(0x10), '0x10')
+    check("bit_group 0x20", D.bit_group(0x20), '0x20')
+    check("bit_group 0x40", D.bit_group(0x40), '0x40')
+    check("bit_group 0x200", D.bit_group(0x200), 'other')
+    sc = D.setter_count()
+    check("置位源计数 0x10", sc['0x10'], 4)
+    check("置位源计数 0x20", sc['0x20'], 7)
+    check("置位源计数 0x40", sc['0x40'], 1)
+    check("无 0x74 置位源", D.has_074_setter(), False)
+    check("自定义值含 0x74 能检出",
+          D.has_074_setter((0x10, 0x74)), True)
+
+    # ---- 24 项回调表
+    check("cb_entry_addr 0", D.cb_entry_addr(0), 0x1BC480)
+    check("cb_entry_addr 5", D.cb_entry_addr(5), 0x1BC494)
+    check("cb_entry_addr 23", D.cb_entry_addr(23), 0x1BC4DC)
+    check("cb_table_target A5", D.cb_table_target(5), 0x12F77A)
+    check("cb_table_target A0", D.cb_table_target(0), 0x12FE12)
+    check("cb_table_target B1", D.cb_table_target(1, D.CB_TABLE_B), 0x12F77A)
+    check("cb_table_target 越界", D.cb_table_target(24), None)
+    check("cb_bits A5", D.cb_bits(5), (0x10,))
+    check("cb_bits A17", D.cb_bits(17), (0x10, 0x20))
+    check("cb_bits A6 空", D.cb_bits(6), ())
+    check("cb_groupkey 空", D.cb_groupkey(()), 'none')
+    check("cb_groupkey 双位", D.cb_groupkey((0x10, 0x20)), '0x10,0x20')
+    sem = D.cb_semantics()
+    check("cb_semantics 组数", len(sem), 9)
+    check("cb_semantics 0x10 组", sem['0x10'], [4, 5, 11])
+    check("cb_semantics none 组数", len(sem['none']), 11)
+    check("只写游标回调数", D.cb_write_only_count(), 11)
+
+    # ---- D858 的 DA82 中转（规矩 62）
+    check("desc_ptr 0", D.desc_ptr(0), 0x001BC020)
+    check("desc_ptr 1", D.desc_ptr(1), 0x001BC030)
+    check("desc_ptr 5", D.desc_ptr(5), 0x001BC070)
+    check("desc_ptr 0x46", D.desc_ptr(0x46), 0x001BC480)
+    check("da82_middle 5", D.da82_middle(5), 5)
+    check("da82_middle 截 8 位", D.da82_middle(0x105), 5)
+    check("desc_ptr_chain 1", D.desc_ptr_chain(1), 0x001BC030)
+    check("desc_ptr_chain 5", D.desc_ptr_chain(5), 0x001BC070)
+    check("in_table 0", D.in_table(0), True)
+    check("in_table 69", D.in_table(69), True)
+    check("in_table 70", D.in_table(70), False)
+
+    # ---- r4 来源
+    check("r4_source A 透传", D.r4_source(D.VEC_A), 'passthrough')
+    check("r4_source B 显式", D.r4_source(D.VEC_B), 'mov_r13_r4')
+    check("r4_source 未知", D.r4_source(0x2B), None)
+    check("r4_to_da83 5", D.r4_to_da83(5), 5)
+    check("r4_to_da83 截 8 位", D.r4_to_da83(0x146), 0x46)
+
+    # ---- 等形 / 归因 / 链判据 / 窗口
+    shapes = [(191520, 1, 200000), (191520, 1, 200000),
+              (191520, 0, 200000)]
+    es = D.equal_shape(shapes)
+    check("equal_shape 等形", es["ok"], True)
+    check("equal_shape 检出不等形",
+          D.equal_shape([(191520, 1, 200000),
+                         (191520, 1, 300000)])["ok"], False)
+    gr = {"K0": {"da83": 0, "new": 31}, "K1": {"da83": 5, "new": 31},
+          "K2": {"da83": 0x46, "new": 31}}
+    check("attribution da83", D.attribution(gr, "da83"), ["K1", "K2"])
+    check("attribution 空", D.attribution(gr, "missing"), [])
+    check("chain_verdict 缺处理函数",
+          D.chain_verdict(True, True, False), False)
+    check("chain_verdict 全条件",
+          D.chain_verdict(True, True, True), True)
+    check("chain_verdict L2 未跨",
+          D.chain_verdict(False, True, True), False)
+    check("window_same 同覆盖", D.window_same({1, 2}, {2, 1}), 0)
+    check("window_same 差集 2", D.window_same({1, 2}, {2, 3}), 2)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6696,6 +6858,7 @@ def main():
     test_v71()
     test_v72()
     test_v73()
+    test_v74()
     test_lists()
     test_bctrl()
     test_dual40()
