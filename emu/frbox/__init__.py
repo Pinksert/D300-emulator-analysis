@@ -48,6 +48,10 @@
     frbox.descgate69 描述符派发链的门判据（V69，纯函数；0x12E752 是
                    27 个槽位指向的裸 ret 空实现、不是第二道门；
                    收敛态写数据门无效，与 V25 的主循环存活机不可混比）
+    frbox.caller70 四形态调用边 / r10 局部标志 / 执行前沿（V70，纯函数；
+                   call:d @rN 与 call rel12 是两套直接边，edges 0 要先问口径；
+                   0x12E1EC 的调用者是任务 5 入口 0x12DFAE，收敛态卡在
+                   0x12DFBA 的 wai_flg，不是没人调用）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -61,4 +65,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.69.0"
+__version__ = "0.70.0"
