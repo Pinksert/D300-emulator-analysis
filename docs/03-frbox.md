@@ -8028,3 +8028,94 @@ G0 与 G1 覆盖对称差 0 个：门字节末尾仍 0x01、bit6 仍 1，但没�
 cd emu && python probe/exp_desc_v69.py > ../results/frbox/desc69.txt
 cd emu && python frbox_selftest.py
 ```
+
+
+## V70：调用者一直在，是任务 5 在两道 wai_flg 上挂住了（0.70.0）
+
+### 1 抓手与设备策略
+
+承接 `KI#269` 第一条。设备策略与 V65–V69 收敛组逐字相同：
+`blive.boot(0)` → `step(191520)` → 单次 `raise_irq(0x2B)` →
+`run(500000)`；七台独立机器（基线一台、G0–G3 四台、决定性反事实一台、
+1000000 步自证一台）。静态段只读 ROM，反事实段全部标注。
+
+### 2 口径证伪（硬规矩 54）
+
+`bstatic.Sweep.edges` 只收 `call:d @rN` 一种，`call rel12` 不在图里
+（KI#175 / 规矩 32，V54 栽过、V58 补过、V69 又踩）。V58 的
+`svcgraph.ImmIndex` 已补齐 `ldi20` / `ldi32` / `rel12` / `data32`，
+`missing_edge_verdict()` 把三档分开：`blindspot`（旧 0 新有）、
+`true_negative`（两套都 0）、`consistent`（旧就有）。10 个关键 PC 里
+5 个是 `blindspot`：派发函数 `0x12E1EC` ← `0x12DFD0`；大函数
+`0x12E490` ← 5 条指向序言 `0x12E48E`；显示初始化 `0x12E006`、
+清空队列 `0x12E602` 各 1 条；取首 `0x12E63A` 2 条。
+**44 个处理函数 0/44 与 `0x12E752` 空槽位结论不受影响**
+——被证伪的只是「派发/初始化/清空/取首也只能间接到达」。
+
+### 3 调用者 = 任务 5 主体
+
+`0x12DFB2` 函数 43 条指令、12 条 call、8 个目标；其中 5 条
+`call:d → 0x12E48E`（含 `0x12E6F0` 的大函数序言），1 条
+`0x12DFD0 call rel12 → 0x12E1EC`。任务表 `0x54C00` 记录 0 = 任务 1，
+字段 `0x054C80` = `0x0012DFAE` ⇒ **任务 5 入口就是 `0x12DFAE`**。
+落显示区的 14 个任务号 `[2,3,4,5,6,9,10,11,12,13,14,15,17,26]`
+与 V64 一致。`0x12E006` 无 `enter`，`enclosing()` 归到 `0x12DFB2`
+（规矩 43）。
+
+### 4 r10 不是参数（硬规矩 55）
+
+V69 把 `0x12E6D0..0x12E6F6` 当独立小函数；实际它只是 `0x12E490`
+这个 **262 条指令**函数的尾部 19 条。函数内 `ri==10` 写 5 条、读 2 条；
+门 `0x12E6E0` 之前最近的两条写是 `0x12E69E ldi:8 #1`（`0x12E69C
+beq:d` 的延迟槽，无条件执行）与 `0x12E6BA ldi:8 #0`（由
+`0x12E6B2 bne` 跳入，`0x12E6B8 bra` 跳过）。草稿 A 曾用
+`repr(v)` 子串匹配把 `op1: 10` 当寄存器，正式设施
+`split_reg_writes()` 精确读 `v['ri']`。
+
+### 5 执行前沿与两道等待
+
+500000 步：末 PC `0x0407DC`、覆盖 5439、等待 17 / 休眠 11 / 就绪 1、
+门字节 0、描述符指针 0。任务 5 入口段命中到 `0x12DFBA`，
+`0x12DFBC` 起全未命中 ⇒ 执行前沿 = `0x12DFBA`。
+`0x12DFBA call → 0x12E0F8`，该函数有 `0x12E122` / `0x12E150`
+两个 `wai_flg(−46)` 与 `0x12E134 clr_flg(−47)`。任务 5 TCB
+`0x680001EC`、状态 `0x04`、`TCB+0x20` 高半 `0xFFD2` 按 16 位补码
+= −46、等待位 9，挂在 `0x680008D8` 队列（同队列任务 2 / 5 / 26）。
+`0x12DFC2` 及之后 12 条 call 全没跑。
+
+### 6 四组等形反事实与决定性实验
+
+四台独立机器（各 1 次 `get_tid` 预热 steps 68 / 1 次中断 / 200000 步）：
+G0 不补 0、G1 只开门 0、G2 门+bit6 0、G3 再加 12 轮模型化 tick 955；
+`equal_shape()` 通过，G0 与 G1 覆盖对称差 0 个（规矩 53）。
+G3 的 955 个新 PC 里有任务 5 分支 3 条
+`0x12DFBC / 0x12DFBE / 0x12DFC0`，但 `0x12DFC2` / `0x12DFD0` /
+`0x12E1EC` / `0x12E48E` 四组全未命中，处理函数恒 0/44。
+
+决定性反事实 `set_flg(3,9)`（真内核服务注入）：任务 5 瞬时
+`0x04→0x00`，等待任务数 17→16；后续 200000 步覆盖 5439→5493、
+新增 54 个 PC，关键 PC 只新增那 3 条；末尾又挂回 `0x04`、
+等待位 9→`0x74` —— 在 `0x12E162` 的第二道等待重新挂起。
+**G3 与 `set_flg` 殊途同归**，两条反事实不独立，不能算两次推进。
+
+### 7 窗口自证与边界
+
+1000000 步机器与 500000 步逐项相同、差异字段 `[]`、PC 覆盖对称差集
+0 个、关键 PC 命中差异 `[]`。两个状态字 `0x9F5A0284` /
+`0x9F59EF50` 仍 0、8 槽 `0x9F59F7C8` 全 0；`0x12E6F0` 与
+`0x12E752` 全场景未命中。不能报显示链通了 / 出画面 / 真机如此 /
+「补一次 set_flg 就等于唤醒成功」。
+
+### 8 设施与复现
+
+`frbox/caller70.py`：15 个纯函数（`rel12_target` / `rel9_target` /
+`kind_counts` / `direct_edges` / `missing_edge_verdict` / `is_write_ri` /
+`split_reg_writes` / `sources_before` / `frontier` / `wait_reason` /
+`flag_ready` / `advance` / `equal_shape` / `window_same` /
+`chain_verdict` 等）。`frbox_selftest.py` 加 `test_v70()` 65 条，
+全量自检 **2231/2231 通过**；报告 82 / probe 116 / `caller70.txt` 148 行。
+
+```
+cd emu && python probe/exp_caller_v70.py > ../results/frbox/caller70.txt
+cd emu && python frbox_selftest.py
+```
