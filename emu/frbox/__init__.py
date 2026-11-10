@@ -63,6 +63,14 @@
                    0x001BC020 + idx*0x10；四级全过后 0x12DFFE 才调
                    0x12E674（门 0x12E6E0 / 间接调用 0x12E6F0）；
                    enclosing() 函数边界不等于真实函数边界）
+    frbox.cursor73 KI#282 第一条前提证伪与真机事件链定位（V73，纯函数；
+                   DA84 不是等真机填，固件自己在 0x12E0F8 写三个点，
+                   收敛态 0x12E140 已命中并写查询函数 0x12E636 的返回值 0；
+                   DA83 由回调 0x12F77A 写，该函数同时清 DA86 并
+                   set_flg(3,0x10)；事件链 = vec 0x20 -> ISR 0x12FE54
+                   -> 读 DA85 查 0x1BC480 回调表 -> call @r0；
+                   向量表是倒序映射 vector(n)=TBR+(255-n)*4（规矩 60）；
+                   报「某字节等真机填」前先扫固件写点（规矩 61））
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -76,4 +84,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.72.0"
+__version__ = "0.73.0"
