@@ -77,6 +77,14 @@
                    0x20/0x40 是干扰位；D858 算式的 idx 实际来自 DA82 中转
                    0x12E242 stb -> 0x12E268 ldub -> lsl #4（规矩 62）；
                    L4 首次不靠外部写字节由固件自身事件链算出 D858=0x001BC070）
+    frbox.gate75   L4 恒过、r10 门默认开与处理函数首次命中（V75，纯函数；
+                   0x12E48A ret:d 延迟槽 0x12E48C ldi:8 #1,r4 ⇒ 第四级
+                   无条件通过；跨 L3 才需第三级补 0x10；0x12E69E 在
+                   beq:d 延迟槽给 r10=1 ⇒ 0x12E6E0 门默认开；
+                   描述符 +0x0C 决定处理函数，Q2 首次命中 0x12E806
+                   （1/44），Q1/Q5 命中裸 ret 空槽；规矩 63 要求报
+                   「某级是条件」前先查延迟槽；规矩 54 分清 312 加载点
+                   与 302 调用点两种 PC 口径）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -90,4 +98,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.74.0"
+__version__ = "0.75.0"
