@@ -6302,6 +6302,156 @@ def test_v71():
                           False)["closed"], True)
 
 
+def test_v72():
+    print("\n[V72] 五级链、0x12E1EC 两条数据早退与描述符指针填充")
+    import frbox
+    from frbox import level72 as C
+
+    # 版本断言必须版本无关（KI#270）
+    check("V72 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量与文档规矩
+    check("DISPATCH_FN", C.DISPATCH_FN, 0x12E1EC)
+    check("WAIT3_FN", C.WAIT3_FN, 0x12E326)
+    check("L4_FN", C.L4_FN, 0x12E412)
+    check("FIFTH_FN", C.FIFTH_FN, 0x12E674)
+    check("FIFTH_CALL", C.FIFTH_CALL, 0x12DFFE)
+    check("BIG_PROLOGUE", C.BIG_PROLOGUE, 0x12E48E)
+    check("DESC_TABLE", C.DESC_TABLE, 0x001BC020)
+    check("DESC_COUNT", C.DESC_COUNT, 70)
+    check("DESC_STRIDE", C.DESC_STRIDE, 0x10)
+    check("IDX_BYTE", C.IDX_BYTE, 0x9F58DA83)
+    check("VALID_BYTE", C.VALID_BYTE, 0x9F58DA84)
+    check("CLEAR_BYTE", C.CLEAR_BYTE, 0x9F58DA82)
+    check("DESC_PTR", C.DESC_PTR, 0x9F58D858)
+    check("LEVELS 四级", len(C.LEVELS), 4)
+    check("LEVEL_TARGETS 五级前的四级", len(C.LEVEL_TARGETS), 4)
+    check("FAILURE_CALLS 四条", len(C.FAILURE_CALLS), 4)
+    doc = C.__doc__
+    check("文档写明规矩 58", "规矩 58" in doc, True)
+    check("文档写明规矩 59", "规矩 59" in doc, True)
+    check("文档写明规矩 48", "规矩 48" in doc, True)
+    check("文档写明反事实边界", "不是固件行为" in doc, True)
+
+    # ---- 符号扩展与分支目标
+    check("sx8 0xFA", C.sx(0xFA, 8), -6)
+    check("sx16 0xFF56", C.sx(0xFF56, 16), -170)
+    check("sx32 0xFFFFFF56", C.sx(0xFFFFFF56, 32), -170)
+    check("rel9 L2 bne", C.rel9_target(0x12DFD4, 5), 0x12DFE0)
+    check("rel9 L4 bne", C.rel9_target(0x12DFF6, 3), 0x12DFFE)
+    check("rel12 L2 派发", C.rel12_target(0x12DFD0, 269), 0x12E1EC)
+    check("rel12 L3 等待", C.rel12_target(0x12DFE0, 418), 0x12E326)
+    check("rel12 L4", C.rel12_target(0x12DFF0, 528), 0x12E412)
+    check("rel12 第五个 call", C.rel12_target(0x12DFFE, 826), 0x12E674)
+    check("rel12 L1 第二道等待", C.rel12_target(0x12DFBE, 209), 0x12E162)
+
+    # ---- 两条数据早退路径与返回 r4
+    check("early_path 基线 = early_B", C.early_path(0x00, 0x00), "early_B")
+    check("early_path 有效=1 = normal", C.early_path(0x00, 0x01), "normal")
+    check("early_path 有效=0x46 = normal", C.early_path(0x00, 0x46), "normal")
+    check("early_path 索引越界 = early_A", C.early_path(0x46, 0x01), "early_A")
+    check("early_path 越界优先于有效", C.early_path(0xFF, 0x00), "early_A")
+    check("early_path 索引 69 仍在表内", C.early_path(0x45, 0x00), "early_B")
+    check("return4 normal", C.return4("normal"), 1)
+    check("return4 early_A", C.return4("early_A"), 0)
+    check("return4 early_B", C.return4("early_B"), 0)
+    check("level_advanced r4=1", C.level_advanced(1), True)
+    check("level_advanced r4=0", C.level_advanced(0), False)
+
+    # ---- 路径命中判定（规矩 58）
+    covB = set(C.EARLY_B) | {0x12E322}
+    covA = set(C.EARLY_A) | {0x12E322}
+    covN = set(C.NORMAL)
+    check("path_hits 早退 B", C.path_hits(covB)["verdict"], "early_B")
+    check("path_hits 早退 B 计数", C.path_hits(covB)["early_B"], 4)
+    check("path_hits 早退 A", C.path_hits(covA)["verdict"], "early_A")
+    check("path_hits 正常路径", C.path_hits(covN)["verdict"], "normal")
+    check("path_hits 正常计数", C.path_hits(covN)["normal"], 7)
+    check("path_hits 空覆盖", C.path_hits(set())["verdict"], "other")
+    check("path_hits 部分命中不误判",
+          C.path_hits(set(C.EARLY_B[:3]))["verdict"], "other")
+
+    # ---- 描述符表地址算式
+    check("desc_ptr idx=1", C.desc_ptr(1), 0x001BC030)
+    check("desc_ptr idx=0x46", C.desc_ptr(0x46), 0x001BC480)
+    check("desc_ptr idx=0", C.desc_ptr(0), 0x001BC020)
+    check("desc_ptr idx=69", C.desc_ptr(69), 0x001BC470)
+    check("in_table 69", C.in_table(69), True)
+    check("in_table 70", C.in_table(70), False)
+    check("in_table 0x46", C.in_table(0x46), False)
+    check("in_table 0xFF", C.in_table(0xFF), False)
+
+    # ---- 五级链与失败路径
+    check("chain_targets 五级", C.chain_targets(),
+          [0x12E162, 0x12E1EC, 0x12E326, 0x12E412, 0x12E674])
+    check("failure_targets 全指序言", C.failure_targets(), [0x12E48E] * 4)
+    check("FAILURE_CALLS L1", C.FAILURE_CALLS[0], 0x12DFCA)
+    check("FAILURE_CALLS L2", C.FAILURE_CALLS[1], 0x12DFDA)
+    check("FAILURE_CALLS L4", C.FAILURE_CALLS[3], 0x12DFF8)
+    check("WAIT_PCS 六点", len(C.WAIT_PCS), 6)
+    check("WAIT_PCS 第二道等待", C.WAIT_PCS[0x12E1D2], 0x74)
+    check("WAIT_PCS 第三道等待", C.WAIT_PCS[0x12E3F6], 0x74)
+    check("WAIT_PCS 失败路径等待", C.WAIT_PCS[0x12E56A], 0x10)
+
+    # ---- 服务号宽度（规矩 48）
+    check("svc_width 32 位 = -170", C.svc_width(C.SVC32_RAW, 32), -170)
+    check("svc_width 低 8 位 = 86", C.svc_width(C.SVC32_RAW, 8), 86)
+    check("is_low8_artifact 32 位", C.is_low8_artifact(C.SVC32_RAW), True)
+    check("is_low8_artifact 8 位不误报",
+          C.is_low8_artifact(0x56, 8), False)
+    check("SVC8_FALSE 常量", C.SVC8_FALSE, 86)
+
+    # ---- 函数边界（规矩 59）
+    rows = [(0x12E490, "stm1"), (0x12E600, "ret"),
+            (0x12E674, "stm1"), (0x12E6F6, "ret"),
+            (0x12E6FC, "enter"), (0x12E74E, "ret")]
+    bs = C.function_bounds(rows)
+    check("function_bounds 起点数", len(bs), 3)
+    check("function_bounds 起点列表", [s for s, _e in bs],
+          [0x12E490, 0x12E674, 0x12E6FC])
+    check("function_bounds 0x12E674 独立",
+          dict(bs)[0x12E674], 0x12E6F6)
+    emap = {0x12E490: 0x12E490, 0x12E674: 0x12E490,
+            0x12E6FC: 0x12E6FC}
+    mis = C.enclosing_mismatch(bs, emap)
+    check("enclosing_mismatch 命中 1 处", len(mis), 1)
+    check("enclosing_mismatch 指向 0x12E674", mis[0][0], 0x12E674)
+    check("enclosing_mismatch 记录错归属", mis[0][2], 0x12E490)
+    check("enclosing_mismatch 无错时为空",
+          C.enclosing_mismatch(bs, {s: s for s, _e in bs}), [])
+
+    # ---- 等形 / 窗口 / 综合判据
+    sh = {"boot": [191520], "svc": [3], "irqs": [2],
+          "post": [200000, 200000]}
+    check("equal_shape 四组同尺",
+          C.equal_shape([dict(sh) for _ in range(4)])["ok"], True)
+    bad = [dict(sh) for _ in range(4)]
+    bad[2] = dict(bad[2], post=[200000, 1])
+    check("equal_shape 检出不等形", C.equal_shape(bad)["ok"], False)
+    a = {"pc": 0x0407DC, "cov": {1, 2}, "key": [1], "waiting": 17}
+    b = {"pc": 0x0407DC, "cov": {2, 1}, "key": [1], "waiting": 17}
+    w = C.window_same(a, b)
+    check("window_same 逐项相同", w["same"], True)
+    check("window_same 覆盖对称差 0", w["cov_diff"], 0)
+    check("window_same 检出覆盖不同",
+          C.window_same(dict(a, cov={1, 3}), b)["same"], False)
+    tl = C.three_layer([0x12F794, 0x12F964], set(),
+                       isr_range=(0x12F540, 0x12FECC))
+    check("three_layer 存在性 2 点", tl["points"], 2)
+    check("three_layer 零命中标记", tl["unique_zero_hit"], True)
+    check("three_layer ISR 全覆盖", tl["in_isr_all"], True)
+    v = C.chain_verdict("normal", True, 0x001BC030, False, False, False)
+    check("chain_verdict 记录路径", v["path"], "normal")
+    check("chain_verdict 跨过 L2", v["l2_crossed"], True)
+    check("chain_verdict 描述符指针已填", v["desc_ptr_filled"], True)
+    check("chain_verdict 跨 L2 不算闭合", v["closed"], False)
+    v2 = C.chain_verdict("early_B", False, 0, False, False, False)
+    check("chain_verdict 早退 B 指针未填", v2["desc_ptr_filled"], False)
+    check("chain_verdict 全条件才闭合",
+          C.chain_verdict("normal", True, 0x001BC030, True, True, True,
+                          False)["closed"], True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6374,6 +6524,7 @@ def main():
     test_v69()
     test_v70()
     test_v71()
+    test_v72()
     test_lists()
     test_bctrl()
     test_dual40()
