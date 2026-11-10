@@ -110,10 +110,10 @@ print("B7 决定值的查询函数 0x12E636：wai_sem(17) / 读对象池 0x9F58D
 # ===================================================================== C
 hr("C. 静态：真机事件链定位（向量表倒序 / 规矩 60）")
 print("C1 向量表倒序映射 vector(n) = TBR + (255-n)*4；TBR=0x000EFC00")
-for vec, isr, slot in ((K.VEC_A, K.ISR_A, 223), (K.VEC_B, K.ISR_B, 228),
-                       (VEC, 0x12FDB4, 212)):
-    print("     vec 0x%02X -> 槽 %3d @0x%06X -> ISR 0x%06X"
-          % (vec, slot, K.slot_of_vec(vec), isr))
+for vec in (K.VEC_A, K.VEC_B, VEC):
+    slot_addr = K.slot_of_vec(vec)
+    print("     vec 0x%02X -> 槽 %3d @0x%06X -> ISR 0x%08X（向量表实测）"
+          % (vec, (slot_addr - K.TBR) // 4, slot_addr, u32(slot_addr)))
 print("C2 槽 223 实测字 = 0x%08X / 槽 228 实测字 = 0x%08X"
       % (u32(K.slot_of_vec(K.VEC_A)), u32(K.slot_of_vec(K.VEC_B))))
 print("C3 派发器 A 0x12FE54：0x12FE5E ldi:32 #0x9F58DA85,r12 / "
