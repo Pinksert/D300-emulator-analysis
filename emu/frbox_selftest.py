@@ -6169,6 +6169,139 @@ def test_v70():
           C.chain_verdict(True, 0x12DFBA, 0x12DFC0, True)["closed"], True)
 
 
+def test_v71():
+    print("\n[V71] 第二道等待掩码判据与四级状态机")
+    import frbox
+    from frbox import wait271 as C
+
+    # 版本断言必须版本无关（KI#270）
+    check("V71 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量与文档规矩
+    check("MASK 0x74", C.MASK, 0x74)
+    check("EXPECT 0x10", C.EXPECT, 0x10)
+    check("FLAG_ID", C.FLAG_ID, 3)
+    check("WANTPTN_1", C.WANTPTN_1, 0x09)
+    check("WAIT2_FN", C.WAIT2_FN, 0x12E162)
+    check("WAIT2_SVC_PC", C.WAIT2_SVC_PC, 0x12E1D2)
+    check("DISPATCH_FN", C.DISPATCH_FN, 0x12E1EC)
+    check("CLR_BITS", C.CLR_BITS, 0x89)
+    check("LEVELS 四级", len(C.LEVELS), 4)
+    check("LEVELS 首级 bne 目标 = 0x12DFD0", C.LEVELS[0][3], 0x12DFD0)
+    check("LEVELS 回环 PC", C.LEVELS[0][4], 0x12DFCE)
+    check("KEY_PCS 含间接调用点", C.INDIRECT_CALL in C.KEY_PCS, True)
+    doc = C.__doc__
+    check("文档写明 0x74 是掩码不是位", "不是需要被置的某个位" in doc, True)
+    check("文档写明服务号宽度", "规矩 48" in doc, True)
+    check("文档写明分支目标", "规矩 57" in doc, True)
+
+    # ---- 符号扩展与分支目标（与 fr_emu.py 逐字一致）
+    check("sx8 0xFA", C.sx(0xFA, 8), -6)
+    check("sx8 0xF5", C.sx(0xF5, 8), -11)
+    check("sx16 0xFF56", C.sx(0xFF56, 16), -170)
+    check("sx32 0xFFFFFF56", C.sx(0xFFFFFF56, 32), -170)
+    check("rel9 V70 基准 0x12E624", C.rel9_target(0x12E624, 0xFA),
+          0x12E61A)
+    check("rel9 L1 bne", C.rel9_target(0x12DFC4, 5), 0x12DFD0)
+    check("rel9 L4 bne", C.rel9_target(0x12DFF6, 3), 0x12DFFE)
+    check("rel9 回环 bra", C.rel9_target(0x12DFCE, 245), 0x12DFBA)
+    check("rel12 派发函数", C.rel12_target(0x12DFD0, 269), 0x12E1EC)
+
+    # ---- 位域判据与返回 r4
+    check("mask_check 期望位", C.mask_check(0x10), True)
+    check("mask_check 期望位带无关高位", C.mask_check(0xF10), True)
+    check("mask_check 模式内非期望位", C.mask_check(0x20), False)
+    check("mask_check 全模式位", C.mask_check(0x74), False)
+    check("mask_check 无位", C.mask_check(0x00), False)
+    check("mask_check 自定义掩码", C.mask_check(0x03, 0x03, 0x03), True)
+    check("return_value 期望位给 1", C.return_value(0x10), 1)
+    check("return_value 非期望位给 0", C.return_value(0x20), 0)
+    check("return_value 全模式位给 0", C.return_value(0x74), 0)
+    check("branch_taken r4=1", C.branch_taken(1), True)
+    check("branch_taken r4=0", C.branch_taken(0), False)
+    check("branch_taken r4 负数", C.branch_taken(-1), True)
+
+    # ---- clr_flg 清位范围与 32 位服务号
+    check("cleared_bits 0x89", C.cleared_bits(0x89), 0x76)
+    check("mask_covered 0x89 覆盖 0x74",
+          C.mask_covered(0x89, 0x74), True)
+    check("mask_covered 0xFF 不覆盖", C.mask_covered(0xFF, 0x74), False)
+    check("mask_covered 0x8F 不覆盖", C.mask_covered(0x8F, 0x74), False)
+    check("svc_width 32 位 = -170", C.svc_width(C.SVC32_RAW, 32), -170)
+    check("svc_width 低 8 位假象 = 86", C.svc_width(C.SVC32_RAW, 8), 86)
+    check("svc_width TCB 16 位 = -170", C.svc_width(0xFF56, 16), -170)
+    check("SVC32 常量", C.SVC32, -170)
+    check("SVC8_FALSE 常量", C.SVC8_FALSE, 86)
+
+    # ---- 四级状态机
+    check("level_targets 四级", C.level_targets(),
+          [0x12DFD0, 0x12DFE0, 0x12DFF0, 0x12DFFE])
+    check("level_of cmp L1", C.level_of(0x12DFC2), 1)
+    check("level_of bne L2", C.level_of(0x12DFD4), 2)
+    check("level_of cmp L4", C.level_of(0x12DFF4), 4)
+    check("level_of 循环头不属于任何级", C.level_of(0x12DFBA), 0)
+    cov0 = {0x12DFBA}
+    cov1 = cov0 | {0x12DFC2, 0x12DFC4, 0x12DFD0,
+                   0x12DFD2, 0x12DFD4}
+    check("reached_level 基线 0", C.reached_level(cov0), 0)
+    check("reached_level G1 = 2", C.reached_level(cov1), 2)
+    check("advanced 基线空", C.advanced(cov0), [])
+    check("advanced G1 只跨 L1", C.advanced(cov1), [1])
+    check("advanced 跨两级", C.advanced(cov1 | {0x12DFE0}), [1, 2])
+
+    # ---- 静态置位源与三层判据
+    class CS(object):
+        def __init__(self, addr, svc, r4, r5):
+            self.addr, self.svc, self.r4, self.r5 = addr, svc, r4, r5
+
+    calls = [CS(0x12F794, -48, 3, 0x10),
+             CS(0x12F964, -48, 3, 0x30),
+             CS(0x12FB10, -48, 3, 0x20),
+             CS(0x12FDB0, -48, 5, 0x10),
+             CS(0x1A4C3E, -48, 3, None),
+             CS(0x12E196, -47, 3, 0x89)]
+    ss = C.static_setters(calls)
+    check("static_setters 只留 flag3 且含 0x10", ss,
+          [0x12F794, 0x12F964])
+    check("static_setters 换 flag 为空",
+          C.static_setters(calls, flgid=17), [])
+    tl = C.three_layer(ss, set(), enclosing=lambda p: 0x12F540,
+                       isr_range=(0x12F540, 0x12FECC))
+    check("three_layer 存在性 2 点", tl["points"], 2)
+    check("three_layer 执行性 0 命中", tl["hit"], 0)
+    check("three_layer 零命中标记", tl["unique_zero_hit"], True)
+    check("three_layer ISR 全覆盖", tl["in_isr_all"], True)
+    check("three_layer 归属函数去重", tl["enclosing"], [0x12F540])
+    check("three_layer 命中后零命中标记关闭",
+          C.three_layer(ss, set(ss))["unique_zero_hit"], False)
+
+    # ---- 等形 / 窗口 / 综合判据
+    sh = {"boot": [191520], "svc": [3], "irqs": [2],
+          "post": [200000, 200000]}
+    check("equal_shape 四组同尺", C.equal_shape([dict(sh) for _ in range(4)])["ok"], True)
+    bad = [dict(sh) for _ in range(4)]
+    bad[2] = dict(bad[2], post=[200000, 1])
+    check("equal_shape 检出不等形", C.equal_shape(bad)["ok"], False)
+    a = {"pc": 0x0407DC, "cov": {1, 2}, "key": [1], "waiting": 17}
+    b = {"pc": 0x0407DC, "cov": {2, 1}, "key": [1], "waiting": 17}
+    w = C.window_same(a, b)
+    check("window_same 逐项相同", w["same"], True)
+    check("window_same 覆盖对称差 0", w["cov_diff"], 0)
+    check("window_same 检出末 PC 不同",
+          C.window_same(dict(a, pc=1), b)["same"], False)
+    check("window_same 检出覆盖不同",
+          C.window_same(dict(a, cov={1, 3}), b)["same"], False)
+    v = C.chain_verdict(2, [1], False, False, False, False, True)
+    check("chain_verdict 到达派发函数", v["reached_dispatch"], True)
+    check("chain_verdict 记录跨过的级", v["advanced"], [1])
+    check("chain_verdict 链未闭合", v["closed"], False)
+    check("chain_verdict 仅到派发不算闭合",
+          C.chain_verdict(2, [1], True, True, True, True, True)["closed"], False)
+    check("chain_verdict 全条件才闭合",
+          C.chain_verdict(4, [1, 2, 3, 4], True, True, True, True,
+                          False)["closed"], True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -6240,6 +6373,7 @@ def main():
     test_v68()
     test_v69()
     test_v70()
+    test_v71()
     test_lists()
     test_bctrl()
     test_dual40()
