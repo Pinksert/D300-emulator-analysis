@@ -96,6 +96,13 @@
                    8 槽静态可定址写点 0，但有 224489 条不可定址 store，
                    只能报「无精确写点」不能报「固件没写」；8 槽全 0
                    由 0x1758EC 的 24 轮开机清零循环解释）
+    frbox.reduce77 不可定址 store 形态分类 / 结构体字段写归约 /
+                   vec 0x2D ISR 设备面（V77，纯函数；224489 条 unknown
+                   里 188255 条是栈帧写，与全局状态字无关；按 ret 拆边界
+                   做局部寄存器传播，把 0x9F5A0284 / 0x9F59EF50 /
+                   0x9F59F7C8 的字段写归约成 base+off；规矩 65 分清
+                   基址写 / 字段写 / 栈写，规矩 66 认清 borh 的 u4 是
+                   高半字节掩码不是位号；8 槽另有 0x175958 写回槽 0）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -109,4 +116,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.76.0"
+__version__ = "0.77.0"
