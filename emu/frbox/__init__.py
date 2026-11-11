@@ -103,6 +103,12 @@
                    0x9F59F7C8 的字段写归约成 base+off；规矩 65 分清
                    基址写 / 字段写 / 栈写，规矩 66 认清 borh 的 u4 是
                    高半字节掩码不是位号；8 槽另有 0x175958 写回槽 0）
+    frbox.owner78  函数边界口径 / 静态直接调用边四形态 / 字段写与
+                   提交调用点的任务归属（V78，纯函数；enter 序言起点与
+                   ret 多出口要分开，Sweep.edges 只收 call:d、漏掉
+                   8593 个只被 call rel12 调到的入口；等待 0x175876 /
+                   清零循环 0x1758EC / 写回 0x175908 是三个相邻函数，
+                   -37=tslp_tsk，规矩 67 / 68 / 69）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -116,4 +122,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.77.0"
+__version__ = "0.78.0"
