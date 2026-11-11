@@ -109,6 +109,11 @@
                    8593 个只被 call rel12 调到的入口；等待 0x175876 /
                    清零循环 0x1758EC / 写回 0x175908 是三个相邻函数，
                    -37=tslp_tsk，规矩 67 / 68 / 69）
+    frbox.tick79   真时基 tick 链 / 调用形态七分法（V79，纯函数；
+                   vec 0x18 ISR 0x04046E → 0x040482 → 0x040A44；
+                   call:d rel12 是第五形态，只被它解出的入口 7616 个，
+                   0x1758EC 有 5 条入边；规矩 70 七套口径 /
+                   规矩 71 8 槽全 0 不能证明清零循环没跑）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -122,4 +127,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.78.0"
+__version__ = "0.79.0"
