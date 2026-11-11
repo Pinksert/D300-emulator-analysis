@@ -82,7 +82,10 @@ SLOT_CLEAR_REL12 = 800
 SLOT_LOOP_FN = 0x001758EC     # 真正的 24 轮清零循环 + set_flg(12,1)，到 0x175906 ret
 SLOT_LOOP_PC = 0x001758FA     # 24 轮清零的 st（V77 归约点）
 SLOT_LOOP_END = 0x00175906
-SLOT_LOOP_IN_EDGES = 0        # call:d / ldi:32 严格 / call rel12 / jmp rel12 全 0
+SLOT_LOOP_IN_EDGES = 0        # V78 四套口径全 0；V79 证伪：漏扫 call:d rel12
+# V79 更正：0x1758EC 有 5 条 call:d rel12 入边
+#   (0x1752E4 / 0x175386 / 0x1753C4 / 0x1754A8 / 0x1754D6)；
+#   本常量保留为「V78 旧口径下的计数」，不是绝对入边数。
 SLOT_CLEAR_PC = SLOT_LOOP_PC  # 清零 st 属于 SLOT_LOOP_FN，不属于 SLOT_CLEAR_FN
 SLOT_WB_FN = 0x00175908       # 写回函数序言（call rel12 目标）
 SLOT_WB_ENTER = 0x0017590C
