@@ -7468,7 +7468,7 @@ def test_v78():
     check("V78 清零循环函数", O.SLOT_LOOP_FN, 0x001758EC)
     check("V78 清零 st", O.SLOT_LOOP_PC, 0x001758FA)
     check("V78 清零 st 旧名兼容", O.SLOT_CLEAR_PC, O.SLOT_LOOP_PC)
-    check("V78 清零循环入边", O.SLOT_LOOP_IN_EDGES, 0)
+    check("V78 旧四套口径清零循环入边(V79证伪)", O.SLOT_LOOP_IN_EDGES, 0)
     check("V78 清零循环终点", O.SLOT_LOOP_END, 0x00175906)
     check("V78 写回函数", O.SLOT_WB_FN, 0x00175908)
     check("V78 写回 enter", O.SLOT_WB_ENTER, 0x0017590C)
@@ -7584,6 +7584,197 @@ def test_v78():
 
 
 
+def test_v79():
+    """V79：真时基 tick 链、call:d rel12 第五形态、清零循环入边、规矩 70/71。"""
+    from frbox import tick79 as C
+
+    # ---- 常量
+    check("V79 TBR", C.TBR, 0x000EFC00)
+    check("V79 真时基向量", C.VEC_TIMER, 0x18)
+    check("V79 收敛用向量", C.VEC_BOOT, 0x2B)
+    check("V79 tick ISR", C.TICK_ISR, 0x0004046E)
+    check("V79 tick 调用点", C.TICK_CALL, 0x00040482)
+    check("V79 tick 函数", C.TICK_FN, 0x00040A44)
+    check("V79 系统时钟", C.CLOCK, 0x68000110)
+    check("V79 延时队列哨兵", C.SENTINEL, 0x68000118)
+    check("V79 TCB tick 偏移", C.TCB_TICKS, 0x14)
+    check("V79 端口", C.PORT, 0x50000000)
+    check("V79 8 槽基址", C.SLOT8, 0x9F59F7C8)
+    check("V79 等待函数", C.WAIT_FN, 0x00175876)
+    check("V79 清零循环", C.CLEAR_FN, 0x001758EC)
+    check("V79 清零 st", C.CLEAR_ST, 0x001758FA)
+    check("V79 写回函数", C.WB_FN, 0x00175908)
+    check("V79 提交函数", C.SUBMIT_FN, 0x0012E6F8)
+    check("V79 稳定次数", C.STABLE_LIMIT, 10)
+    check("V79 boot 步数", C.BOOT_STEPS, 191520)
+    check("V79 run 步数", C.RUN_STEPS, 500000)
+    check("V79 post 步数", C.POST_STEPS, 200000)
+    check("V79 窗口步数", C.WINDOW_STEPS, 1000000)
+
+    # ---- 七形态普查常量（V79 实测）
+    check("V79 ldi:32 数", C.FORM_CENSUS["ldi:32"], 48611)
+    check("V79 call:d @r 数", C.FORM_CENSUS["call:d @r"], 16027)
+    check("V79 call:d rel12 数", C.FORM_CENSUS["call:d rel12"], 9642)
+    check("V79 call rel12 数", C.FORM_CENSUS["call rel12"], 9160)
+    check("V79 call @r 数", C.FORM_CENSUS["call @r"], 4823)
+    check("V79 jmp @r 数", C.FORM_CENSUS["jmp @r"], 3559)
+    check("V79 jmp:d @r 数", C.FORM_CENSUS["jmp:d @r"], 3266)
+    check("V79 形态总数", len(C.FORM_CENSUS), 7)
+    check("V79 call:d 两种形态合计",
+          C.FORM_CENSUS["call:d @r"] + C.FORM_CENSUS["call:d rel12"], 25669)
+    check("V79 只被 call:d rel12 解出", C.ONLY_CALLD_REL12, 7616)
+    check("V79 call:d rel12 目标数", C.FORM_TARGETS["call:d rel12"], 8205)
+    check("V79 call rel12 目标数", C.FORM_TARGETS["call rel12"], 8672)
+    check("V79 ldi:32 目标数", C.FORM_TARGETS["ldi:32"], 9863)
+    check("V79 归约 call:d @r", C.RESOLVED["call:d @r归约"], 15425)
+    check("V79 归约 call @r", C.RESOLVED["call @r归约"], 4642)
+    check("V79 归约 jmp @r", C.RESOLVED["jmp @r归约"], 2975)
+    check("V79 归约 jmp:d @r", C.RESOLVED["jmp:d @r归约"], 1970)
+    check("V79 归约合计", sum(C.RESOLVED.values()), 25012)
+    check("V79 清零循环入边数", len(C.CLEAR_IN_EDGES), 5)
+    check("V79 清零循环入边", C.CLEAR_IN_EDGES,
+          (0x1752E4, 0x175386, 0x1753C4, 0x1754A8, 0x1754D6))
+    check("V79 tick 入边 ldi:32", C.TICK_IN_EDGES["ldi:32"], (0x04047C,))
+    check("V79 tick 入边 call @r", C.TICK_IN_EDGES["call @r归约"], (0x040482,))
+    check("V79 提交调用边 call:d", C.SUBMIT_EDGES["call:d @r归约"], 302)
+    check("V79 提交调用边 call@r", C.SUBMIT_EDGES["call @r归约"], 10)
+    check("V79 提交调用边 rel12", C.SUBMIT_EDGES["call:d rel12"], 5)
+    check("V79 提交调用边合计", sum(C.SUBMIT_EDGES.values()), 317)
+
+    # ---- 位运算 / 分支目标 / 向量倒序
+    check("V79 sx 正数", C.sx(3, 8), 3)
+    check("V79 sx8 负数", C.sx8(254), -2)
+    check("V79 sx8 正数", C.sx8(3), 3)
+    check("V79 sx11 正数", C.sx11(522), 522)
+    check("V79 sx11 负号位", C.sx11(0x400), -1024)
+    check("V79 sx11 边界", C.sx11(0x3FF), 1023)
+    check("V79 rel12 目标", C.rel12_target(0x1754D6, 522), 0x1758EC)
+    check("V79 rel12 回跳", C.rel12_target(0x1000, 0x7FF), 0x1000 + 2 - 2)
+    check("V79 rel9 目标 beq", C.rel9_target(0x17589E, 3), 0x1758A6)
+    check("V79 rel9 回边 bra:d", C.rel9_target(0x1758A2, 242), 0x175888)
+    check("V79 rel9 回边 blt", C.rel9_target(0x1758AA, 238), 0x175888)
+    check("V79 vec 0x18 槽", C.vec_slot(0x18), 0x000EFF9C)
+    check("V79 vec 0x2B 槽", C.vec_slot(0x2B), 0x000EFF50)
+    check("V79 vec 0x2D 槽", C.vec_slot(0x2D), 0x000EFF48)
+    check("V79 vec 255 槽", C.vec_slot(255), C.TBR)
+    check("V79 vec 0 槽", C.vec_slot(0), C.TBR + 255 * 4)
+
+    # ---- 形态分类
+    check("V79 call:d @r 形态", C.call_form("call:d", {"ri": 12}), "call:d @r")
+    check("V79 call:d rel12 形态",
+          C.call_form("call:d", {"rel12": 522}), "call:d rel12")
+    check("V79 call rel12 形态",
+          C.call_form("call", {"rel12": 800}), "call rel12")
+    check("V79 call @r 形态", C.call_form("call", {"ri": 3}), "call @r")
+    check("V79 jmp:d @r 形态", C.call_form("jmp:d", {"ri": 3}), "jmp:d @r")
+    check("V79 非调用", C.call_form("ldi:32", {"i32": 1}), None)
+    check("V79 相对形态 True", C.is_relative_form("call:d rel12"), True)
+    check("V79 相对形态 False", C.is_relative_form("call:d @r"), False)
+    check("V79 相对形态 None", C.is_relative_form(None), False)
+    fc = C.form_census(C.FORM_CENSUS)
+    check("V79 调用点合计", fc["total"], 46477)
+    check("V79 PC 相对调用点", fc["relative"], 18802)
+    check("V79 only_by 基本",
+          C.only_by("a", {"a": [1, 2, 3], "b": [3, 4]}), [1, 2])
+    check("V79 only_by 带 known",
+          C.only_by("a", {"a": [1, 2], "b": []}, known=[2]), [1])
+    check("V79 only_by 空", C.only_by("a", {}), [])
+
+    # ---- 间接归约（小指令表）
+    ins = [
+        (0x100, "ldi:32", {"i32": 0x1758EC, "ri": 12}, 6),
+        (0x106, "call", {"ri": 12}, 2),
+        (0x108, "ldi:8", {"i8": 1, "ri": 4}, 2),
+        (0x10A, "ld", {"ri": 13}, 2),
+        (0x10C, "call:d", {"ri": 13}, 2),
+        (0x10E, "ret", {}, 2),
+        (0x110, "ldi:32", {"i32": 0x40000, "ri": 5}, 6),
+        (0x116, "jmp", {"ri": 5}, 2),
+    ]
+    res, why = C.resolve_indirect(ins)
+    check("V79 归约条数", len(res), 2)
+    check("V79 归约目标1", res[0x106][1], 0x1758EC)
+    check("V79 归约来源1", res[0x106][2], 0x100)
+    check("V79 归约目标2", res[0x116][1], 0x40000)
+    check("V79 被 ld 改写记不可定", 0x10C not in res, True)
+    check("V79 不可定有原因", why["overwritten_ld"], 1)
+    check("V79 窗口 0 无可定", len(C.resolve_indirect(ins, window=0)[0]), 0)
+    check("V79 merge_targets",
+          C.merge_targets({1: [10]}, {1: [20], 2: [30]})[1], [10, 20])
+
+    # ---- 链判据
+    sl = C.stable_loop_verdict(0x17589E, 3, 0x1758A6, 10,
+                               0x1758AA, 238, 0x175888)
+    check("V79 稳定循环 beq 跳过", sl["beq_skips"], True)
+    check("V79 稳定循环 blt 回边", sl["blt_loops"], True)
+    check("V79 稳定循环成立", sl["stable_loop"], True)
+    check("V79 稳定循环阈值", sl["limit"], 10)
+    bad = C.stable_loop_verdict(0x17589E, 5, 0x1758A6, 10,
+                                0x1758AA, 238, 0x175888)
+    check("V79 稳定循环错配", bad["stable_loop"], False)
+    chain = [(0x040A56, "add", {}, 2), (0x040A58, "addc", {}, 2),
+             (0x040A7A, "add2", {}, 2)]
+    cv = C.clock_chain_verdict(chain)
+    check("V79 时钟递增", cv["clock_increment"], True)
+    check("V79 tick 递减", cv["tick_decrement"], True)
+    check("V79 时钟链成立", cv["chain"], True)
+    check("V79 时钟链指令数", cv["instructions"], 3)
+    check("V79 缺 addc", C.clock_chain_verdict(chain[:1])["chain"], False)
+
+    # ---- 反事实判据
+    eq = C.equal_shape([{"injections": 12, "post_steps": 200000},
+                        {"injections": 12, "post_steps": 200000}])
+    check("V79 等形成立", eq["equal"], True)
+    eq2 = C.equal_shape([{"injections": 12, "post_steps": 200000},
+                         {"injections": 13, "post_steps": 200000}])
+    check("V79 等形注入数不同", eq2["injections"], False)
+    check("V79 等形整体不同", eq2["equal"], False)
+    at = C.attribution([{"clock_delta": 1}, {"clock_delta": 12}],
+                       [{"clock_delta": 0}])
+    check("V79 归因分离", at["separated"], True)
+    check("V79 错配全零", at["mismatch_all_zero"], True)
+    at2 = C.attribution([{"clock_delta": 0}], [{"clock_delta": 0}])
+    check("V79 归因未分离", at2["separated"], False)
+    sz = C.slot_zero_verdict(0, 0)
+    check("V79 8槽证据不可用", sz["usable"], False)
+    check("V79 8槽原因", sz["reason"], "writer_is_zero")
+    sz2 = C.slot_zero_verdict(0, 5, writes_zero=False)
+    check("V79 非零写证据可用", sz2["usable"], True)
+    check("V79 非零写有变化", sz2["changed"], True)
+    tv = C.tick_verdict({"a": 1}, [{"clock_delta": 12}],
+                        [{"clock_delta": 0}], 12, 0, sz)
+    check("V79 静态链", tv["static_chain"], True)
+    check("V79 动态归因", tv["dynamic_attribution"], True)
+    check("V79 清零段命中", tv["clear_segment_hit"], True)
+    check("V79 写回段未命中", tv["writeback_hit"], False)
+    check("V79 链未闭合", tv["chain_closed"], False)
+    check("V79 综合判据", tv["verdict"], "tick_chain_located_but_chain_open")
+    tv2 = C.tick_verdict({}, [], [], 0, 0, sz)
+    check("V79 综合判据 inconclusive", tv2["verdict"], "inconclusive")
+
+    # ---- 文档硬规矩 70 / 71
+    doc = C.__doc__
+    check("V79 文档含规矩 70", "规矩 70" in doc, True)
+    check("V79 文档含规矩 71", "规矩 71" in doc, True)
+    check("V79 文档含 KI#191", "KI#191" in doc, True)
+    check("V79 文档含反事实边界", "反事实补全" in doc, True)
+    check("V79 文档含共同禁语", "不能报显示链通了" in doc, True)
+
+    # ---- 结果文件存在与关键行
+    rp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "results", "frbox", "tick79.txt")
+    if os.path.exists(rp):
+        txt = io.open(rp, encoding="utf-8", errors="replace").read()
+        check("V79 结果无 Traceback", "Traceback" in txt, False)
+        check("V79 结果有 A 段", "A. 七形态普查" in txt, True)
+        check("V79 结果有 H 段", "H. 结案与仍开放" in txt, True)
+        check("V79 结果有 5 条入边", "call:d rel12', 5" in txt, True)
+        check("V79 结果有 7616", "7616" in txt, True)
+    else:
+        check("V79 结果文件存在", False, True)
+
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -7663,6 +7854,7 @@ def main():
     test_v76()
     test_v77()
     test_v78()
+    test_v79()
     test_lists()
     test_bctrl()
     test_dual40()
