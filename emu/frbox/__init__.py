@@ -85,6 +85,17 @@
                    （1/44），Q1/Q5 命中裸 ret 空槽；规矩 63 要求报
                    「某级是条件」前先查延迟槽；规矩 54 分清 312 加载点
                    与 302 调用点两种 PC 口径）
+    frbox.submit76 提交函数身份、0x41 等待置位源、门字节与 8 槽填充源
+                   （V76，纯函数；0x12E6F8 是 sem17 保护的队列生产者，
+                   不是 V63 说的「公共状态查询函数」；312 加载点全在
+                   未执行路径；门字节 0x9F58D08F 有 0x12ECF4 写 0 /
+                   0x12F180 写 1 两个固件写点，规矩 61；0x41 是第五道
+                   twai_flg 的 waiptn，V75 拿它套 L3 检查常量是跨级串味，
+                   置位源是 vec 0x2D ISR 0x12FE84 的 set_flg(3,0x40)
+                   + 3 点 set_flg(3,0x01)，规矩 60 倒序；两个状态字 /
+                   8 槽静态可定址写点 0，但有 224489 条不可定址 store，
+                   只能报「无精确写点」不能报「固件没写」；8 槽全 0
+                   由 0x1758EC 的 24 轮开机清零循环解释）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -98,4 +109,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.75.0"
+__version__ = "0.76.0"
