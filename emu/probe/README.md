@@ -1198,3 +1198,19 @@ I 段只读取证（服务号命名 + task7 TCB），H 段结案。八台独立�
 B 段 137 处与全 ROM 实测一致，不是同一把尺子。
 ⚠️ 所有 `raise_irq` / r4 注入 / `kernel_call` 都是模型动作；
 静态可达 ≠ 已经执行，链未闭合。
+
+## exp_tick_v79.py —— V79 真时基 tick 链与调用形态七分法
+
+    cd emu && python probe/exp_tick_v79.py > ../results/frbox/tick79.txt
+
+A–H 八段、13 台独立机器。A 段全 ROM 线性解码做七形态普查与关注函数完整入边；
+B 段规矩 60 倒序定位 vec 0x18 ISR 与 `0x040A44` 时钟链；
+C 段全 ROM 4 字节常量表补查；D 段规矩 57 算等待函数 5 条 rel9 分支；
+E 段收敛态基线与 1M 窗口自证；F 段五组等形反事实；
+G 段剂量梯度与错配对照；H 段结案与开放项。
+
+⚠️ `call:d` 有 `call:d @rN` 与 `call:d rel12` 两种互斥形态；
+`Sweep.edges` 只收前者。报「静态无入边」前必须扫全七套（规矩 70）。
+⚠️ 8 槽全 0 不能证明清零循环没跑，写的就是 0（规矩 71）。
+⚠️ 所有 `raise_irq` / 直接写 `TCB+0x14` / `btick.expire_strict`
+都是反事实补全；真机中断事件流未建模（KI#191），链未闭合。
