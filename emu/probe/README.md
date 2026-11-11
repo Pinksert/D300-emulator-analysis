@@ -1182,3 +1182,19 @@ R0–R4 与 R0−N3 的 18 个新增 PC 差集；G 段四组 vec 0x2D
 `test_v77()` 157 条、全量自检 3059/3059。
 设备策略与 V65–V76 逐字相同；全部 `raise_irq` / `kernel_call`
 都是反事实补全，链未闭合。
+
+## exp_owner_v78.py（V78：调用者一直在，只是形态不同）
+
+跑法：`cd emu && python probe/exp_owner_v78.py > ../results/frbox/owner78.txt`。
+设备策略与 V65–V77 逐字相同；A–F 静态段只读 ROM，G 段六组等形反事实，
+I 段只读取证（服务号命名 + task7 TCB），H 段结案。八台独立机器。
+结果 `results/frbox/owner78.txt`（101 行、exit=0、零 Traceback）。
+设施 `frbox/owner78.py`（40 个纯函数）、`test_v78()` 147 条、
+全量自检 3206/3206。
+
+⚠️ 三个相邻函数必须分开：等待 `0x175876`、清零循环 `0x1758EC`、
+写回 `0x175908`；清零循环只有「无可定址入边」，不能报「没人调用」。
+⚠️ `abservice` 的「`tslp_tsk` 静态调用点 0 处」是 A 段分发表项，
+B 段 137 处与全 ROM 实测一致，不是同一把尺子。
+⚠️ 所有 `raise_irq` / r4 注入 / `kernel_call` 都是模型动作；
+静态可达 ≠ 已经执行，链未闭合。
