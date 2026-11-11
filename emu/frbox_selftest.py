@@ -6951,6 +6951,216 @@ def test_v75():
           False)
 
 
+def test_v76():
+    print("\n[V76] 提交函数身份、0x41 置位源、门字节与 8 槽填充源")
+    import frbox
+    from frbox import submit76 as S
+
+    # 版本断言必须版本无关（KI#270）
+    check("V76 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量：提交函数
+    check("SUBMIT", S.SUBMIT, 0x12E6F8)
+    check("SUBMIT_END", S.SUBMIT_END, 0x12E752)
+    check("SUBMIT_REFS", S.SUBMIT_REFS, 312)
+    check("SUBMIT_EDGES", S.SUBMIT_EDGES, 302)
+    check("SUBMIT_REL12", S.SUBMIT_REL12, 5)
+    check("LDI32_LEN", S.LDI32_LEN, 6)
+    check("SUBMIT_SVC_PCS", S.SUBMIT_SVC_PCS,
+          (0x12E712, 0x12E738, 0x12E748))
+    check("SUBMIT_SVCS", S.SUBMIT_SVCS, (-53, -48, -55))
+    check("SUBMIT_SVC_NAMES", S.SUBMIT_SVC_NAMES,
+          ("wai_sem", "set_flg", "sig_sem"))
+    check("INSERT_FN", S.INSERT_FN, 0x124F5A)
+    check("SEM_ID", S.SEM_ID, 17)
+    check("SEM_POOL", S.SEM_POOL, 0x9F58D508)
+    check("SLOT_STRIDE", S.SLOT_STRIDE, 12)
+    check("SUBMIT_SET_BITS", S.SUBMIT_SET_BITS, 0x08)
+    check("FLAG_ID", S.FLAG_ID, 3)
+
+    # ---- 常量：门字节
+    check("GATE_BYTE", S.GATE_BYTE, 0x9F58D08F)
+    check("GATE_WRITES 个数", len(S.GATE_WRITES), 2)
+    check("GATE_WRITES[0]", S.GATE_WRITES[0],
+          (0x12ECF4, 0, 0x12ECE2, 0x12ED04))
+    check("GATE_WRITES[1]", S.GATE_WRITES[1],
+          (0x12F180, 1, 0x12F158, 0x12F1AA))
+    check("GATE_LOADS", S.GATE_LOADS, 19)
+
+    # ---- 常量：第五道等待与置位源
+    check("WAIT41_A", S.WAIT41_A, 0x12E5AA)
+    check("WAIT41_B", S.WAIT41_B, 0x12E5EA)
+    check("WAIT41_IMM_A", S.WAIT41_IMM_A, 0x12E59E)
+    check("WAIT41_IMM_B", S.WAIT41_IMM_B, 0x12E5DE)
+    check("WAIT41_PTN", S.WAIT41_PTN, 0x41)
+    check("TWAI_SVC_32", S.TWAI_SVC_32, -170)
+    check("TWAI_SVC_LOW8", S.TWAI_SVC_LOW8, 86)
+    check("CLR_BF", S.CLR_BF, 0xBF)
+    check("CLR_BF_PCS", S.CLR_BF_PCS, (0x12E592, 0x12E5D2))
+    check("SET_40_PC", S.SET_40_PC, 0x12FEAC)
+    check("SET_01_PCS", S.SET_01_PCS,
+          (0x12E0EC, 0x12E51A, 0x12FE1C))
+    check("FLAG3_SETTERS", S.FLAG3_SETTERS, 44)
+    check("MASK74", S.MASK74, 0x74)
+    check("EXPECT10", S.EXPECT10, 0x10)
+
+    # ---- 常量：向量表 / 四个填充源 / 8 槽
+    check("TBR", S.TBR, 0x000EFC00)
+    check("VEC_2D", S.VEC_2D, 0x2D)
+    check("ISR_2D", S.ISR_2D, 0x12FE84)
+    check("ISR_2D_END", S.ISR_2D_END, 0x12FEB4)
+    check("VEC_20 / ISR_20", (S.VEC_20, S.ISR_20), (0x20, 0x12FE54))
+    check("VEC_1B / ISR_1B", (S.VEC_1B, S.ISR_1B), (0x1B, 0x12FDB4))
+    check("WORD_A", S.WORD_A, 0x9F5A0284)
+    check("WORD_B", S.WORD_B, 0x9F59EF50)
+    check("SLOTS8", S.SLOTS8, 0x9F59F7C8)
+    check("DESC_PTR", S.DESC_PTR, 0x9F58D858)
+    check("STORES_UNKNOWN", S.STORES_UNKNOWN, 224489)
+    check("SLOT_LOADS", S.SLOT_LOADS,
+          (0x1758EC, 0x175930, 0x1759AC, 0x175A20))
+    check("SLOT_CLEAR_FN", S.SLOT_CLEAR_FN, 0x1758EC)
+    check("SLOT_CLEAR_ST", S.SLOT_CLEAR_ST, 0x1758FA)
+    check("SLOT_CLEAR_LEN", S.SLOT_CLEAR_LEN, 96)
+    check("SLOT_STORE_WIDTH", S.SLOT_STORE_WIDTH, 4)
+    check("SLOT_COUNT", S.SLOT_COUNT, 8)
+    check("BIT_GROUPS 个数", len(S.BIT_GROUPS), 5)
+    check("BIT_GROUPS 标签", [x[0] for x in S.BIT_GROUPS],
+          ["R0", "R1", "R2", "R3", "R4"])
+
+    # ---- 设备策略（与 V65–V75 逐字相同）
+    check("BOOT_STEPS", S.BOOT_STEPS, 191520)
+    check("VEC_TICK", S.VEC_TICK, 0x2B)
+    check("RUN_STEPS", S.RUN_STEPS, 500000)
+    check("POST_STEPS", S.POST_STEPS, 200000)
+    check("WINDOW_STEPS", S.WINDOW_STEPS, 1000000)
+
+    # ---- 纯函数：宽度 / 分支
+    check("sx 8 位负数", S.sx(0xFF, 8), -1)
+    check("sx 4 位负数 m4=0xC", S.sx(0xC, 4), -4)
+    check("rel9_target L2", S.rel9_target(0x12DFC4, 5), 0x12DFD0)
+    check("rel9_target 负偏移", S.rel9_target(0x12E5BE, 0xFE), 0x12E5BC)
+    check("svc32 0xFFFFFF56", S.svc32(0xFFFFFF56), -170)
+    check("svc32 0xFFFFFFCB", S.svc32(0xFFFFFFCB), -53)
+    check("svc32 0xFFFFFFC9", S.svc32(0xFFFFFFC9), -55)
+    check("svc_low8 0xFFFFFF56", S.svc_low8(0xFFFFFF56), 86)
+    check("svc_width_mismatch", S.svc_width_mismatch(0xFFFFFF56),
+          (-170, 86, True))
+    check("svc_width_mismatch 同值", S.svc_width_mismatch(0x10),
+          (16, 16, False))
+
+    # ---- 纯函数：提交函数
+    check("submit_slot_addr 0", S.submit_slot_addr(0), 0x9F58D508)
+    check("submit_slot_addr 5", S.submit_slot_addr(5), 0x9F58D544)
+    check("submit_slot_addr 17", S.submit_slot_addr(17), 0x9F58D5D4)
+    check("submit_services 长度", len(S.submit_services()), 3)
+    check("submit_services 首项", S.submit_services()[0],
+          (0x12E712, -53, "wai_sem"))
+    check("submit_services 末项", S.submit_services()[2],
+          (0x12E748, -55, "sig_sem"))
+    check("submit_is_producer 默认", S.submit_is_producer(), True)
+    check("submit_is_producer 缺放锁",
+          S.submit_is_producer((-53, -48)), False)
+    rel = S.call_site_relations(312, 302, 5)
+    check("call_site refs", rel["refs"], 312)
+    check("call_site edges", rel["edges"], 302)
+    check("call_site rel12", rel["rel12"], 5)
+    check("call_site gap", rel["gap"], 6)
+    check("call_site sum", rel["sum"], 619)
+    check("call_site distinct", rel["distinct_kinds"], 3)
+
+    # ---- 纯函数：门字节
+    check("gate_write_values", S.gate_write_values(),
+          {0: 0x12ECF4, 1: 0x12F180})
+    check("gate_write_bounds", S.gate_write_bounds(),
+          [(0x12ECE2, 0x12ED04), (0x12F158, 0x12F1AA)])
+    check("firmware_writes_gate", S.firmware_writes_gate(), True)
+    check("firmware_writes_gate 空", S.firmware_writes_gate(()), False)
+
+    # ---- 纯函数：等待 / 掩码
+    check("clear_mask 0x89", S.clear_mask(0x89), 0x76)
+    check("clear_mask 0x8F", S.clear_mask(0x8F), 0x70)
+    check("clear_mask 0xBF", S.clear_mask(0xBF), 0x40)
+    check("clear_mask 0xFF", S.clear_mask(0xFF), 0)
+    check("orw_match 0x40", S.orw_match(0x40), True)
+    check("orw_match 0x01", S.orw_match(0x01), True)
+    check("orw_match 0x41", S.orw_match(0x41), True)
+    check("orw_match 0x10", S.orw_match(0x10), False)
+    check("orw_match 0x02", S.orw_match(0x02), False)
+    check("andw_match 0x41", S.andw_match(0x41), True)
+    check("andw_match 0x40", S.andw_match(0x40), False)
+    check("wait_setters 0x40", S.wait_setters(0x40), (0x12FEAC,))
+    check("wait_setters 0x01", S.wait_setters(0x01),
+          (0x12E0EC, 0x12E51A, 0x12FE1C))
+    check("wait_setters 0x10", S.wait_setters(0x10), ())
+    check("wait41_setter_count", S.wait41_setter_count(), 4)
+    check("cross_level_misread 0x41", S.cross_level_misread(0x41), True)
+    check("cross_level_misread 0x10", S.cross_level_misread(0x10), False)
+    check("level_check_verdict 0x10", S.level_check_verdict(0x10), True)
+    check("level_check_verdict 0x41", S.level_check_verdict(0x41), False)
+    check("level_check_verdict 0x74", S.level_check_verdict(0x74), False)
+    check("level_check_verdict 0x11", S.level_check_verdict(0x11), True)
+
+    # ---- 纯函数：向量表倒序
+    check("vec_slot 0x2D", S.vec_slot(0x2D), 0x000EFF48)
+    check("vec_slot 0x20", S.vec_slot(0x20), 0x000EFF7C)
+    check("vec_slot 0x1B", S.vec_slot(0x1B), 0x000EFF90)
+    check("vec_slot 0x2B", S.vec_slot(0x2B), 0x000EFF50)
+    check("vec_of_slot 0xEFF48", S.vec_of_slot(0x000EFF48), 0x2D)
+    check("vec_of_slot 0xEFF7C", S.vec_of_slot(0x000EFF7C), 0x20)
+    check("vec_of_slot 非对齐", S.vec_of_slot(0x000EFF49), None)
+    check("vec_of_slot 越界", S.vec_of_slot(0x000F0000), None)
+    bd = [(0x12FE84, 0x12FEB4)]
+    check("isr_owner 置0x40", S.isr_owner(0x12FEAC, bd),
+          (0x12FE84, 0x12FEB4))
+    check("isr_owner 非 ISR", S.isr_owner(0x12E5AA, bd), None)
+
+    # ---- 纯函数：三层 / 写点 / 清零 / 归因
+    t0 = S.three_layer(True, 0, True)
+    check("three_layer 存在", t0["exists"], True)
+    check("three_layer 收敛命中", t0["converged_hits"], 0)
+    check("three_layer 在 ISR", t0["in_isr"], True)
+    check("three_layer 未全过", t0["all"], False)
+    check("three_layer 全过", S.three_layer(True, 1, True)["all"], True)
+    check("writers_verdict 0 精确", S.writers_verdict([])["exact"], 0)
+    check("writers_verdict 0 unknown",
+          S.writers_verdict([], 0)["may_assert_absent"], True)
+    check("writers_verdict 有 unknown",
+          S.writers_verdict([], 224489)["may_assert_absent"], False)
+    check("writers_verdict 结论",
+          S.writers_verdict([])["verdict"], "no-addressable-writer")
+    check("writers_verdict 有写点",
+          S.writers_verdict([(0x12ECF4, "stb")])["verdict"],
+          "firmware-writer-exists")
+    check("slot_clear_rounds", S.slot_clear_rounds(), 24)
+    check("slot_clear_rounds 2B", S.slot_clear_rounds(96, 2), 48)
+    check("slot_zero_explained 全真",
+          S.slot_zero_explained(True, True), True)
+    check("slot_zero_explained 缺清零",
+          S.slot_zero_explained(False, True), False)
+    check("slot_zero_explained 槽非零",
+          S.slot_zero_explained(True, False), False)
+    check("submit_trigger 未跑", S.submit_trigger(0, 0, False)["verdict"],
+          "callsites-not-executed")
+    check("submit_trigger 有调用者",
+          S.submit_trigger(0, 0, False)["callers_exist"], True)
+    check("submit_trigger 已跑", S.submit_trigger(1, 1, True)["verdict"],
+          "executed")
+    check("equal_shape 等形",
+          S.equal_shape([(191520, 3, 200000)] * 3), True)
+    check("equal_shape 不等形",
+          S.equal_shape([(191520, 3, 200000), (191520, 3, 300000)]), False)
+    check("attribution", S.attribution(
+        {"R0": {"hit": True}, "R3": {"hit": False}}, "hit"), ["R0"])
+    check("chain_verdict 全过", S.chain_verdict(True, True, True,
+                                                 True, True), True)
+    check("chain_verdict 缺提交", S.chain_verdict(True, False, True,
+                                                   True, True), False)
+    check("chain_verdict 缺门", S.chain_verdict(True, True, True,
+                                                 True, False), False)
+    check("window_same 同覆盖", S.window_same({1, 2}, {2, 1}), 0)
+    check("window_same 差 2", S.window_same({1, 2}, {2, 3}), 2)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -7027,6 +7237,7 @@ def main():
     test_v73()
     test_v74()
     test_v75()
+    test_v76()
     test_lists()
     test_bctrl()
     test_dual40()
