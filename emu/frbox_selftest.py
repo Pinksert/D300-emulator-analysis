@@ -7161,6 +7161,242 @@ def test_v76():
     check("window_same 差 2", S.window_same({1, 2}, {2, 3}), 2)
 
 
+def test_v77():
+    print("\n[V77] 不可定址 store 归类、字段写归约、vec 0x2D 设备面")
+    import frbox
+    from frbox import reduce77 as R
+
+    # 版本断言必须版本无关（KI#270）
+    check("V77 版本格式", frbox.__version__.startswith("0."), True)
+
+    # ---- 常量：全 ROM store 普查
+    check("STORE_TOTAL", R.STORE_TOTAL, 244342)
+    check("STORE_DECIDABLE", R.STORE_DECIDABLE, 19853)
+    check("STORE_UNKNOWN", R.STORE_UNKNOWN, 224489)
+    check("形态普查合计", sum(R.SHAPE_CENSUS.values()), R.STORE_TOTAL)
+    check("unknown 形态合计", sum(R.UNKNOWN_BY_SHAPE.values()),
+          R.STORE_UNKNOWN)
+    check("UNKNOWN_STACK", R.UNKNOWN_STACK, 188255)
+    check("UNKNOWN_STACK_R14", R.UNKNOWN_STACK_R14, 184742)
+    check("UNKNOWN_INDEXED", R.UNKNOWN_INDEXED, 17823)
+    check("UNKNOWN_DIRECT", R.UNKNOWN_DIRECT, 13040)
+    check("UNKNOWN_OTHER", R.UNKNOWN_OTHER, 5371)
+    check("NONSTACK_UNKNOWN", R.NONSTACK_UNKNOWN, 36234)
+    check("栈+非栈=unknown", R.UNKNOWN_STACK + R.NONSTACK_UNKNOWN,
+          R.STORE_UNKNOWN)
+    check("UNKNOWN_STACK 由明细算出",
+          sum(v for k, v in R.UNKNOWN_BY_SHAPE.items()
+              if k in R.STACK_SHAPES), R.UNKNOWN_STACK)
+    check("R14 三类明细", sum(R.UNKNOWN_BY_SHAPE[k] for k in
+                            ('@(disp8,R14):8', '@(disp10,R14):32',
+                             '@(disp9,R14):16')), R.UNKNOWN_STACK_R14)
+
+    # ---- 常量：三个数据对象
+    check("OBJECTS", R.OBJECTS,
+          (0x9F5A0284, 0x9F59EF50, 0x9F59F7C8))
+    check("OBJECT_NAMES", R.OBJECT_NAMES,
+          ('WORD_A', 'WORD_B', 'SLOT8'))
+    check("LOAD_COUNTS", R.LOAD_COUNTS, (63, 31, 4))
+    check("EXACT_WRITERS", R.EXACT_WRITERS, (0, 0, 0))
+    check("NEAR32_WRITERS", R.NEAR32_WRITERS, (12, 30, 0))
+    check("REDUCED_COUNTS", R.REDUCED_COUNTS, (31, 109, 2))
+    check("WORD_A 偏移数", len(R.REDUCED_OFFSETS[0]), 12)
+    check("WORD_B 偏移数", len(R.REDUCED_OFFSETS[1]), 12)
+    check("SLOT8 偏移", R.REDUCED_OFFSETS[2], (0, 92))
+    check("WORD_A 偏移 0 缺席", 0 in R.REDUCED_OFFSETS[0], False)
+    check("WORD_A 偏移含 +0x2D", 45 in R.REDUCED_OFFSETS[0], True)
+    check("KI192_FIELD_OFF", R.KI192_FIELD_OFF, 45)
+    check("WORD_A_BIT3_OFF", R.WORD_A_BIT3_OFF, 0)
+
+    # ---- 常量：8 槽清零循环
+    check("SLOT_CLEAR_PC", R.SLOT_CLEAR_PC, 0x1758FA)
+    check("SLOT_CLEAR_LDI", R.SLOT_CLEAR_LDI, 0x1758F4)
+    check("SLOT_CLEAR_ADD2", R.SLOT_CLEAR_ADD2, 0x1758F6)
+    check("SLOT_CLEAR_M4", R.SLOT_CLEAR_M4, 0x0C)
+    check("SLOT_CLEAR_LEN", R.SLOT_CLEAR_LEN, 96)
+    check("SLOT_CLEAR_WIDTH", R.SLOT_CLEAR_WIDTH, 4)
+    check("SLOT_CLEAR_ROUNDS", R.SLOT_CLEAR_ROUNDS, 24)
+    check("SLOT_CLEAR_FIRST", R.SLOT_CLEAR_FIRST, 92)
+    check("SLOT_WRITEBACK_PC", R.SLOT_WRITEBACK_PC, 0x175958)
+    check("SLOT_STRIDE", R.SLOT_STRIDE, 12)
+    check("SLOT_COUNT", R.SLOT_COUNT, 8)
+
+    # ---- 常量：vec 0x2D ISR 与设备
+    check("TBR", R.TBR, 0xEFC00)
+    check("VEC_2D", R.VEC_2D, 0x2D)
+    check("ISR2D", R.ISR2D, 0x12FE84)
+    check("ISR2D_END", R.ISR2D_END, 0x12FEB4)
+    check("DEV_COUNTER", R.DEV_COUNTER, 0x5C003000)
+    check("DEV_EXPEED", R.DEV_EXPEED, 0x7000000A)
+    check("DA86", R.DA86, 0x9F58DA86)
+    check("SETFLG_40_PC", R.SETFLG_40_PC, 0x12FEAC)
+    check("BORH_U4", R.BORH_U4, 1)
+    check("BORH_MASK", R.BORH_MASK, 0x10)
+    check("CLK_MASK", R.CLK_MASK, 0x02)
+    check("DATA_MASK", R.DATA_MASK, 0x04)
+    check("VEC_FAMILY 长度", len(R.VEC_FAMILY), 4)
+    check("VEC_FAMILY[1]", R.VEC_FAMILY[1], (0x2D, 0x12FE84))
+
+    # ---- 小工具
+    check("sx 4 位负", R.sx(0xC, 4), -4)
+    check("sx 8 位正", R.sx(0x7F, 8), 127)
+    check("sx 8 位负", R.sx(0x80, 8), -128)
+    check("m4_signed 0xC", R.m4_signed(0xC), -4)
+    check("m4_signed 0x3", R.m4_signed(0x3), 3)
+    check("shape_of 0x1400", R.shape_of(0x1400), ('@Rj', 4))
+    check("shape_of 0x1200", R.shape_of(0x1200), ('@(R13,Rj)', 1))
+    check("shape_of 0x7000", R.shape_of(0x7000), ('@(disp8,R14)', 1))
+    check("shape_of 0x1300", R.shape_of(0x1300), ('@(udisp6,R15)', 4))
+    check("shape_of 未收录", R.shape_of(0x1780), (None, None))
+    check("is_stack_shape R14", R.is_stack_shape('@(disp9,R14)'), True)
+    check("is_stack_shape R15", R.is_stack_shape('@(udisp6,R15)'), True)
+    check("is_stack_shape Rj", R.is_stack_shape('@Rj'), False)
+    check("shape_share 半数", R.shape_share(5, 10), 0.5)
+    check("shape_share 零分母", R.shape_share(5, 0), 0.0)
+    check("census_stack_total", R.census_stack_total(), 200445)
+    check("census_by_class 栈", R.census_by_class()['stack'], 200445)
+    check("census_by_class 索引", R.census_by_class()['indexed'], 21418)
+    check("census_by_class 直接", R.census_by_class()['direct'], 17108)
+    check("census_by_class 合计", sum(R.census_by_class().values()),
+          R.STORE_TOTAL)
+    check("nonstack_unknown", R.nonstack_unknown(R.UNKNOWN_STACK), 36234)
+    check("nonstack_unknown 无栈", R.nonstack_unknown(0), R.STORE_UNKNOWN)
+    check("decidable_rate", round(R.decidable_rate(), 5), 0.08125)
+
+    # ---- 局部寄存器传播
+    z = [None] * 16
+    r1 = R.prop_ldi(z, 4, 0x9F5A0284)
+    check("prop_ldi 值", r1[4], 0x9F5A0284)
+    check("prop_ldi 不动其它", r1[5], None)
+    r2 = R.prop_mov(r1, 8, 4)
+    check("prop_mov 传播", r2[8], 0x9F5A0284)
+    check("prop_mov 源缺失", R.prop_mov(z, 8, 4)[8], None)
+    r3 = R.prop_add(R.prop_ldi(r2, 9, 0), 8, 9)
+    check("prop_add 常量", r3[8], 0x9F5A0284)
+    check("prop_add 未知", R.prop_add(z, 8, 9)[8], None)
+    r4 = R.prop_add2(R.prop_ldi(z, 13, 96), 13, 0xC)
+    check("prop_add2 -4", r4[13], 92)
+    check("prop_add2 未知", R.prop_add2(z, 13, 0xC)[13], None)
+    check("addr_at_rj 已知", R.addr_at_rj(r1, 4), 0x9F5A0284)
+    check("addr_at_rj 未知", R.addr_at_rj(z, 4), None)
+    rr = R.prop_ldi(z, 0, 0x9F59F7C8)
+    rr = R.prop_ldi(list(rr), 13, 92)
+    check("addr_r13_rj", R.addr_r13_rj(rr, 0), 0x9F59F824)
+    check("addr_r13_rj 缺 r13", R.addr_r13_rj(R.prop_ldi(z, 0, 0x100), 0),
+          None)
+    r14 = R.prop_ldi(z, 14, 0x9F800000)
+    check("addr_disp_r14 正", R.addr_disp_r14(r14, 1, 8), 0x9F800008)
+    check("addr_disp_r14 负", R.addr_disp_r14(r14, 0xFF, 8), 0x9F7FFFF8)
+    check("addr_disp_r14 未知", R.addr_disp_r14(z, 1, 8), None)
+    r15 = R.prop_ldi(z, 15, 0x9F800100)
+    check("addr_udisp_r15", R.addr_udisp_r15(r15, 3), 0x9F80010C)
+    check("addr_udisp_r15 未知", R.addr_udisp_r15(z, 3), None)
+    check("reduce_store @Rj", R.reduce_store(0x1400, {'rj': 4}, r1),
+          (0x9F5A0284, 4))
+    check("reduce_store @(R13,Rj)",
+          R.reduce_store(0x1000, {'rj': 0}, rr), (0x9F59F824, 4))
+    check("reduce_store @(disp,R14)",
+          R.reduce_store(0x7000, {'disp8': 1}, r14), (0x9F800008, 1))
+    check("reduce_store @(udisp6,R15)",
+          R.reduce_store(0x1300, {'udisp6': 3}, r15), (0x9F80010C, 4))
+    check("reduce_store 未知形态", R.reduce_store(0x1780, {}, z),
+          (None, None))
+    check("reduce_store 未知寄存器",
+          R.reduce_store(0x1400, {'rj': 4}, z), (None, 4))
+    check("is_field_write 命中",
+          R.is_field_write(0x9F5A0290, R.WORD_A, 0x40), True)
+    check("is_field_write 负偏移",
+          R.is_field_write(R.WORD_A - 4, R.WORD_A, 0x40), True)
+    check("is_field_write 越界",
+          R.is_field_write(R.WORD_A + 0x40, R.WORD_A, 0x40), False)
+    check("is_field_write None", R.is_field_write(None, R.WORD_A, 0x40),
+          False)
+    check("offset_of", R.offset_of(0x9F5A0284 + 45, R.WORD_A), 45)
+    check("offset_of None", R.offset_of(None, R.WORD_A), None)
+    check("offset_hist", R.offset_hist([(1, 4), (2, 4), (3, 45)]),
+          {4: 2, 45: 1})
+    check("offset_hist 空", R.offset_hist([]), {})
+    check("zero_offset_written 无", R.zero_offset_written([(1, 4), (2, 45)]),
+          False)
+    check("zero_offset_written 有", R.zero_offset_written([(1, 0), (2, 4)]),
+          True)
+    v = R.field_write_verdict(0, [(1, 4), (2, 45)], R.UNKNOWN_STACK)
+    check("field_write_verdict 精确写", v['exact_base_writes'], 0)
+    check("field_write_verdict 字段写", v['field_writes'], 2)
+    check("field_write_verdict 偏移0", v['zero_offset_written'], False)
+    check("field_write_verdict 栈", v['stack_unknown'], 188255)
+    check("field_write_verdict 非栈", v['nonstack_unknown'], 36234)
+    check("field_write_verdict 不可报缺席",
+          v['may_claim_no_firmware_write'], False)
+    v2 = R.field_write_verdict(0, [], 0, 0)
+    check("field_write_verdict 全零可报", v2['may_claim_no_firmware_write'],
+          True)
+
+    # ---- 8 槽清零
+    a = R.slot_clear_addrs()
+    check("slot_clear_addrs 长度", len(a), 24)
+    check("slot_clear_addrs 首", a[0], 0x9F59F824)
+    check("slot_clear_addrs 末", a[-1], 0x9F59F7C8)
+    check("slot_clear_addrs 互异", len(set(a)), 24)
+    check("slot_clear_addrs 全在区间",
+          all(R.SLOT8 <= x < R.SLOT8 + 96 for x in a), True)
+    check("slot_clear_rounds", R.slot_clear_rounds(), 24)
+    check("slot_clear_rounds 2B", R.slot_clear_rounds(96, 2), 48)
+    check("slot_clear_covers 真", R.slot_clear_covers(a), True)
+    check("slot_clear_covers 缺一轮", R.slot_clear_covers(a[:-1]), False)
+    check("slot_clear_covers 重复一轮",
+          R.slot_clear_covers(a[:-1] + [a[0]]), False)
+    check("slot_table_bytes", R.slot_table_bytes(), 96)
+
+    # ---- 位掩码 / 设备面 / 向量
+    check("borh_mask 1", R.borh_mask(1), 0x10)
+    check("borh_mask 8", R.borh_mask(8), 0x80)
+    check("borh_mask 0", R.borh_mask(0), 0)
+    check("borh_mask 15", R.borh_mask(15), 0xF0)
+    check("is_low_half_mask 0x10", R.is_low_half_mask(0x10), False)
+    check("is_low_half_mask 0x02", R.is_low_half_mask(0x02), True)
+    check("expeed_line_touched 0x10", R.expeed_line_touched(0x10), ())
+    check("expeed_line_touched 0x02", R.expeed_line_touched(0x02), ('CLK',))
+    check("expeed_line_touched 0x06", R.expeed_line_touched(0x06),
+          ('CLK', 'DATA'))
+    check("vec_slot 0x2D", R.vec_slot(0x2D), 0xEFF48)
+    check("vec_slot 0x1B", R.vec_slot(0x1B), 0xEFF90)
+    check("vec_of_slot 反算", R.vec_of_slot(0xEFF48), 0x2D)
+    check("vec_slot 0x20", R.vec_slot(0x20), 0xEFF7C)
+    check("isr_device_plane 去重",
+          R.isr_device_plane([(0x7000000A, 'borh'), (0x5C003000, 'sth'),
+                             (0x7000000A, 'stb')]),
+          (0x5C003000, 0x7000000A))
+    check("ki192_revision 命中",
+          R.ki192_revision(R.REDUCED_OFFSETS[0]), True)
+    check("ki192_revision 不命中", R.ki192_revision((0, 4, 8)), False)
+
+    # ---- 反事实判据
+    check("equal_shape 等形",
+          R.equal_shape([(191520, 0x2B, 500000)] * 3), True)
+    check("equal_shape 不等形",
+          R.equal_shape([(191520, 0x2B, 500000), (191520, 0x2B, 1)]),
+          False)
+    ok, hits, noise = R.attribution(
+        [('G0', False, 'other'), ('G1', True, 'vec2d'),
+         ('G3', True, 'vec2d')], 'vec2d')
+    check("attribution 成立", ok, True)
+    check("attribution 命中组", hits, ['G1', 'G3'])
+    check("attribution 噪声", noise, [])
+    ok2, _h2, n2 = R.attribution(
+        [('G1', True, 'vec2d'), ('G2', True, 'other')], 'vec2d')
+    check("attribution 有噪声不成立", ok2, False)
+    check("attribution 噪声组", n2, ['G2'])
+    check("coverage_hits", R.coverage_hits([1, 2, 3], {2, 3, 4}), 2)
+    check("coverage_delta 单向", R.coverage_delta({1, 2}, {2, 3}), 1)
+    check("window_same 同覆盖", R.window_same({1, 2}, {2, 1}), True)
+    check("window_same 差集", R.window_same({1, 2}, {2, 3}), False)
+    c = R.chain_verdict(1, 0, 0, 0)
+    check("chain_verdict 字段路径跑过", c['field_paths_executed'], True)
+    check("chain_verdict 基址未写", c['base_written'], False)
+    check("chain_verdict 显示链不闭合", c['display_chain_closed'], False)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -7238,6 +7474,7 @@ def main():
     test_v74()
     test_v75()
     test_v76()
+    test_v77()
     test_lists()
     test_bctrl()
     test_dual40()
