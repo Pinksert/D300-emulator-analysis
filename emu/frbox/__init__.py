@@ -120,6 +120,14 @@
                    前置 r4==-85；清零段 set_flg(12,1) 已执行、
                    补数据无增益、强制入口 39/75；规矩 72 参数寄存器 /
                    规矩 73 配置≠器件、强制入口≠真链）
+    frbox.cmd81    主循环返回码与命令分发段的两道串联判据（V81，纯函数；
+                   0x175270 的 ldi:32 #0xFFFFFF56 按 8 位=86 / 32 位=-170，
+                   全 ROM 91 处、r5=12 r6=0xA2A05E1C r7=2；
+                   r4 非 0 才 jmp 0x17573C，r4==-85 才 0x17574C call
+                   rel12=221 到 0x175908；等形补位四组改变执行但
+                   MAIN_JMP/CMD_SEG/WB_CALL 全 False；强制 r4=-85
+                   写回段 11/75；规矩 74 双宽度口径 /
+                   规矩 75 补位时机与两道门不可合并）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -133,4 +141,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.80.0"
+__version__ = "0.81.0"
