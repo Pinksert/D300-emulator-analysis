@@ -114,6 +114,12 @@
                    call:d rel12 是第五形态，只被它解出的入口 7616 个，
                    0x1758EC 有 5 条入边；规矩 70 七套口径 /
                    规矩 71 8 槽全 0 不能证明清零循环没跑）
+    frbox.wb80     写回段唯一入口与 flag 12 通信面（V80，纯函数；
+                   ICR 0x448=0x12 配置链开机全命中但 TICK_ISR 0 命中；
+                   0x17574C call rel12=221 是 0x175908 唯一入边，
+                   前置 r4==-85；清零段 set_flg(12,1) 已执行、
+                   补数据无增益、强制入口 39/75；规矩 72 参数寄存器 /
+                   规矩 73 配置≠器件、强制入口≠真链）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -127,4 +133,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.79.0"
+__version__ = "0.80.0"
