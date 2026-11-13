@@ -8755,3 +8755,62 @@ G3 错配 `vec 0x2B` 等形全 0 ⇒ 归因分离。G4 写 0 后
 `results/frbox/tick79.txt`（111 行、零 Traceback、13 台独立机器）、
 `test_v79()` 122 条（子集 122/122）、`__version__ = 0.79.0`。
 全量自检 **3328/3328**；报告 91 / probe 125。KI#308–311，硬规矩 70 / 71（附录 Q）。
+
+## V80 · 写回函数一直在，是命令分发段没走到
+
+**1. 抓手**：KI#311 第一、二条 —— 真机让 `vec 0x18` 周期性发生的硬件事件、
+写回函数 `0x175908` 被调到的条件。
+
+**2. 唯一入边**：全七套形态扫完，`0x175908` 只有 `0x17574C call rel12=221`
+一条入边；作为 4 字节常量全 ROM 0 处 ⇒ 不靠函数指针表。清零循环
+`0x1758EC` 有 5 条 `call:d rel12` 入边（V79），入口完全不同。
+
+**3. 入口判据**：`0x17573C ldi:8 #171,r0` + `extsb` ⇒ `-85`；
+`0x175740 cmp r0,r4` / `0x175742 beq rel9=4` → `0x17574C`。
+`-85 = sys_dly_tsk`，是命令码不是错误返回码。上游 `0x175270` 等待 →
+`0x175276 mov r12,r4` → `0x17527A beq rel9=4`（r4==0 跳 `0x175284`）→
+`0x175282 jmp @r12`（目标 `0x17573C`）才是命令分发段。
+
+**4. 规矩 72**：`CallSite.flgid` 已按服务区分 —— `set_flg`/`clr_flg` 看 r4，
+`wai_flg`/`twai_flg` 看 r5。草稿拿 `cs.r4==12` 过滤 wai_flg 得 0 处是假阴性；
+正确口径 flag 12：`set_flg` 49 / `clr_flg` 65 / `wai_flg` 12，写回段内 2 处
+`wai_flg(12,1,2)`。另 `ldi:32 #0xFFFFFF56` 按 32 位是 -170、按 8 位是 +86。
+`extsb` 不是漏扫原因（`bstatic.NONWRITE` 已含它），两版扫描逐项一致 ⇒
+本版自我证伪，不写成设施缺陷。
+
+**5. 同块内存但非顺序后继**：`0x1758EC` 与 `0x175930` 都引用
+`0x9F59F7C8`；清零段 12 条（24 轮回跳 `bgt:d rel9=254` → `0x1758F6`，
+`0x1758FA st` 写 0，`0x175904 set_flg(12,1)`，`0x175906 ret`），
+写回段 75 条（`wai_flg` / `clr_flg` / `0x175958 st` / `set_flg`，
+`0x17598E blt rel9=208` → `0x175930` 构成 8 轮 × 12 B = 96 B 循环）。
+规矩 57：五条分支目标全在各自函数内。
+
+**6. 规矩 73 配置 ≠ 器件**：`0x448` 唯一写点 `0x040456 stb`（值 0x12），
+`ICR_STB / DIRECT48 / DIRECT4E / BATCH_ICR` 四 PC 基线全命中，
+`TICK_ISR 0x04046E` 基线 0 命中 ⇒ 固件已配好 vec 0x18 的中断级别，
+缺的是周期性拉线的硬件器件/事件（KI#191）；`dev_tick18.period` 是模型参数。
+
+**7. 等形反事实**：设备策略 V65–V79 逐字相同；所有组 post 后统一再跑
+20000 步保证后续窗口一致，**等形对照另取注入次数相同的组**。
+N0/N1/N12/N48/N110/N160 + 错配 MIS160 共 7 台独立机器。
+110 次后清零段 12/12、`set_flg(12,1)` 真实执行、flag12 读回 1，
+但 `WB_CALL` 与 `CMD_SEG` 仍 False、写回段 0/75。
+同为 160 次的 N160 / MIS160 三项等形（注入次数、post 步数、写动作）全同，
+错配组新增 PC 与 clock 增量恒 0；N110 与 MIS160 因次数不同只作剂量梯度。
+配合 N1/N12/N48/N110/N160 的 clock 梯度，归因分离成立 ⇒
+「flag 12 没置所以写回没跑」被证伪。
+
+**8. 补数据门与强制入口**：W1（写 flag12=1）/ W0（写 0）两组只换写入值、
+其余等形，写回段均 0/75 ⇒ `data_write_not_call_event`（规矩 53 延伸）。
+强制设 `cpu.pc = 0x175908` 才命中 39/75、新增 2334 PC，`WB_CALL` 仍 False
+⇒ 函数体可执行，但模型化强制入口不是固件调用边（与 V79 的
+`btick.expire_strict()` 下溢阴性同类）。
+
+**9. 设施**：`frbox/wb80.py`（纯函数，含 `sx`/`svc_num`/`rel12_target`/
+`rel9_target`/`flg_arg`/`command_gate`/`loop_verdict`/`icr_verdict`/
+`equal_shape`/`attribution`/`data_gate_verdict`/`force_entry_verdict`/
+`wb_verdict`）、`probe/exp_wb_v80.py`（A–H 八段、13 台独立机器）、
+`results/frbox/wb80.txt`（86 行、零 Traceback）、`test_v80()` 137 条、
+`__version__ = 0.80.0`。全量自检 **3465/3465**；报告 92 / probe 126。
+KI#312–315，硬规矩 72 / 73（附录 S），综合判据
+`wb_chain_located_but_command_dispatch_not_reached`，链未闭合。
