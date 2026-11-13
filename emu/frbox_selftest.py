@@ -7997,6 +7997,240 @@ def test_v80():
 
 
 
+def test_v81():
+    """V81：主循环返回码两道串联判据、86 号服务宽度口径、规矩 74/75。"""
+    import os
+    import io
+    from frbox import cmd81 as C
+
+    # ---- 常量：收敛设备策略
+    check("V81 BOOT", C.BOOT_STEPS, 191520)
+    check("V81 VEC_BOOT", C.VEC_BOOT, 0x2B)
+    check("V81 VEC_TIMER", C.VEC_TIMER, 0x18)
+    check("V81 RUN", C.RUN_STEPS, 500000)
+    check("V81 WINDOW", C.WINDOW_STEPS, 1000000)
+    check("V81 POST", C.POST_STEPS, 200000)
+    check("V81 FORCE", C.FORCE_STEPS, 20000)
+    check("V81 INJECT", C.INJECT_TIMES, 110)
+    check("V81 COV_BASE", C.COV_BASE, 5439)
+    check("V81 SLOT8", C.SLOT8, 0x9F59F7C8)
+
+    # ---- 常量：主循环 / 86 号服务
+    check("V81 主循环等待", C.MAIN_WAIT, 0x00175270)
+    check("V81 主循环 nop", C.MAIN_NOP, 0x00175272)
+    check("V81 保存 r4", C.MAIN_ST_R4, 0x00175274)
+    check("V81 mov r12,r4", C.MAIN_MOV_R12_R4, 0x00175276)
+    check("V81 cmp #0", C.MAIN_CMP0, 0x00175278)
+    check("V81 第一道 beq", C.MAIN_BEQ, 0x0017527A)
+    check("V81 beq rel9", C.MAIN_BEQ_REL9, 4)
+    check("V81 beq 目标", C.MAIN_BEQ_TARGET, 0x00175284)
+    check("V81 命令装载", C.CMD_LOAD, 0x0017527C)
+    check("V81 命令装载立即数", C.CMD_LOAD_IMM32, 1529660)
+    check("V81 装载即分发段", C.CMD_LOAD_IMM32, C.CMD_SEG)
+    check("V81 主循环 jmp", C.MAIN_JMP, 0x00175282)
+    check("V81 服务号立即数", C.MAIN_SVC_IMM32, 0xFFFFFF56)
+    check("V81 服务号 8 位", C.MAIN_SVC_8, 86)
+    check("V81 服务号 32 位", C.MAIN_SVC_32, -170)
+    check("V81 flgid", C.MAIN_FLGID, 12)
+    check("V81 位模式", C.MAIN_WAIPTN, 0xA2A05E1C)
+    check("V81 wfmode", C.MAIN_WFMODE, 2)
+    check("V81 r13 设定点", C.MAIN_R13_SET, 0x00175268)
+
+    # ---- 常量：86 号服务普查
+    check("V81 86 号调用点", C.SVC86_CALLS, 91)
+    check("V81 三元组种类", C.SVC86_TRIPLES, 57)
+    check("V81 全 ROM 调用点", C.ALL_CALLS, 2297)
+    check("V81 服务号种类", C.ALL_SVC_KINDS, 25)
+    check("V81 已命名服务号数", len(C.SVC_NAMED), 16)
+    check("V81 86 不在已命名表", C.MAIN_SVC_8 in C.SVC_NAMED, False)
+    check("V81 最常见三元组", C.SVC86_TOP_TRIPLE, (12, 262144, 2))
+    check("V81 最常见次数", C.SVC86_TOP_TRIPLE_N, 6)
+    check("V81 固定 r7", C.SVC86_FIXED_R7, 2)
+
+    # ---- 常量：命令分发段（单码分发器）
+    check("V81 分发段", C.CMD_SEG, 0x0017573C)
+    check("V81 ldi:8 立即数", C.CMD_LDI8, 171)
+    check("V81 extsb 位置", C.CMD_EXTSB_PC, 0x0017573E)
+    check("V81 第二道 cmp", C.CMD_CMP, 0x00175740)
+    check("V81 第二道 beq", C.CMD_BEQ, 0x00175742)
+    check("V81 beq rel9", C.CMD_BEQ_REL9, 4)
+    check("V81 唯一命令码", C.CMD_CODE, -85)
+    check("V81 不匹配装载", C.CMD_MISS_LDI, 0x00175744)
+    check("V81 不匹配 jmp", C.CMD_MISS_JMP, 0x0017574A)
+    check("V81 回主循环立即数", C.CMD_BACK_IMM32, 1528410)
+    check("V81 回主循环目标", C.CMD_BACK_TARGET, 0x0017525A)
+    check("V81 写回调用点", C.WB_CALL, 0x0017574C)
+    check("V81 写回 rel12", C.WB_CALL_REL12, 221)
+    check("V81 写回函数", C.WB_FN, 0x00175908)
+    check("V81 写回段末", C.WB_END, 0x001759A6)
+    check("V81 写回段条数", C.WB_SEG_N, 75)
+    check("V81 清零函数", C.CLEAR_FN, 0x001758EC)
+    check("V81 清零段条数", C.CLEAR_SEG_N, 12)
+
+    # ---- 常量：真内核与分发表证伪
+    check("V81 内核入口", C.KERNEL_ENTRY, 0x040668)
+    check("V81 索引 lsl1", C.KERNEL_SVC_LSL1, 0x0406A4)
+    check("V81 表项 lduh", C.KERNEL_SVC_LDUH, 0x0406AC)
+    check("V81 表项 extsh", C.KERNEL_SVC_EXTSH, 0x0406AE)
+    check("V81 表项 add", C.KERNEL_SVC_ADD, 0x0406B0)
+    check("V81 服务 call", C.KERNEL_SVC_CALL, 0x0406B2)
+    check("V81 出口 extsb", C.KERNEL_EXIT_EXTSB, 0x0406BE)
+    check("V81 reti", C.KERNEL_RETI, 0x0406E2)
+    check("V81 分发表基址", C.SVC_TABLE_BASE, 0x040660)
+    check("V81 86 号表项半字", C.SVC86_TABLE_HALF, 0xD106)
+    check("V81 表项有符号", C.SVC86_TABLE_SIGNED, -12026)
+    check("V81 表项目标", C.SVC86_TABLE_TARGET, 0x03D766)
+    check("V81 ROM 下界", C.ROM_LO, 0x040000)
+
+    # ---- 常量：等形补位 / 两道门归因
+    check("V81 flag12 对象", C.FLAG12_OBJ, 0x68000968)
+    check("V81 位模式偏移", C.OBJ_PAT, 8)
+    check("V81 位模式地址", C.FLAG12_PAT, 0x68000970)
+    check("V81 补位四组数", len(C.PATCH_PATS), 4)
+    check("V81 补位位模式", C.PATCH_PATS[1], C.MAIN_WAIPTN)
+    check("V81 补位全 1", C.PATCH_PATS[2], 0xFFFFFFFF)
+    check("V81 补位新增 PC", C.PATCH_NPC, (2291, 2383, 2383, 2291))
+    check("V81 补位读回", C.PATCH_READBACK,
+          (0x00000001, 0x02205E19, 0x5F7FFFFB, 0x00000001))
+    check("V81 补位 JMP 全 False", C.PATCH_JMP_HITS, (False,) * 4)
+    check("V81 补位清零命中", C.PATCH_CLEAR_HITS, (12, 12, 12, 12))
+    check("V81 补位写回命中", C.PATCH_WB_HITS, (0, 0, 0, 0))
+    check("V81 补位等形", C.PATCH_EQUAL_SHAPE, True)
+    check("V81 错配标签", C.MIS_TAG, "MIS110")
+    check("V81 归因四组数", len(C.Q_CASES), 4)
+    check("V81 归因等形", C.Q_EQUAL_SHAPE, True)
+    check("V81 Q1 命中写回", C.Q_CASES[1][4], 11)
+    check("V81 Q1 WB_CALL", C.Q_CASES[1][5], True)
+    check("V81 Q0 命中写回", C.Q_CASES[0][4], 0)
+    check("V81 Q3 命中写回", C.Q_CASES[3][4], 0)
+    check("V81 静态链地址数", len(C.CHAIN_PCS), 21)
+
+    # ---- 纯函数：补码与宽度（规矩 74）
+    check("V81 sx(0x56,8)", C.sx(0x56, 8), 86)
+    check("V81 sx(0xAB,8)", C.sx(0xAB, 8), -85)
+    check("V81 sx32 0xFFFFFF56", C.sx(0xFFFFFF56, 32), -170)
+    check("V81 sx(0x7FF,11)", C.sx(0x7FF, 11), -1)
+    check("V81 sx(0x0DD,11)", C.sx(0x0DD, 11), 221)
+    check("V81 imm_code 宽 8", C.imm_code(0xFFFFFF56, 8), 86)
+    check("V81 imm_code 宽 32", C.imm_code(0xFFFFFF56, 32), -170)
+    check("V81 svc_pair", C.svc_pair(), (86, -170))
+    check("V81 两种口径差 256", C.MAIN_SVC_8 - C.MAIN_SVC_32, 256)
+
+    # ---- 纯函数：分支目标
+    check("V81 第一道 beq 目标",
+          C.rel9_target(C.MAIN_BEQ, 4), C.MAIN_BEQ_TARGET)
+    check("V81 第二道 beq 目标",
+          C.rel9_target(C.CMD_BEQ, 4), C.WB_CALL)
+    check("V81 写回 rel12 目标",
+          C.rel12_target(C.WB_CALL, 221), C.WB_FN)
+    check("V81 rel9 负偏移", C.rel9_target(0x1000, 254), 0x0FFE)
+    check("V81 rel12 负偏移", C.rel12_target(0x1000, 0x7FF), 0x1000)
+
+    # ---- 纯函数：两道串联判据
+    g0 = C.two_gate(0, False, False)
+    check("V81 第一道 r4=0 关闭", g0[0], False)
+    check("V81 r4=0 第二道", g0[1], False)
+    check("V81 r4=0 判据", g0[2], "gate1_zero_return_code")
+    g1 = C.two_gate(-3, True, False)
+    check("V81 r4=-3 第一道开", g1[0], True)
+    check("V81 r4=-3 第二道关", g1[1], False)
+    check("V81 r4=-3 判据", g1[2], "gate2_other_code")
+    g2 = C.two_gate(-85, True, True)
+    check("V81 r4=-85 第一道开", g2[0], True)
+    check("V81 r4=-85 第二道开", g2[1], True)
+    check("V81 r4=-85 判据", g2[2], "dispatch_to_writeback")
+    check("V81 单码分发器", C.single_code([-85]), (True, -85))
+    check("V81 多码非单码", C.single_code([-85, -3]), (False, None))
+    check("V81 空码集", C.single_code([]), (False, None))
+
+    # ---- 纯函数：等形 / 补位时机 / 归因
+    eqrows = [{"warmup": 191520, "service_calls": 110, "post_steps": 200000},
+              {"warmup": 191520, "service_calls": 110, "post_steps": 200000}]
+    check("V81 等形 True", C.equal_shape(eqrows), True)
+    check("V81 等形次数不同",
+          C.equal_shape([eqrows[0], dict(eqrows[1], service_calls=160)]),
+          False)
+    check("V81 等形 post 不同",
+          C.equal_shape([eqrows[0], dict(eqrows[1], post_steps=20000)]),
+          False)
+    check("V81 等形空", C.equal_shape([]), False)
+    pt = C.patch_timing_verdict({"MAIN_JMP": False}, {"MAIN_JMP": False},
+                                2291, 2383)
+    check("V81 补位在等待之前", pt["before_wait"], True)
+    check("V81 补位改变执行", pt["execution_changed"], True)
+    check("V81 命令路径增益 0", pt["hit_delta"]["MAIN_JMP"], 0)
+    check("V81 补位时机判据", pt["verdict"],
+          "patch_changed_execution_but_not_command_path")
+    pt2 = C.patch_timing_verdict({}, {}, 100, 100)
+    check("V81 无效对照", pt2["verdict"],
+          "patch_had_no_effect__not_a_valid_control")
+    at = C.attribution([{"clear": 12}, {"clear": 12}], [{"clear": 0}],
+                       key="clear")
+    check("V81 归因分离", at[0], True)
+    check("V81 实验组最大", at[1], 12)
+    check("V81 对照组最大", at[2], 0)
+    check("V81 归因不分离",
+          C.attribution([{"clear": 0}], [{"clear": 0}], key="clear")[0],
+          False)
+
+    # ---- 纯函数：分发表证伪 / 普查 / 综合判据
+    tv = C.table_offset_verdict(0xD106)
+    check("V81 分发表假设证伪", tv[0], False)
+    check("V81 表项符号值", tv[1], -12026)
+    check("V81 表项目标", tv[2], 0x03D766)
+    check("V81 正偏移不证伪", C.table_offset_verdict(0x0660)[0], True)
+    tc = C.triple_census([(12, 262144, 2)] * 6 + [(7, None, 2)] * 5)
+    check("V81 普查总数", tc[0], 11)
+    check("V81 普查种类", tc[1], 2)
+    check("V81 普查最常见", tc[2], ((12, 262144, 2), 6))
+    check("V81 综合判据", C.cmd_verdict(False, False, False, 0),
+          "wb_chain_located_but_command_dispatch_not_reached")
+    check("V81 补位改变执行不改变判据",
+          C.cmd_verdict(False, False, False, 92),
+          "wb_chain_located_but_command_dispatch_not_reached")
+    check("V81 第二道开但码不匹配",
+          C.cmd_verdict(True, True, False, 0),
+          "gate2_reached_but_code_mismatch")
+    check("V81 反事实到达写回",
+          C.cmd_verdict(True, True, True, 0),
+          "writeback_reached_by_counterfactual_only")
+
+    # ---- 文档与边界
+    doc = C.__doc__
+    check("V81 文档含规矩 74", "规矩 74" in doc, True)
+    check("V81 文档含规矩 75", "规矩 75" in doc, True)
+    check("V81 文档含 KI#191", "KI#191" in doc, True)
+    check("V81 文档含反事实边界", "反事实补全" in doc, True)
+    check("V81 文档含共同禁语", "不能报显示链通了" in doc, True)
+    check("V81 文档含单码分发器", "单码分发器" in doc, True)
+    check("V81 文档含双宽度立即数", "0xFFFFFF56" in doc, True)
+    check("V81 模块导出非空", len(C.__all__) > 30, True)
+
+    # ---- 结果文件存在与关键行
+    rp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "results", "frbox", "cmd81.txt")
+    if os.path.exists(rp):
+        txt = io.open(rp, encoding="utf-8", errors="replace").read()
+        check("V81 结果无 Traceback", "Traceback" in txt, False)
+        check("V81 结果有 A 段", "A. 静态链" in txt, True)
+        check("V81 结果有 C 段", "两道串联判据" in txt, True)
+        check("V81 结果有 H 段", "H. 结案与仍开放" in txt, True)
+        check("V81 结果有 86 号普查", "86 号调用点 = 91" in txt, True)
+        check("V81 结果有双宽度", "8 位口径 = 86" in txt, True)
+        check("V81 结果有唯一入边", "call rel12=221" in txt, True)
+        check("V81 结果有单码分发器", "单码分发器" in txt, True)
+        check("V81 结果有规矩 75", "规矩 75" in txt, True)
+        check("V81 结果有证伪", "证伪" in txt, True)
+        check("V81 结果有 11/75", "11/75" in txt, True)
+        check("V81 结果有综合判据",
+              "wb_chain_located_but_command_dispatch_not_reached" in txt,
+              True)
+        check("V81 结果有链未闭合", "链未闭合" in txt, True)
+    else:
+        check("V81 结果文件存在", False, True)
+
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -8078,6 +8312,7 @@ def main():
     test_v78()
     test_v79()
     test_v80()
+    test_v81()
     test_lists()
     test_bctrl()
     test_dual40()
