@@ -8231,6 +8231,209 @@ def test_v81():
 
 
 
+def test_v82():
+    """V82：真内核分发表 32 位有符号索引口径、-170 号处理函数、规矩 76/77。"""
+    import os
+    import io
+    from frbox import svc82 as C
+
+    # ---- 常量：收敛设备策略
+    check("V82 BOOT", C.BOOT_STEPS, 191520)
+    check("V82 VEC_BOOT", C.VEC_BOOT, 0x2B)
+    check("V82 VEC_TIMER", C.VEC_TIMER, 0x18)
+    check("V82 RUN", C.RUN_STEPS, 500000)
+    check("V82 WINDOW", C.WINDOW_STEPS, 1000000)
+    check("V82 轨迹步数", C.TRAP_BOOT_STEP, 483841)
+    check("V82 后续步数", C.TRAP_AFTER_STEPS, 260)
+
+    # ---- 常量：向量表 / 陷阱入口
+    check("V82 TBR", C.TBR, 0x000EFC00)
+    check("V82 vec 0x40", C.VEC_TRAP, 0x40)
+    check("V82 向量槽", C.VEC_TRAP_SLOT, 0x000EFEFC)
+    check("V82 陷阱入口", C.TRAP_ENTRY, 0x00040668)
+    check("V82 清符号 lsl", C.TRAP_CLR_LSL, 0x00040682)
+    check("V82 清符号 lsr", C.TRAP_CLR_LSR, 0x00040684)
+    check("V82 索引 lsl", C.TRAP_IDX_LSL, 0x000406A4)
+    check("V82 表零点 ldi", C.TRAP_TBL_LDI, 0x000406A6)
+    check("V82 lduh", C.TRAP_LDUH, 0x000406AC)
+    check("V82 extsh", C.TRAP_EXTSH, 0x000406AE)
+    check("V82 add", C.TRAP_ADD, 0x000406B0)
+    check("V82 call", C.TRAP_CALL, 0x000406B2)
+    check("V82 返回点", C.TRAP_RET, 0x000406B4)
+    check("V82 恢复例程", C.TRAP_RESTORE, 0x000406B6)
+    check("V82 出口 extsb", C.TRAP_EXTSB, 0x000406BE)
+    check("V82 reti", C.TRAP_RETI, 0x000406E2)
+    check("V82 规整例程", C.TRAP_NORM_FN, 0x000404E2)
+    check("V82 恢复函数", C.TRAP_RESTORE_FN, 0x000404E6)
+
+    # ---- 常量：分发表口径
+    check("V82 表零点", C.TBL_ZERO, 0x00040660)
+    check("V82 空槽占位", C.EMPTY_HALVES, (0x0000, 0x0004))
+    check("V82 表区下界", C.TBL_LO, 0x00040500)
+    check("V82 表区上界", C.TBL_HI, 0x00040660)
+    check("V82 首次陷阱步", C.FIRST_TRAP_STEP, 191279)
+    check("V82 首次陷阱 r12", C.FIRST_TRAP_R12, 0xFFFFFFAD)
+    check("V82 首次表项槽", C.FIRST_TRAP_SLOT, 0x000405BA)
+    check("V82 首次表项半字", C.FIRST_TRAP_HALF, 0x087E)
+    check("V82 首次偏移", C.FIRST_TRAP_OFF, 2174)
+    check("V82 首次目标", C.FIRST_TRAP_TARGET, 0x00040EDE)
+
+    # ---- 常量：主循环 / -170 号服务
+    check("V82 主循环等待", C.MAIN_WAIT, 0x00175270)
+    check("V82 nop", C.MAIN_NOP, 0x00175272)
+    check("V82 mov r12,r4", C.MAIN_MOV_R12_R4, 0x00175276)
+    check("V82 cmp #0", C.MAIN_CMP0, 0x00175278)
+    check("V82 beq", C.MAIN_BEQ, 0x0017527A)
+    check("V82 第一道 jmp", C.MAIN_JMP, 0x00175282)
+    check("V82 分发段", C.CMD_SEG, 0x0017573C)
+    check("V82 第二道 cmp", C.CMD_CMP, 0x00175740)
+    check("V82 第二道 beq", C.CMD_BEQ, 0x00175742)
+    check("V82 写回调用", C.WB_CALL, 0x0017574C)
+    check("V82 写回函数", C.WB_FN, 0x00175908)
+    check("V82 服务号立即数", C.MAIN_IMM32, 0xFFFFFF56)
+    check("V82 服务号 8 位", C.MAIN_SVC_8, 86)
+    check("V82 服务号 32 位", C.MAIN_SVC_32, -170)
+    check("V82 双宽度差 256", C.MAIN_SVC_8 - C.MAIN_SVC_32, 256)
+    check("V82 lsl1 结果", C.MAIN_SVC_LSL1, 0xFFFFFEAC)
+    check("V82 清符号中间值", C.MAIN_SVC_CLEARED, 0x7FFFFF56)
+    check("V82 表项槽", C.MAIN_SLOT, 0x0004050C)
+    check("V82 表项半字", C.MAIN_HALF, 0x158A)
+    check("V82 表项偏移", C.MAIN_OFF, 5514)
+    check("V82 处理函数", C.MAIN_HANDLER, 0x00041BEA)
+    check("V82 flgid", C.MAIN_FLGID, 12)
+    check("V82 位模式", C.MAIN_WAIPTN, 0xA2A05E1C)
+    check("V82 wfmode", C.MAIN_WFMODE, 2)
+    check("V82 唯一命令码", C.CMD_CODE, -85)
+
+    # ---- 常量：全表统计与相邻入口
+    check("V82 32 位普查", C.CENSUS_32BIT, (166, 37))
+    check("V82 8 位普查", C.CENSUS_8BIT, (84, 1))
+    check("V82 负号有效", C.NEG_VALID, 134)
+    check("V82 负号落 ROM", C.NEG_INROM, 71)
+    check("V82 负号像序言", C.NEG_PRO, 57)
+    check("V82 非负有效", C.POS_VALID, 119)
+    check("V82 非负落 ROM", C.POS_INROM, 29)
+    check("V82 非负像序言", C.POS_PRO, 4)
+    check("V82 -170 唯一", C.HANDLER_170_UNIQUE, (-170,))
+    check("V82 相邻 -46", C.ADJACENT_ENTRIES[0x00041B0A], -46)
+    check("V82 相邻 -44", C.ADJACENT_ENTRIES[0x00041CA8], -44)
+    check("V82 相邻 -172", C.ADJACENT_ENTRIES[0x00041DD6], -172)
+    check("V82 相邻 -85", C.ADJACENT_ENTRIES[0x00040F1A], -85)
+    check("V82 相邻 -83", C.ADJACENT_ENTRIES[0x00040EDE], -83)
+
+    # ---- 常量：返回码写点与出口
+    check("V82 写点数", len(C.R12_WRITES), 11)
+    check("V82 写点 0", C.R12_WRITES[0], (0x00041C98, 0x00, 0))
+    check("V82 写点 -85", C.R12_WRITES[1], (0x00041CA0, 0xAB, -85))
+    check("V82 写点 -17", C.R12_WRITES[2], (0x00041CA6, 0xEF, -17))
+    check("V82 -85 写点数",
+          sum(1 for _p, _i, v in C.R12_WRITES if v == -85), 2)
+    check("V82 出口清单数", len(C.EXIT_170), 12)
+    check("V82 出口首", C.EXIT_170[0], 0x00041C96)
+    check("V82 反事实组数", len(C.CF_GROUPS), 4)
+    check("V82 BASE 不写", C.CF_GROUPS[0], ("BASE", None))
+    check("V82 R85 写 -85", C.CF_GROUPS[2], ("R85", 0xFFFFFFAB))
+    check("V82 R17 写 -17", C.CF_GROUPS[3], ("R17", 0xFFFFFFEF))
+
+    # ---- 纯函数：补码 / 双宽度 / 表项口径
+    check("V82 sx8 0x56", C.sx(0x56, 8), 86)
+    check("V82 sx8 0xAB", C.sx(0xAB, 8), -85)
+    check("V82 sx32 0xFFFFFF56", C.sx(0xFFFFFF56, 32), -170)
+    check("V82 width_pair", C.width_pair(0xFFFFFF56), (86, -170))
+    check("V82 extsh 0x158A", C.extsh(0x158A), 5514)
+    check("V82 extsh 0xD106", C.extsh(0xD106), -12026)
+    check("V82 extsh 0x087E", C.extsh(0x087E), 2174)
+    check("V82 slot -83", C.slot_of(-83), 0x000405BA)
+    check("V82 slot -170", C.slot_of(-170), 0x0004050C)
+    check("V82 slot +86", C.slot_of(86), 0x0004070C)
+    check("V82 slot 0", C.slot_of(0), C.TBL_ZERO)
+    check("V82 slot -1", C.slot_of(-1), 0x0004065E)
+    check("V82 slot 用 32 位立即数",
+          C.slot_of(0xFFFFFF56), C.MAIN_SLOT)
+    check("V82 target 0x158A", C.target_of(0x158A), C.MAIN_HANDLER)
+    check("V82 target 0x087E", C.target_of(0x087E), C.FIRST_TRAP_TARGET)
+    check("V82 target 0xD106", C.target_of(0xD106), 0x0003D766)
+    check("V82 is_empty 0000", C.is_empty(0x0000), True)
+    check("V82 is_empty 0004", C.is_empty(0x0004), True)
+    check("V82 is_empty 158A", C.is_empty(0x158A), False)
+    check("V82 lsl1 稳健", C.lsl1_stable(0xFFFFFF56, 0x7FFFFF56), True)
+    check("V82 lsl1 非稳健", C.lsl1_stable(0x10, 0x20), False)
+    rd = lambda a: {0x0004050C: 0x158A, 0x000405BA: 0x087E,
+                    0x0004070C: 0xD106}.get(a, 0)
+    check("V82 resolve -170", C.resolve(rd, -170),
+          (0x0004050C, 0x158A, 5514, 0x00041BEA, True))
+    check("V82 resolve -83", C.resolve(rd, -83)[3], 0x00040EDE)
+    check("V82 resolve +86 落 ROM 外", C.resolve(rd, 86)[4], False)
+
+    # ---- 纯函数：等形 / 两道门 / 综合判据
+    rows = [{"boot": 483841, "inject": 0, "post": 260, "write_pc": 0x0406B4},
+            {"boot": 483841, "inject": 0, "post": 260, "write_pc": 0x0406B4}]
+    check("V82 等形 True", C.equal_shape(rows), True)
+    check("V82 等形 boot 不同",
+          C.equal_shape([rows[0], dict(rows[1], boot=1)]), False)
+    check("V82 等形 post 不同",
+          C.equal_shape([rows[0], dict(rows[1], post=1)]), False)
+    check("V82 等形空", C.equal_shape([]), False)
+    check("V82 gate 关闭", C.gate_verdict(False, False, False), "gate1_closed")
+    check("V82 gate 只开第一道",
+          C.gate_verdict(True, True, False), "gate2_code_mismatch")
+    check("V82 gate 两道全开",
+          C.gate_verdict(True, True, True), "both_gates_open")
+    check("V82 gate 分发段未进",
+          C.gate_verdict(True, False, False),
+          "gate1_open_but_dispatch_unreached")
+    check("V82 综合判据",
+          C.svc_verdict(True, True, True, True, False),
+          "kernel_dispatch_resolved_counterfactual_gates_open")
+    check("V82 综合判据 事件已定位",
+          C.svc_verdict(True, True, True, True, True), "event_semantics_located")
+    check("V82 综合判据 静态未闭合",
+          C.svc_verdict(False, True, True, True, False), "open")
+    check("V82 模块导出非空",
+          len([x for x in dir(C) if x.isupper()]) > 30, True)
+
+    # ---- 文档与边界
+    doc = C.__doc__
+    check("V82 文档含规矩 76", "规矩 76" in doc, True)
+    check("V82 文档含规矩 77", "规矩 77" in doc, True)
+    check("V82 文档含 KI#191", "KI#191" in doc, True)
+    check("V82 文档含反事实边界", "反事实补全" in doc, True)
+    check("V82 文档含共同禁语", "不能报显示链通了" in doc, True)
+    check("V82 文档含单步实测", "单步轨迹" in doc, True)
+    check("V82 文档含 0xFFFFFF56", "0xFFFFFF56" in doc, True)
+    check("V82 文档含 0x041BEA", "0x041BEA" in doc, True)
+    check("V82 文档含零点不是起点", "零点" in doc, True)
+
+    # ---- 结果文件存在与关键行
+    rp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "results", "frbox", "svc82.txt")
+    if os.path.exists(rp):
+        txt = io.open(rp, encoding="utf-8", errors="replace").read()
+        check("V82 结果无 Traceback", "Traceback" in txt, False)
+        check("V82 结果有 A 段", "A. int #0x40 向量槽" in txt, True)
+        check("V82 结果有 B 段", "B. 单步实测：第一次" in txt, True)
+        check("V82 结果有 C 段", "C. 单步实测：主循环" in txt, True)
+        check("V82 结果有 D 段", "D. 全表两种口径普查" in txt, True)
+        check("V82 结果有 E 段", "E. -170 号表项槽" in txt, True)
+        check("V82 结果有 F 段", "F. 等形反事实四组" in txt, True)
+        check("V82 结果有 G 段", "G. 两道门归因分离" in txt, True)
+        check("V82 结果有 H 段", "H. 综合判据与开放项" in txt, True)
+        check("V82 结果有处理函数", "0x041BEA" in txt, True)
+        check("V82 结果有表项槽", "0x04050C" in txt, True)
+        check("V82 结果有等形", "等形四项" in txt, True)
+        check("V82 结果有两道门分离", "归因分离" in txt, True)
+        check("V82 结果有 -85 反事实", "R85" in txt, True)
+        check("V82 结果有 -17 对照", "R17" in txt, True)
+        check("V82 结果有反事实标注", "反事实补全" in txt, True)
+        check("V82 结果有 6 台机器", "6 台独立机器" in txt, True)
+        check("V82 结果有综合判据",
+              "kernel_dispatch_resolved_counterfactual_gates_open" in txt,
+              True)
+    else:
+        check("V82 结果文件存在", False, True)
+
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -8313,6 +8516,7 @@ def main():
     test_v79()
     test_v80()
     test_v81()
+    test_v82()
     test_lists()
     test_bctrl()
     test_dual40()
