@@ -7775,6 +7775,228 @@ def test_v79():
 
 
 
+def test_v80():
+    """V80：写回段唯一入口、flag 12 参数口径、时基配置与器件分离、规矩 72/73。"""
+    import os
+    import io
+    from frbox import wb80 as C
+
+    # ---- 常量：时基配置链
+    check("V80 ICR 地址", C.ICR_ADDR, 0x448)
+    check("V80 ICR 级别", C.ICR_LEVEL, 0x12)
+    check("V80 ICR 写点", C.ICR_INIT_PC, 0x040456)
+    check("V80 直接页 48", C.DIRECT48_PC, 0x04045C)
+    check("V80 直接页 4E", C.DIRECT4E_PC, 0x040460)
+    check("V80 批量 ICR", C.BATCH_ICR_PC, 0x040468)
+    check("V80 tick ISR", C.TICK_ISR, 0x0004046E)
+    check("V80 tick 调用点", C.TICK_CALL, 0x00040482)
+    check("V80 tick 函数", C.TICK_FN, 0x00040A44)
+    check("V80 真时基向量", C.VEC_TIMER, 0x18)
+    check("V80 收敛用向量", C.VEC_BOOT, 0x2B)
+
+    # ---- 常量：主循环 / 命令分发
+    check("V80 主循环等待", C.MAIN_WAIT, 0x00175270)
+    check("V80 主循环 beq", C.MAIN_BEQ, 0x0017527A)
+    check("V80 beq 目标", C.MAIN_BEQ_TARGET, 0x00175284)
+    check("V80 命令跳点", C.MAIN_JMP, 0x00175282)
+    check("V80 命令装载", C.CMD_LOAD, 0x0017527C)
+    check("V80 命令分发段", C.CMD_SEG, 0x0017573C)
+    check("V80 命令比较", C.CMD_CMP, 0x00175740)
+    check("V80 命令 beq", C.CMD_BEQ, 0x00175742)
+    check("V80 命令码", C.CMD_CODE, -85)
+    check("V80 命令立即数", C.CMD_LDI8, 171)
+    check("V80 唯一 WB_CALL", C.WB_CALL, 0x0017574C)
+    check("V80 WB rel12", C.WB_CALL_REL12, 221)
+    check("V80 写回函数", C.WB_FN, 0x00175908)
+    check("V80 写回段末", C.WB_END, 0x001759A6)
+
+    # ---- 常量：清零段 / 写回段
+    check("V80 清零函数", C.CLEAR_FN, 0x001758EC)
+    check("V80 清零 st", C.CLEAR_ST, 0x001758FA)
+    check("V80 清零 bgt", C.CLEAR_BGT, 0x001758F8)
+    check("V80 清零回跳", C.CLEAR_BGT_TARGET, 0x001758F6)
+    check("V80 清零 setflg", C.CLEAR_SETFLG, 0x00175904)
+    check("V80 清零 ret", C.CLEAR_RET, 0x00175906)
+    check("V80 清零段条数", C.CLEAR_SEG_N, 12)
+    check("V80 写回段条数", C.WB_SEG_N, 75)
+    check("V80 写回 st", C.WB_ST, 0x00175958)
+    check("V80 写回循环回跳", C.WB_LOOP_BACK, 0x00175930)
+    check("V80 写回循环 blt", C.WB_LOOP_BLT, 0x0017598E)
+    check("V80 槽步长", C.WB_SLOT_STEP, 12)
+    check("V80 槽字节数", C.WB_SLOT_BYTES, 96)
+    check("V80 槽轮数", C.WB_SLOT_ROUNDS, 8)
+    check("V80 8 槽基址", C.SLOT8, 0x9F59F7C8)
+
+    # ---- 常量：flag 12 通信面
+    check("V80 flag12", C.FLAG12, 12)
+    check("V80 flag12 对象", C.FLAG12_OBJ, 0x68000968)
+    check("V80 位模式偏移", C.OBJ_PAT, 8)
+    check("V80 位模式地址", C.FLAG12_PAT, 0x68000970)
+    check("V80 wai_flg", C.WAI_FLG, -46)
+    check("V80 clr_flg", C.CLR_FLG, -47)
+    check("V80 set_flg", C.SET_FLG, -48)
+    check("V80 dly_tsk", C.DLY_TSK, -85)
+    check("V80 wai_flg(12) 总数", C.WAI12_TOTAL, 12)
+    check("V80 写回段内 wai(12)", C.WAI12_IN_WB, 2)
+    check("V80 set_flg(12) 总数", C.SET12_TOTAL, 49)
+    check("V80 clr_flg(12) 总数", C.CLR12_TOTAL, 65)
+    check("V80 写回段 wai PC", C.WAI12_IN_WB_PCS,
+          (0x0017591C, 0x00175974))
+    check("V80 清零段 set PC", C.SETFLG12_CLEAR_PC, 0x00175904)
+    check("V80 写回段 set PC", C.SETFLG12_WB_PCS,
+          (0x00175962, 0x00175998))
+    check("V80 写回段 clr PC", C.CLRFLG12_WB_PCS,
+          (0x0017592C, 0x00175984))
+    check("V80 服务序列表长度", len(C.CHAIN_CALLS), 8)
+
+    # ---- 常量：设备策略
+    check("V80 BOOT", C.BOOT_STEPS, 191520)
+    check("V80 RUN", C.RUN_STEPS, 500000)
+    check("V80 POST", C.POST_STEPS, 200000)
+    check("V80 WINDOW", C.WINDOW_STEPS, 1000000)
+    check("V80 CF_STEP", C.CF_STEP, 2000)
+    check("V80 FORCE_STEPS", C.FORCE_STEPS, 20000)
+
+    # ---- 纯函数：补码与宽度
+    check("V80 sx8(0xAB)", C.sx8(0xAB), -85)
+    check("V80 sx8(171)", C.sx8(171), -85)
+    check("V80 sx8(254)", C.sx8(254), -2)
+    check("V80 sx32 0xFFFFFF56", C.sx32(0xFFFFFF56), -170)
+    check("V80 svc_num 宽 32", C.svc_num(0xFFFFFF56, 32), -170)
+    check("V80 svc_num 宽 8", C.svc_num(0xFFFFFF56, 8), 86)
+    check("V80 sx(0x7FF,11)", C.sx(0x7FF, 11), -1)
+    check("V80 sx(0x0DD,11)", C.sx(0x0DD, 11), 221)
+
+    # ---- 纯函数：分支目标（规矩 57 / 70）
+    check("V80 WB rel12 目标", C.rel12_target(C.WB_CALL, 221), C.WB_FN)
+    check("V80 命令 beq 目标", C.rel9_target(C.CMD_BEQ, 4), C.WB_CALL)
+    check("V80 主循环 beq 目标",
+          C.rel9_target(C.MAIN_BEQ, 4), C.MAIN_BEQ_TARGET)
+    check("V80 清零 bgt 目标",
+          C.rel9_target(C.CLEAR_BGT, 254), C.CLEAR_BGT_TARGET)
+    check("V80 写回 blt 目标",
+          C.rel9_target(C.WB_LOOP_BLT, 208), C.WB_LOOP_BACK)
+
+    # ---- 纯函数：参数寄存器口径（规矩 72）
+    check("V80 flg set 取 r4", C.flg_arg(C.SET_FLG, 12, 1), 12)
+    check("V80 flg clr 取 r4", C.flg_arg(C.CLR_FLG, 12, 0xFE), 12)
+    check("V80 flg wai 取 r5", C.flg_arg(C.WAI_FLG, None, 12), 12)
+    check("V80 flg twai 取 r5", C.flg_arg(-170, None, 12), 12)
+    check("V80 flg 未知服务", C.flg_arg(0, 1, 2), None)
+    check("V80 bits set 取 r5", C.bits_arg(C.SET_FLG, 1, 2), 1)
+    check("V80 bits wai 取 r6", C.bits_arg(C.WAI_FLG, 12, 1), 1)
+    check("V80 bits 未知服务", C.bits_arg(0, 1, 2), None)
+
+    # ---- 纯函数：入口判据
+    check("V80 命令门 -85", C.command_gate(-85), True)
+    check("V80 命令门 0", C.command_gate(0), False)
+    check("V80 命令门 1", C.command_gate(1), False)
+    check("V80 命令门换码", C.command_gate(-85, code=0), False)
+
+    # ---- 纯函数：循环判据
+    lv = C.loop_verdict(C.CLEAR_BGT, 254, C.CLEAR_BGT_TARGET,
+                        C.WB_LOOP_BLT, 208, C.WB_LOOP_BACK)
+    check("V80 清零回跳值", lv["clear_back"], 0x001758F6)
+    check("V80 清零回跳在函数内", lv["clear_in_fn"], True)
+    check("V80 写回回跳值", lv["wb_back"], 0x00175930)
+    check("V80 写回回跳在函数内", lv["wb_in_fn"], True)
+    check("V80 写回轮数", lv["wb_rounds"], 8)
+    check("V80 两回跳都在函数内", lv["all_inside"], True)
+    lv2 = C.loop_verdict(C.CLEAR_BGT, 254, 0x123456,
+                         C.WB_LOOP_BLT, 208, C.WB_LOOP_BACK)
+    check("V80 错期望报不闭合", lv2["all_inside"], False)
+
+    # ---- 纯函数：规矩 73 配置与器件
+    h = {"ICR_STB": True, "DIRECT48": True, "DIRECT4E": True,
+         "BATCH_ICR": True, "TICK_ISR": False}
+    v1 = C.icr_verdict(h, 0x12)
+    check("V80 配置链已做", v1["configured"], True)
+    check("V80 ICR 值正确", v1["icr_ok"], True)
+    check("V80 ISR 未命中", v1["isr_hit"], False)
+    check("V80 配置判据", v1["verdict"],
+          "config_done_device_event_missing")
+    v2 = C.icr_verdict(dict(h, TICK_ISR=True), 0x12)
+    check("V80 ISR 命中时不判缺器件", v2["verdict"], "inconclusive")
+    v3 = C.icr_verdict(dict(h, ICR_STB=False), 0x12)
+    check("V80 配置缺失不判已配", v3["configured"], False)
+    check("V80 ICR 值错", C.icr_verdict(h, 0x11)["icr_ok"], False)
+
+    # ---- 纯函数：等形与归因
+    e1 = C.equal_shape([{"injections": 110, "post_steps": 200000,
+                         "write_action": 1},
+                        {"injections": 110, "post_steps": 200000,
+                         "write_action": 1}])
+    check("V80 等形 True", e1["equal"], True)
+    e2 = C.equal_shape([{"injections": 110, "post_steps": 200000,
+                         "write_action": 1},
+                        {"injections": 160, "post_steps": 200000,
+                         "write_action": 1}])
+    check("V80 等形 False", e2["equal"], False)
+    check("V80 等形空", C.equal_shape([])["equal"], False)
+    a1 = C.attribution([{"clock_delta": 12}, {"clock_delta": 110}],
+                       [{"clock_delta": 0}])
+    check("V80 归因分离", a1["separated"], True)
+    check("V80 真时基非零", a1["timer_nonzero"], True)
+    check("V80 错配全 0", a1["mismatch_all_zero"], True)
+    check("V80 归因表", a1["timer"], [12, 110])
+    check("V80 归因不分离",
+          C.attribution([{"clock_delta": 0}], [{"clock_delta": 0}])["separated"],
+          False)
+
+    # ---- 纯函数：写数据门 / 强制入口
+    d1 = C.data_gate_verdict(0, 0, 0, 1)
+    check("V80 flag12 已置", d1["flag12_set"], True)
+    check("V80 写回段全 0", d1["wb_all_zero"], True)
+    check("V80 写数据门判据", d1["verdict"], "data_write_not_call_event")
+    check("V80 写数据门反例",
+          C.data_gate_verdict(0, 1, 0, 1)["verdict"], "inconclusive")
+    f1 = C.force_entry_verdict(39, 2334)
+    check("V80 强制命中数", f1["hit"], 39)
+    check("V80 函数体可执行", f1["body_executable"], True)
+    check("V80 强制非全段", f1["not_full"], True)
+    check("V80 强制判据", f1["verdict"], "model_force_is_not_firmware_call")
+    check("V80 强制 0 命中不可执行",
+          C.force_entry_verdict(0, 0)["body_executable"], False)
+
+    # ---- 纯函数：综合判据
+    ch = {"MAIN_WAIT": True, "MAIN_BEQ": True, "MAIN_JMP": False,
+          "WB_CALL": False, "WB_FN": False}
+    w1 = C.wb_verdict(v1, ch, d1, f1, a1)
+    check("V80 静态链已定位", w1["static_chain_located"], True)
+    check("V80 链未闭合", w1["chain_closed"], False)
+    check("V80 综合判据", w1["verdict"],
+          "wb_chain_located_but_command_dispatch_not_reached")
+    check("V80 闭合时不判未闭合",
+          C.wb_verdict(v1, dict(ch, WB_CALL=True, WB_FN=True),
+                       d1, f1, a1)["chain_closed"], True)
+
+    # ---- 文档与边界
+    doc = C.__doc__
+    check("V80 文档含规矩 72", "规矩 72" in doc, True)
+    check("V80 文档含规矩 73", "规矩 73" in doc, True)
+    check("V80 文档含 KI#191", "KI#191" in doc, True)
+    check("V80 文档含反事实边界", "反事实补全" in doc, True)
+    check("V80 文档含共同禁语", "不能报显示链通了" in doc, True)
+    check("V80 文档含不是顺序后继", "不是顺序后继" in doc, True)
+    check("V80 模块导出非空", len(C.__all__) > 30, True)
+
+    # ---- 结果文件存在与关键行
+    rp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "results", "frbox", "wb80.txt")
+    if os.path.exists(rp):
+        txt = io.open(rp, encoding="utf-8", errors="replace").read()
+        check("V80 结果无 Traceback", "Traceback" in txt, False)
+        check("V80 结果有 A 段", "A. 静态链" in txt, True)
+        check("V80 结果有 H 段", "H. 结案与仍开放" in txt, True)
+        check("V80 结果有 DONE", "DONE" in txt, True)
+        check("V80 结果有唯一入边", "call rel12=221" in txt, True)
+        check("V80 结果有规矩 73", "规矩 73" in txt, True)
+        check("V80 结果有写数据门", "写数据门" in txt, True)
+    else:
+        check("V80 结果文件存在", False, True)
+
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -7855,6 +8077,7 @@ def main():
     test_v77()
     test_v78()
     test_v79()
+    test_v80()
     test_lists()
     test_bctrl()
     test_dual40()
