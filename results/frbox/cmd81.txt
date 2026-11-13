@@ -1,0 +1,122 @@
+
+==============================================================================
+A. 静态链：主循环等待 / 返回码判据 / 86 号服务普查（只读 ROM）
+==============================================================================
+A0 主循环 0x17525A..0x17528A 反汇编：
+  0x17525A  mov          {'op1': 8, 'op2': 11, 'rj': 14, 'ri': 4}
+  0x17525C  add2         {'op1': 10, 'op2': 5, 'm4': 4, 'ri': 4}
+  0x17525E  ldi:8        {'op1': 12, 'i8': 12, 'ri': 5}
+  0x175260  ldi:32       {'op1': 9, 'i32': 2728418844, 'op2': 15, 'op3': 8, 'ri': 6}
+  0x175266  ldi:8        {'op1': 12, 'i8': 2, 'ri': 7}
+  0x175268  mov          {'op1': 8, 'op2': 11, 'rj': 8, 'ri': 13}
+  0x17526A  ldi:32       {'op1': 9, 'i32': 4294967126, 'op2': 15, 'op3': 8, 'ri': 12}
+  0x175270  int          {'op1': 1, 'op2': 15, 'u8': 64}
+  0x175272  nop          {'op1': 9, 'op2': 15, 'op3': 10, 'op4': 0}
+  0x175274  st           {'op1': 1, 'op2': 4, 'rj': 4, 'ri': 13}
+  0x175276  mov          {'op1': 8, 'op2': 11, 'rj': 12, 'ri': 4}
+  0x175278  cmp          {'op1': 10, 'op2': 8, 'u4': 0, 'ri': 4}
+  0x17527A  beq          {'op1': 14, 'cc': 2, 'rel9': 4}
+  0x17527C  ldi:32       {'op1': 9, 'i32': 1529660, 'op2': 15, 'op3': 8, 'ri': 12}
+  0x175282  jmp          {'op1': 9, 'op2': 7, 'op3': 0, 'ri': 12}
+  0x175284  ld           {'op1': 2, 'disp10': 253, 'ri': 0}
+  0x175286  ldi:32       {'op1': 9, 'i32': 8388608, 'op2': 15, 'op3': 8, 'ri': 1}
+A1 服务号立即数 0xFFFFFF56：8 位口径 = 86，32 位口径 = -170（规矩 74）
+A2 主循环参数 r5=12 r6=0xA2A05E1C r7=2；r13 由 0x175268 设定
+A3 全 ROM int #0x40 调用点 = 2297，不同服务号 = 25
+A4 86 号调用点 = 91，不同 (r5,r6,r7) 三元组 = 57
+A5 最常见三元组 = (12, 262144, 2) 次数 = 6；r7==2 的调用点 = 84
+A6 主循环 0x175270 在 86 号调用点内 = True，r6 = 2728418844
+A7 set_flg(12) = 49 处，不同 bits = 29，与主循环位模式有交集 = 14 种
+
+==============================================================================
+B. 服务号宽度口径与真内核陷阱出口（规矩 74，只读 ROM）
+==============================================================================
+B1 同一立即数两种口径：svc_pair = (86, -170)；差 = 256（= 2^8）
+B2 半主机 itron.SVC 已命名服务号 = 16 个，不含 86 = True
+B3 收敛设备 blive.boot(0) 的 svc_hook=None ⇒ 走固件真向量表，不能用半主机表判 86 号服务语义
+B4 真内核陷阱入口 0x040668；0x0406AC lduh @(r13,r12) / 0x0406AE extsh / 0x0406B2 call @r12
+B5 陷阱出口 0x0406BE extsb r12 ⇒ 返回码是 8 位有符号；0x0406E2 reti
+B6 86 号服务语义（错误码 / 命令码）未命名，保持开放；不能报「86 号服务就是 wai_flg」
+
+==============================================================================
+C. 命令分发段：单码分发器与两道串联判据（只读 ROM）
+==============================================================================
+C0 分发段 0x17573C..0x17574C 反汇编：
+  0x17573C  ldi:8        {'op1': 12, 'i8': 171, 'ri': 0}
+  0x17573E  extsb        {'op1': 9, 'op2': 7, 'op3': 8, 'ri': 0}
+  0x175740  cmp          {'op1': 10, 'op2': 10, 'rj': 0, 'ri': 4}
+  0x175742  beq          {'op1': 14, 'cc': 2, 'rel9': 4}
+  0x175744  ldi:32       {'op1': 9, 'i32': 1528410, 'op2': 15, 'op3': 8, 'ri': 12}
+  0x17574A  jmp          {'op1': 9, 'op2': 7, 'op3': 0, 'ri': 12}
+C1 第一道门：0x175278 cmp #0,r4 / 0x17527A beq rel9=4 → 0x175284
+C2 非 0 分支：0x17527C ldi:32 #1529660,r12 = 0x17573C；0x175282 jmp @r12
+C3 第二道门：ldi:8 #171 + extsb = -85；0x175740 cmp r4,-85 / 0x175742 beq rel9=4
+C4 唯一命令码 single_code = (True, -85)；匹配才 0x17574C call rel12=221 → 0x175908
+C5 不匹配 0x175744 ldi:32 #1528410,r12 = 0x17525A → 0x17574A jmp 回主循环
+C6 two_gate(r4=0) = (False, False, 'gate1_zero_return_code')；two_gate(r4=-3) = (True, False, 'gate2_other_code')；two_gate(r4=-85) = (True, True, 'dispatch_to_writeback')
+C7 写回段 0x175908..0x1759A6 = 75 条；清零段 = 12 条
+
+==============================================================================
+D. 收敛态基线与 1M 窗口自证（2 台独立机器）
+==============================================================================
+D1 500k 覆盖 = 5439，末 PC = 0x0407DC
+D2 1M 覆盖 = 5439，500k/1M 对称差集 = 0
+D3 收敛态命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': False, 'MAIN_BACK': False}
+D4 第一道门 MAIN_BEQ 命中 = True，MAIN_JMP 命中 = False ⇒ 返回码 r4 恒 0
+
+==============================================================================
+E. 等形补位：写正确位模式能否让命令分发段往下走（5 台独立机器）
+==============================================================================
+E0 全部在 boot 之后、注入之前写 flag 12 位模式；110 次 vec 0x18、每次 2000 步、post 200000 步（等形三项全同）
+  P0       pat=0x00000000   vec=0x18 新增PC=2291 清零=12/12 写回= 0/75 读回=0x00000001
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': True, 'MAIN_BACK': True}
+  P1       pat=0xA2A05E1C   vec=0x18 新增PC=2383 清零=12/12 写回= 0/75 读回=0x02205E19
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': True, 'MAIN_BACK': True}
+  P2       pat=0xFFFFFFFF   vec=0x18 新增PC=2383 清零=12/12 写回= 0/75 读回=0x5F7FFFFB
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': True, 'MAIN_BACK': True}
+  P3       pat=0x00000001   vec=0x18 新增PC=2291 清零=12/12 写回= 0/75 读回=0x00000001
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': True, 'MAIN_BACK': True}
+  MIS110   pat=0xA2A05E1C   vec=0x2B 新增PC=   0 清零= 0/12 写回= 0/75 读回=0xA2A05E1C
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': False, 'CMD_CMP': False, 'CMD_BEQ': False, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': False, 'MAIN_BACK': False}
+E1 等形判据 = True（P0–P3 预热/服务次数/后续步数三项全同）
+E2 补位执行影响：新增PC P0=2291 P1=2383 P2=2383 P3=2291（不同 ⇒ 补位真的改变了执行）
+E3 四组 MAIN_JMP / CMD_SEG / WB_CALL 全 False = True
+E4 错配 vec 0x2B 等形对照：新增PC=0，清零=0/12，写回=0/75
+E5 归因分离（按清零段命中）= (True, 12, 0)；错配组清零=0/12
+E6 补位时机判据 = patch_changed_execution_but_not_command_path
+
+==============================================================================
+F. 两道门归因：强制非 0 返回码（4 台独立机器，等形同 20000 步）
+==============================================================================
+F0 全部为模型化反事实：强制设 cpu.pc / cpu.r[4]，不是固件调用边；统一 post 20000 步
+  Q0_r4_zero   pc=0x17527C r4=0x00000000 新增PC=  11 写回= 0/75 清零= 0/12
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': True, 'CMD_SEG': True, 'CMD_CMP': True, 'CMD_BEQ': True, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': False, 'MAIN_BACK': False}
+  Q1_r4_neg85  pc=0x17527C r4=0xFFFFFFAB 新增PC=  28 写回=11/75 清零= 0/12
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': True, 'CMD_SEG': True, 'CMD_CMP': True, 'CMD_BEQ': True, 'WB_CALL': True, 'WB_FN': True, 'CLEAR_FN': False, 'MAIN_BACK': False}
+  Q2_cmdseg    pc=0x17573C r4=0xFFFFFFAB 新增PC=  26 写回=11/75 清零= 0/12
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': False, 'CMD_SEG': True, 'CMD_CMP': True, 'CMD_BEQ': True, 'WB_CALL': True, 'WB_FN': True, 'CLEAR_FN': False, 'MAIN_BACK': False}
+  Q3_other     pc=0x17527C r4=0xFFFFFFFD 新增PC=  11 写回= 0/75 清零= 0/12
+    命中 = {'MAIN_WAIT': True, 'MAIN_BEQ': True, 'MAIN_JMP': True, 'CMD_SEG': True, 'CMD_CMP': True, 'CMD_BEQ': True, 'WB_CALL': False, 'WB_FN': False, 'CLEAR_FN': False, 'MAIN_BACK': False}
+F1 等形判据 = True
+F2 r4=-85 两组写回段命中 = [11, 11]；r4=0 / -3 两组 = [0, 0]
+F3 第一道门进得去（CMD_SEG 命中）但第二道门不匹配 ⇒ Q0/Q3 的 WB_CALL = False / False
+F4 函数体可执行 ≠ 固件调用边：Q1 写回 11/75，收敛态 0/75，WB_CALL 仍不是固件自己发起
+
+==============================================================================
+G. 自我证伪、归因分离与开放边界
+==============================================================================
+G1 分发表假设「0x040660 + extsh(lduh @(+svc*2))」：86 号表项 0xD106 signed=-12026 target=0x03D766 落 ROM 内 = False ⇒ 假设 = 证伪
+G2 索引经过 0x0406A4 lsl #1,r12 规整；规整口径未闭合，不编自洽算法，保持开放
+G3 extsb 不是漏扫原因（V80 已自我证伪）：bstatic.NONWRITE 已含它，两版扫描逐项一致
+G4 等形纪律：E 段 4 组与 F 段 4 组的 equal_shape 分别为 True / True
+G5 禁语复核：不报显示链通了 / 出画面 / 系统跑起来了 / 真机如此 / 「写回函数没人调用」/「命令分发段坏了」/「86 号服务就是 wai_flg」
+
+==============================================================================
+H. 结案与仍开放
+==============================================================================
+H0 综合判据 = wb_chain_located_but_command_dispatch_not_reached（补位后命令路径命中增益 = 0）
+H1 已结：主循环 86 号服务返回码 r4 恒 0 使第一道门 beq 跳回 0x175284；命令分发段 0x17573C 是单码分发器，只认 -85，两道判据串联（规矩 75）
+H2 已结：等形补位四组（位模式 / 全 1 / bit0 / 全 0）改变执行 但 MAIN_JMP / CMD_SEG / WB_CALL 全 False ⇒ 拦点是返回码事件，不是 flag 位
+H3 已结：强制非 0 + r4=-85 时写回段 11/75 命中 ⇒ 分发链与函数体完好，缺的是让 86 号服务返回非 0 码的事件
+H4 仍开放：真机让 vec 0x18 周期性发生的器件/事件（KI#191）；让 86 号服务返回非 0 码的事件语义；两状态字偏移 0 bit3 置位源；vec 0x2D 硬件事件；317 个提交调用点非根部分的触发任务；真内核服务分发表索引规整口径
+H5 链未闭合；所有 raise_irq / 写位 / 强制设 PC 都是反事实补全
