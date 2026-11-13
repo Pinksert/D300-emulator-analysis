@@ -8231,6 +8231,205 @@ def test_v81():
 
 
 
+def test_v83():
+    """V83：ret:d 延迟槽返回码、−85 出口归属与两道内部条件；规矩 78/79。"""
+    import os
+    import io
+    import re
+    import frbox
+    from frbox import svc83 as C
+
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc83.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc83.txt")
+
+    # ---- 静态口径常量
+    check("V83 内核区起点", C.KERNEL_LO, 0x040000)
+    check("V83 内核区终点", C.KERNEL_HI, 0x080000)
+    check("V83 段起点", C.SEG_LO, 0x041B00)
+    check("V83 段终点", C.SEG_HI, 0x041E80)
+    check("V83 ret:d 总数", C.RET_D_TOTAL, 167)
+    check("V83 返回码延迟槽总数", C.SLOT_WRITES, 105)
+    check("V83 段内 ret:d", C.RET_D_IN_SEG, 20)
+    check("V83 段内 -85 写点（V82 口径）", C.SLOTS_85_IN_SEG, 2)
+    check("V83 全内核 -85 写点", C.SLOTS_85_KERNEL, 7)
+    check("V83 top10 合计", C.CODE_TOP10_SUM, 104)
+    check("V83 top10 实际求和", sum(n for _c, n in C.CODE_TOP10), 104)
+    check("V83 top10 长度", len(C.CODE_TOP10), 10)
+    check("V83 top10 里 -85 计数", dict(C.CODE_TOP10).get(-85), 7)
+    check("V83 top10 里 0 计数", dict(C.CODE_TOP10).get(0), 57)
+    check("V83 top10 里 -33 计数", dict(C.CODE_TOP10).get(-33), 12)
+    check("V83 top10 里 -69 计数", dict(C.CODE_TOP10).get(-69), 12)
+    check("V83 余额（105-104）", C.SLOT_WRITES - C.CODE_TOP10_SUM, 1)
+    check("V83 7 处 -85 写点数", len(C.SLOTS_85), 7)
+    for i, (rd, sl, svc) in enumerate(C.SLOTS_85):
+        check("V83 -85 写点 %d 延迟槽紧随 ret:d" % i, sl - rd, 2)
+        check("V83 -85 写点 %d 在内核区" % i,
+              C.KERNEL_LO <= sl < C.KERNEL_HI, True)
+    check("V83 -85 写点 0x041CA0 在列",
+          0x041CA0 in [x[1] for x in C.SLOTS_85], True)
+    check("V83 -85 写点 0x041DC8 在列",
+          0x041DC8 in [x[1] for x in C.SLOTS_85], True)
+
+    # ---- 三条并列出口
+    check("V83 并列出口数", len(C.EXIT_TRIPLE), 3)
+    check("V83 出口 0 入口", C.EXIT_TRIPLE[0x041C92],
+          (0x041C96, 0x041C98, 0x00, 0))
+    check("V83 出口 -85 入口", C.EXIT_TRIPLE[0x041C9A],
+          (0x041C9E, 0x041CA0, 0xAB, -85))
+    check("V83 出口 -17 入口", C.EXIT_TRIPLE[0x041CA2],
+          (0x041CA4, 0x041CA6, 0xEF, -17))
+    check("V83 -85 出口两条入边", C.EDGES_85, (0x041BC6, 0x041BCC))
+    check("V83 r12=0 出口两条入边", C.EDGES_0, (0x041C82, 0x041C8A))
+    check("V83 -17 出口一条入边", C.EDGE_17, (0x041C0C,))
+    check("V83 前两条出口模板", C.EXIT_TEMPLATE, ("orccr", "ld", "ret:d", "ldi:8"))
+    check("V83 rel9 分支数", C.BRANCH_FORMS["rel9"], 61)
+    check("V83 rel12 分支数", C.BRANCH_FORMS["rel12"], 14)
+    check("V83 不可定址分支数", C.BRANCH_FORMS["ind"], 6)
+
+    # ---- 服务号归属
+    check("V83 段内入口数", len(C.OWNER_ENTRIES), 12)
+    check("V83 段内入口数常量", C.ENTRIES_IN_SEG, 12)
+    check("V83 0x041B0A 归 -46", C.OWNER_ENTRIES[0x041B0A], (-46,))
+    check("V83 0x041B92 归 -106", C.OWNER_ENTRIES[0x041B92], (-106,))
+    check("V83 0x041BEA 归 -170", C.OWNER_ENTRIES[0x041BEA], (-170,))
+    check("V83 0x041CA8 归 -44", C.OWNER_ENTRIES[0x041CA8], (-44,))
+    check("V83 0x041DD6 归 -172", C.OWNER_ENTRIES[0x041DD6], (-172,))
+    check("V83 错误区中段", C.ERR_MID, 0x041BB6)
+    check("V83 错误区中段宿主", C.ERR_MID_OWNER, 0x041B92)
+    check("V83 真实尾 ret:d", C.REAL_TAIL, 0x041B82)
+    check("V83 真实尾延迟槽", C.REAL_SLOT0, 0x041B84)
+    check("V83 真实尾宿主", C.REAL_TAIL_OWNER, 0x041B0A)
+    check("V83 真实 r13", C.REAL_R13, 0xFFFFFFFF)
+    check("V83 真实返回码", C.REAL_RET, 0)
+    check("V83 真实并列出口覆盖", C.REAL_EXITS_COVERED, 0)
+    check("V83 真实路径关键点数", len(C.REAL_PATH_KEYS), 11)
+    check("V83 真实路径含 0x041BEA", 0x041BEA in C.REAL_PATH_KEYS, True)
+    check("V83 真实路径含 0x041C28", 0x041C28 in C.REAL_PATH_KEYS, True)
+    check("V83 真实路径含 0x041B84", 0x041B84 in C.REAL_PATH_KEYS, True)
+
+    # ---- 动态与反事实口径
+    check("V83 boot 锚点步数", C.BOOT_STEP, 483841)
+    check("V83 陷阱入口", C.TRAP, 0x040668)
+    check("V83 服务返回点", C.RET_PC, 0x0406B4)
+    check("V83 反事实锚点1", C.ANCHOR1, 0x041C24)
+    check("V83 反事实锚点2", C.ANCHOR2, 0x041BCA)
+    check("V83 后续步数", C.AFTER, 260)
+    check("V83 反事实组数", len(C.CF_GROUPS), 4)
+    check("V83 反事实组名", tuple(x[0] for x in C.CF_GROUPS),
+          ("BASE", "G1", "G2", "G3"))
+    check("V83 G2 返回点 r12", C.CF_G2_RET, 0x000000AB)
+    check("V83 分发链键数", len(C.GATE_KEYS), 5)
+    check("V83 MAIN_JMP", C.MAIN_JMP, 0x175282)
+    check("V83 CMD_SEG", C.CMD_SEG, 0x17573C)
+    check("V83 CMD_CMP", C.CMD_CMP, 0x175740)
+    check("V83 WB_CALL", C.WB_CALL, 0x17574C)
+    check("V83 WB_FN", C.WB_FN, 0x175908)
+    for tag, exp in C.CF_EXPECT.items():
+        check("V83 %s 期望四元组" % tag, len(exp), 4)
+        check("V83 %s 门1" % tag, exp[0], tag != "BASE")
+        check("V83 %s 门1 是门2 前置" % tag, exp[0] >= exp[1], True)
+        check("V83 %s 门2" % tag, exp[1], tag == "G2")
+        check("V83 %s 分发链" % tag, exp[2], tag == "G2")
+        check("V83 %s 返回点 r12" % tag, exp[3],
+              C.CF_G2_RET if tag == "G2" else 0)
+    check("V83 综合判据串", C.VERDICT,
+          "delay_slot_exit_resolved_counterfactual_two_gates_open")
+
+    # ---- 纯函数：8 位补码
+    check("V83 sx8(0)", C.sx8(0), 0)
+    check("V83 sx8(0x7F)", C.sx8(0x7F), 127)
+    check("V83 sx8(0x80)", C.sx8(0x80), -128)
+    check("V83 sx8(0xAB)", C.sx8(0xAB), -85)
+    check("V83 sx8(0xEF)", C.sx8(0xEF), -17)
+    check("V83 sx8(0xBB)", C.sx8(0xBB), -69)
+    check("V83 sx8(0xDF)", C.sx8(0xDF), -33)
+    check("V83 sx8(0xFF)", C.sx8(0xFF), -1)
+    check("V83 sx8(0x1AB)", C.sx8(0x1AB), -85)
+    check("V83 slot_code(0xAB)", C.slot_code(0xAB), -85)
+    check("V83 slot_code(0x00)", C.slot_code(0x00), 0)
+
+    # ---- 纯函数：延迟槽与模板
+    fake = [(0x100, "orccr", {}, 2), (0x102, "ld", {}, 2),
+            (0x104, "ret:d", {}, 2), (0x106, "ldi:8", {"ri": 12, "i8": 171}, 2),
+            (0x108, "ret:d", {}, 2), (0x10A, "ldi:8", {"ri": 12, "i8": 0}, 2)]
+    check("V83 is_delay_slot 命中", C.is_delay_slot(fake, 0x106), True)
+    check("V83 is_delay_slot 第二条", C.is_delay_slot(fake, 0x10A), True)
+    check("V83 is_delay_slot 否定", C.is_delay_slot(fake, 0x102), False)
+    check("V83 delay_slot_owner", C.delay_slot_owner(fake, 0x106), 0x104)
+    check("V83 delay_slot_owner 第二条", C.delay_slot_owner(fake, 0x10A), 0x108)
+    check("V83 delay_slot_owner 非槽", C.delay_slot_owner(fake, 0x100), None)
+    check("V83 template_of", C.template_of(fake[:4]),
+          ("orccr", "ld", "ret:d", "ldi:8"))
+    check("V83 exit_record -85", C.exit_record(0x041C9A),
+          (0x041C9E, 0x041CA0, -85))
+    check("V83 exit_record 0", C.exit_record(0x041C92),
+          (0x041C96, 0x041C98, 0))
+    check("V83 exit_record -17", C.exit_record(0x041CA2),
+          (0x041CA4, 0x041CA6, -17))
+    check("V83 exit_record 未登记", C.exit_record(0x041000), None)
+
+    # ---- 纯函数：归属与口径
+    ents = (0x041B00, 0x041B92, 0x041BEA, 0x041CA8)
+    own = {0x041B00: (-1,), 0x041B92: (-106,),
+           0x041BEA: (-170,), 0x041CA8: (-44,)}
+    check("V83 nearest_entry 错误区", C.nearest_entry(0x041BC6, ents), 0x041B92)
+    check("V83 nearest_entry 出口区", C.nearest_entry(0x041CA0, ents), 0x041BEA)
+    check("V83 nearest_entry 段前", C.nearest_entry(0x041000, ents), None)
+    check("V83 owner_of 入边", C.owner_of(0x041BC6, ents, own), (-106,))
+    check("V83 owner_of 延迟槽", C.owner_of(0x041CA0, ents, own), (-170,))
+    check("V83 口径 段内<全内核", C.scope_verdict(2, 7), "segment_only")
+    check("V83 口径 相等", C.scope_verdict(7, 7), "kernel_wide")
+    check("V83 口径 矛盾", C.scope_verdict(8, 7), "inconsistent")
+
+    # ---- 纯函数：等形 / 门 / 综合判据
+    eq = [{"boot": 483841, "anchor1": 0x041C24,
+           "anchor2": 0x041BCA, "post": 260} for _ in range(4)]
+    check("V83 equal_shape 四组同", C.equal_shape(eq), True)
+    eq2 = [dict(x) for x in eq]
+    eq2[2]["post"] = 261
+    check("V83 equal_shape 一组异", C.equal_shape(eq2), False)
+    check("V83 equal_shape 空", C.equal_shape([]), False)
+    check("V83 gate 全关", C.gate_verdict(False, False), "both_closed")
+    check("V83 gate 只开门1", C.gate_verdict(True, False), "gate1_only")
+    check("V83 gate 两门全开", C.gate_verdict(True, True), "both_open")
+    check("V83 gate 门1关不算开", C.gate_verdict(False, True), "both_closed")
+    check("V83 cf 全成立", C.cf_verdict(True, True, True, True, False),
+          C.VERDICT)
+    check("V83 cf 事件已定位", C.cf_verdict(True, True, True, True, True),
+          "event_semantics_located")
+    check("V83 cf 缺静态", C.cf_verdict(False, True, True, True, False), "open")
+    check("V83 cf 缺返回码", C.cf_verdict(True, False, True, True, False), "open")
+    check("V83 cf 缺门", C.cf_verdict(True, True, False, True, False), "open")
+    check("V83 cf 缺写回", C.cf_verdict(True, True, True, False, False), "open")
+
+    # ---- 文档与规矩边界
+    src = io.open(_SRC, encoding="utf-8").read()
+    for key in ("KI#323", "规矩 78", "规矩 79", "延迟槽", "0x041B92",
+                "0x041B84", "反事实补全", "链仍未闭合", "不许把段内计数",
+                "真机已复现", "器件事件语义"):
+        check("V83 设施文档含 %s" % key, key in src, True)
+    check("V83 版本格式（不硬编码当前版）",
+          frbox.__version__.startswith("0."), True)
+    check("V83 禁语：所有服务语义已解出", "所有服务语义已解出" in src, True)
+    check("V83 禁语：显示链通了", "显示链通了" in src, True)
+
+    # ---- 正式结果文件
+    res = io.open(_RES, encoding="utf-8", errors="replace").read()
+    check("V83 结果无 Traceback", "Traceback" in res, False)
+    check("V83 结果无 Error 词", len(re.findall(r"\bError\b", res)), 0)
+    for seg in ("[A]", "[B]", "[C]", "[D]", "[E]", "[F]", "[G]", "[H]"):
+        check("V83 结果含 %s 段" % seg, seg in res, True)
+    check("V83 结果含 5 台独立机器", "5 台独立机器" in res, True)
+    check("V83 结果含综合判据", C.VERDICT in res, True)
+    check("V83 结果含 G2", "G2 " in res or "G2  " in res, True)
+    check("V83 结果含 0x000000AB", "0x000000AB" in res, True)
+    check("V83 结果含规矩 78", "规矩 78" in res, True)
+    check("V83 结果含规矩 79", "规矩 79" in res, True)
+    check("V83 结果含链未闭合", "链未闭合" in res, True)
+    check("V83 结果含 DONE", "DONE V83" in res, True)
+
+
 def test_v82():
     """V82：真内核分发表 32 位有符号索引口径、-170 号处理函数、规矩 76/77。"""
     import os
@@ -8517,6 +8716,7 @@ def main():
     test_v80()
     test_v81()
     test_v82()
+    test_v83()
     test_lists()
     test_bctrl()
     test_dual40()
