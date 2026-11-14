@@ -1,0 +1,140 @@
+============================================================================
+V86 · 没有优先级，是返回码层与调度层 —— A–H 八段 / 9 台机器
+============================================================================
+
+[A] 静态图：rel9 是 sx8、A 判据跨段跳到 −106 号服务段（只读 ROM）
+A1 rel9 落点（规矩 70/85；pc+2+sx8(rel9)*2）：
+    0x041C26 beq   rel9=199 sx8= -57 → 0x041BB6（设施 0x041BB6，对=True，解码=True）
+    0x041C10 blt   rel9=187 sx8= -69 → 0x041B88（设施 0x041B88，对=True，解码=True）
+    0x041C28 blt   rel9=174 sx8= -82 → 0x041B86（设施 0x041B86，对=True，解码=True）
+    0x041BC6 bne   rel9=105 sx8= 105 → 0x041C9A（设施 0x041C9A，对=True，解码=True）
+    0x041BCC beq   rel9=102 sx8= 102 → 0x041C9A（设施 0x041C9A，对=True，解码=True）
+    0x041C0C beq   rel9= 74 sx8=  74 → 0x041CA2（设施 0x041CA2，对=True，解码=True）
+    0x041BF2 bne   rel9=248 sx8=  -8 → 0x041BE4（设施 0x041BE4，对=True，解码=True）
+    0x041BF6 beq   rel9=200 sx8= -56 → 0x041B88（设施 0x041B88，对=True，解码=True）
+    0x041BFC bne   rel9=197 sx8= -59 → 0x041B88（设施 0x041B88，对=True，解码=True）
+    0x041C1E bne   rel9=183 sx8= -73 → 0x041B8E（设施 0x041B8E，对=True，解码=True）
+    0x041B48 bne   rel9= 20 sx8=  20 → 0x041B72（设施 0x041B72，对=True，解码=True）
+A2 关键：0x041C26 beq rel9=199 的 sx8=-57 → 0x041BB6（不是 +199）
+A3 0x041BC6 / 0x041BCC 双双 → 0x041C9A（−85 出口入口）= True
+A4 跨段判据 = cross_segment_backward（V83 已归属 0x041B92 起为 −106 号服务函数体）
+A5 −106 段 B 门反汇编 0x041BB0..0x041BD2：
+    0x041BB0 lduh     ri=r2 rj=r3
+    0x041BB2 ld       ri=r14 rj=r14
+    0x041BB4 andccr   u8=239(0xEF)
+    0x041BB6 ldi:8    i8=2(0x2) ri=r9
+    0x041BB8 ld       disp10=2(0x2) ri=r8
+    0x041BBA and      ri=r9 rj=r7
+    0x041BBC bne      rel9=6(0x6) cc=3
+    0x041BBE ldi:8    i8=255(0xFF) ri=r9
+    0x041BC0 extsb    ri=r9
+    0x041BC2 eor      ri=r9 rj=r8
+    0x041BC4 and      ri=r9 rj=r6
+    0x041BC6 bne      rel9=105(0x69) cc=3
+    0x041BC8 bra      rel9=2(0x2) cc=0
+    0x041BCA and      ri=r6 rj=r8
+    0x041BCC beq      rel9=102(0x66) cc=2
+    0x041BCE ldi:8    i8=1(0x1) ri=r9
+    0x041BD0 and      ri=r9 rj=r7
+A6 A 判据链：0x041C0E cmp2 r13 → 0x041C10 blt；0x041C24 cmp #0,r13 → 0x041C26 beq / 0x041C28 blt
+A7 A 单元推导：r14=0x000083B0 + sx8(13)*4 = 0x000083E4 == 设施 0x000083E4 → True
+
+[B] 5 台独立 600 步等形机（boot=483841，HOOK2=0x041BFC 之后起算）
+
+  NO_PATCH  hook_steps=43 A=0xFFFFFFFF B=0x80000000 返回点r12=0x00000000
+    −85出口=False 命令链=False B门=jump | 调度reti=401 TASK9step=402
+    末PC=0x137968 末r4=0x001BDBE2 末CUR=0x6800029C READY=0x036E0000 去重PC=334 int=2
+    TCB7 +0x14=0x0000000A +0x20=0xFFDB0000（等待服务号=-37）
+
+  SAME_AB   hook_steps=43 A=0xFFFFFFFF B=0x80000000 返回点r12=0x00000000
+    −85出口=False 命令链=False B门=jump | 调度reti=401 TASK9step=402
+    末PC=0x137968 末r4=0x001BDBE2 末CUR=0x6800029C READY=0x036E0000 去重PC=334 int=2
+    TCB7 +0x14=0x0000000A +0x20=0xFFDB0000（等待服务号=-37）
+
+  A0_BSET   hook_steps=43 A=0x00000000 B=0x80000000 返回点r12=0x00000000
+    −85出口=False 命令链=False B门=not_reached | 调度reti=398 TASK9step=399
+    末PC=0x13796E 末r4=0x001BDBE2 末CUR=0x6800029C READY=0x036E0000 去重PC=331 int=2
+    TCB7 +0x14=0x0000000A +0x20=0xFFDB0000（等待服务号=-37）
+
+  AOR_BCLR  hook_steps=43 A=0xFFFFFFFF B=0x00000000 返回点r12=0x00000000
+    −85出口=False 命令链=False B门=fall | 调度reti=198 TASK9step=199
+    末PC=0x137968 末r4=0x001BDC1C 末CUR=0x6800029C READY=0x036E0000 去重PC=221 int=0
+    TCB7 +0x14=0xA2A05E1C +0x20=0xFF560000（等待服务号=-170）
+
+  A0_BCLR   hook_steps=43 A=0x00000000 B=0x00000000 返回点r12=0x000000AB
+    −85出口=True 命令链=True B门=fall | 调度reti=314 TASK9step=315
+    末PC=0x13796E 末r4=0x001BDBFA 末CUR=0x6800029C READY=0x036E0000 去重PC=303 int=1
+    TCB7 +0x14=0x00000001 +0x20=0xFFD20000（等待服务号=-46）
+
+B1 等形三项（boot/hook/post）全同 = True
+B2 NO_PATCH ≡ SAME_AB 六项逐项相同 = True（写原值无效，差异来自值）
+
+[C] 1 台只观测轨迹机：A 是调用者 r13 的栈帧保存槽
+C1 boot=483841 停在 0x040668（设施 0x040668 → True）
+C2 陷阱口 r13=0xFFFFFFFF r14=0x9F805ADC r15=0x000083F8（设施 0xFFFFFFFF/0x9F805ADC/0x000083F8）
+C3 A 锚点前 = 0x00000260；单步 44 步后 = 0xFFFFFFFF
+C4 0x040692 stm1 执行后实测：step20:pc=0x040692:陷阱口r13=0xFFFFFFFF:A=0xFFFFFFFF
+C5 stm1 写入值 == 陷阱口 r13 = True；A 语义判据 = caller_r13_stack_slot（不是器件状态字）
+
+[D] 2 台独立 260 步短窗口机：复现 V84 的截断读法
+  SAME_AB_260 去重PC=192 末PC=0x0413B4 末r4=0x0000000A 调度reti=无 返回码=0x00000000 链=False TASK9=—
+  A0_BCLR_260 去重PC=226 末PC=0x0404E8 末r4=0x9F805AB0 调度reti=无 返回码=0x000000AB 链=True TASK9=—
+D1 260 步两组都无调度 reti = True（设施 True）
+D2 600 步两组都有调度 reti = True（设施 True）
+D3 短窗口判据 = window_artifact_timing_shift（规矩 82 第二次实例）
+D4 窗口起算点：V84 从 trap_entry 起算，V86 从 after_hook2 起算 → 可比 = False
+D5 不许把两种起算点的去重 PC 数 / 末 PC 直接对比（规矩 84）
+
+[E] 1 台标准收敛态机：coverage 口径分层
+E1 末 PC=0x0407DC（设施 0x0407DC → True）
+E2 coverage 0x041BB6 命中=True
+E2 coverage 0x041BB8 命中=True
+E2 coverage 0x041B32 命中=True
+E2 coverage 0x041B48 命中=True
+E2 coverage 0x041C26 命中=True
+E2 coverage 0x041C9A 命中=True
+E2 coverage 0x041CA0 命中=True
+E2 coverage 0x040EB6 命中=True
+E2 coverage 0x1352EA 命中=True
+E3 coverage 0x175282 命中=False
+E3 coverage 0x175908 命中=False
+E4 命中 9/9、未命中 2/2，判据 = kernel_code_ran_command_chain_not_reached
+E5 与 V81–V83「单次 −170 调用短窗口里 −85 出口覆盖全 0」是不同窗口口径，不合并
+
+[F] 2x2 真值表与两层事件判据
+  SAME_AB   A=FFFFFFFF B=80000000 → −85=False 命令链=False 换手=True  reti=401 返回码=0x00000000
+  A0_BSET   A=00000000 B=80000000 → −85=False 命令链=False 换手=True  reti=398 返回码=0x00000000
+  AOR_BCLR  A=FFFFFFFF B=00000000 → −85=False 命令链=False 换手=True  reti=198 返回码=0x00000000
+  A0_BCLR   A=00000000 B=00000000 → −85=True  命令链=True  换手=True  reti=314 返回码=0x000000AB
+F1 合取判据：A=0∧B=0 → ret_minus_85；其余三组 → ret_zero
+F2 优先级判据 = no_priority_two_layers（四组都换手、只有 A0_BCLR 返 −85）
+F3 设施 COMBO 对账：
+    SAME_AB   设施/实测 8 项一致 = True
+    A0_BSET   设施/实测 8 项一致 = True
+    AOR_BCLR  设施/实测 8 项一致 = True
+    A0_BCLR   设施/实测 8 项一致 = True
+F4 A0_BCLR 关键事件 step：EXIT_85=36 SVC_RET=40 MAIN_JMP=68 WB_FN=74 SCHED_RETI=314 TASK9=315
+F5 严格单调 = True（22 项 ORDER 全在窗口内 = True）
+F6 两次 reti 后 80 步 PC 逐项相同 = True（差异 无）
+F7 四组末 CUR/READY 同一值 = True / True
+
+[G] 归因分离、结果层/原因层与自我证伪
+G1 写原值 ≡ 不写 = True ⇒ 差异来自写进去的值，不是写动作
+G2 只清 B、不动 A（AOR_BCLR）：−85=False 换手=True reti=198（延续 V85 结论）
+G3 只清 A、B 保持置位（A0_BSET）：−85=False 换手=True reti=398
+G4 原因层四组等待号：SAME_AB=-37 / A0_BSET=-37 / AOR_BCLR=-170 / A0_BCLR=-46（结果层换手同为任务 9）
+G5 600 步 int 次数：SAME_AB=2 / A0_BSET=2 / AOR_BCLR=0 / A0_BCLR=1
+G6 自我证伪：草稿曾把 V84 的「LATE_AB 返 −85 未换手」当成互斥分支；600 步长窗口证四组全换手，是窗口截断（规矩 82）
+G7 自我证伪：草稿曾把 0x041C26 beq rel9=199 当成 +199 正跳；sx8 是 −57，落点 0x041BB6（规矩 85）
+G8 自我证伪：草稿 C 段曾用 mc.coverage 取覆盖率报错；正确口径是 mc.cov.visited(p)（判据口径错，不是证据错）
+G9 规矩 84：返回码层 ≠ 调度层；窗口起算点必须声明
+G10 规矩 85：rel9 用 sx8；跨段跳转不许按地址就近归属；A 是调用者 r13 栈帧槽
+
+[H] 综合判据与边界
+H1 无优先级=True 顺序单调=True 跨段=True 等形=True 值归因=True 短窗口=True 覆盖分层=True
+H2 综合判据 = two_layer_resolved_cross_segment_gate_chain_window_artifact
+H3 所有写 A/B 单元都是反事实补全；任务换手是既有代码自然执行，不等于真机发生过
+H4 不能报：A=0 与换手是两条互斥分支 / 补一次 −85 就等于真机事件 / A 是器件状态字 / 清 B 位唤醒了任务 9 / 显示链通了 / 出画面
+H5 链未闭合；KI#336-339 开放项见 KNOWN_ISSUES
+
+DONE V86 A–H 八段，9 台独立机器（5 长窗口组合 + 1 只观测 + 2 短窗口 + 1 标准收敛态），反事实全部标注
