@@ -1,0 +1,109 @@
+============================================================================
+V85 · 短窗口把时机差读成路径差 —— A–H 八段 / 7 台机器
+============================================================================
+
+[A] 静态推导：分叉门 / 两条落点 / 末 r4 的真身（只读 ROM）
+A1 0x041B32 ld disp10=2(0x2) ri=r8；disp10=2 → r14(0x68000968)+8 = 0x68000970（== B ? True）
+A2 分叉门链：0x041B44 mov r9,r8 → 0x041B46 and → 0x041B48 bne rel9=20(0x14) cc=3
+A3 B=0x80000000 判据=jump → 落点 0x041B72；B=0 判据=fall → 落点 0x041B4A
+A4 正常返回尾：0x041B84 ldi:8（延迟槽 r12=0）；换手尾起于 0x041B4A
+A5 末 r4 来源：0x1378FA ldi:32 i32=1825710(0x1BDBAE) ri=r4 ⇒ 是 ROM 常量立即数，不是状态字
+A6 立即数 == 设施 0x001BDBAE：True（V46 dev_ctrl40 定性：0x40 器件表 0 源地址）
+A7 表 0 ROM 实测：256 项，首=0x0000 末=0x3FC0 相邻差集合={0x40} 线性判据=True
+
+[B] 4 台独立短窗口机等形反事实（boot=483841，挂钩 0x040668/0x041BFC，后续 260 步）
+B1 等形四项（boot / hooks / post / window）全同 = True
+B2 组        读地址      B值        B&want    跳/落   PC数  末PC    末r4      换手函数
+  BASE      0x68000970 0x80000000 0x80000000 JUMP  166    0x0406A0 0x0000000A False
+  EARLY_B   0x68000970 0x00000000 0x00000000 FALL  260    0x13796C 0x001BDBAE True
+  SAME_B    0x68000970 0x80000000 0x80000000 JUMP  166    0x0406A0 0x0000000A False
+  LATE_B    0x68000970 0x00000000 0x00000000 FALL  260    0x13796C 0x001BDBAE True
+B3 门实测 r14=0x68000968 读地址=0x68000970（设施 0x68000968 / 0x68000970）→ True
+B4 BASE 的 B=0x80000000 与 and=0x80000000（设施 0x80000000 / 0x80000000）→ True；EARLY_B 两者皆 0 = True
+
+[C] 归因分离：是「写动作」还是「写进去的值」
+C1 SAME_B 与 BASE 四项逐项相同 = True
+C2 EARLY_B 与 SAME_B 换手标志不同 = True
+C3 LATE_B 与 EARLY_B 四项逐项相同 = True（写入时机无关）
+C4 只清 B、不动 A 就足以换手：EARLY_B/LATE_B 命中 TASK9=True/True，−85 出口=False/False
+C5 纯函数判据 = value_not_write_action
+C6 窗口内末 PC 与跑满后 cpu.pc 口径：BASE 0x04069E/0x0406A0 = one_sequential_instruction；EARLY_B 0x13796A/0x13796C = one_sequential_instruction
+
+[D] 换手链静态反汇编（只读 ROM，不按地址就近归服务）
+  D1 另一条尾部：
+    0x041B4A mov      ri=r5 rj=r14
+    0x041B4C ldi:32   i32=1744830464(0x68000000) ri=r8
+    0x041B52 ld       ri=r14 rj=r8
+    0x041B54 st       disp10=5(0x5) ri=r6
+    0x041B56 sth      disp9=7(0x7) ri=r7
+    0x041B58 mov      ri=r14 rj=r5
+    0x041B5A ldi:32   i32=1048580(0x100004) ri=r8
+    0x041B60 call:d   rel12=428(0x1AC)
+    0x041B62 ld       udisp6=13(0xD) ri=r13
+    0x041B64 ld       disp10=10(0xA) ri=r14
+    0x041B66 cmp2     ri=r14
+    0x041B68 beq:d    rel9=10(0xA) cc=2
+    0x041B6A ldi:8    i8=255(0xFF) ri=r8
+    0x041B6C extsb    ri=r8
+    0x041B6E st       disp10=2(0x2) ri=r8
+    0x041B70 bra      rel9=6(0x6) cc=0
+  D2 派发器入口：
+    0x040D32 andccr   u8=239(0xEF)
+    0x040D34 orccr    u8=32(0x20)
+    0x040D36 stm1     
+    0x040D38 ldi:32   i32=1744830768(0x68000130) ri=r12
+    0x040D3E ldi:8    i8=0(0x0) ri=r13
+  D3 调度器：
+    0x040E18 ldi:32   i32=1744830468(0x68000004) ri=r12
+    0x040E1E ld       ri=r13 rj=r12
+    0x040E20 srch1    ri=r13
+    0x040E22 add      u4=4(0x4) ri=r12
+    0x040E24 lsl      u4=3(0x3) ri=r13
+    0x040E26 ld       ri=r13 rj=r12
+  D4 换手收尾：0x040EB6 reti（reti）→ 任务 9 入口 0x1352EA
+  D5 表下载函数 0x1378EA / 拷贝环 0x137968（V46 已建模的 0x40 器件窗口）
+
+[E] 2 台独立长窗口机（600 步）：换手时机与换手后轨迹
+E1 第一次 reti step：BASE=444 EARLY_B=241，提前=203 步（设施 203）→ True
+E2 两次 reti 之后 80 步 PC 序列逐项相同 = True（差异 无）
+E3 前 6 项 BASE：0x040EB6 0x1352EA 0x1352EC 0x1352EE 0x1352F0 0x1352F6
+E3 前 6 项 EARLY_B：0x040EB6 0x1352EA 0x1352EC 0x1352EE 0x1352F0 0x1352F6
+E4 长窗口末：BASE 0x137966 / r4=0x001BDBD6 / PC数=343；EARLY_B 0x137966 / r4=0x001BDC10 / PC数=264
+E5 短窗口 260 步末：BASE 0x0406A0 / PC数=166；EARLY_B 0x13796C / PC数=260
+E6 末 CUR / READY：BASE 0x6800029C / 0x036E0000；EARLY_B 0x6800029C / 0x036E0000
+E7 BASE     末 CUR=0x6800029C ⇒ idx=9 任务号=9 入口=0x1352EA
+E8 BASE     任务7 state=0x04 +0x14=0x0000000A +0x20=0xFFDB0000 等待服务号=-37
+E8 BASE     任务9 state=0x00 +0x14=0xFFFFFFFF +0x20=0x00000000 等待服务号=0
+E9 BASE     int #0x40 = 2 次 step137@0x175414 step233@0x17588E
+E10 BASE     B 单元写入：step195@0x041AFE=0x00000000
+E7 EARLY_B  末 CUR=0x6800029C ⇒ idx=9 任务号=9 入口=0x1352EA
+E8 EARLY_B  任务7 state=0x04 +0x14=0xA2A05E1C +0x20=0xFF560000 等待服务号=-170
+E8 EARLY_B  任务9 state=0x00 +0x14=0xFFFFFFFF +0x20=0x00000000 等待服务号=0
+E9 EARLY_B  int #0x40 = 0 次 无
+E10 EARLY_B  B 单元写入：窗口内无写
+
+[F] 1 台标准收敛态机：这条路径本来就跑过
+F1 末 PC=0x0407DC（设施 0x0407DC → True）
+F2 coverage 0x1378FA 命中=True
+F2 coverage 0x137968 命中=True
+F2 coverage 0x1352EA 命中=True
+F2 coverage 0x040EB6 命中=True
+F3 四 PC 全命中 = True（不是新功能、不是唤醒）
+F4 工具口径：bus.all_writes 只记 RAM ⇒ 判器件窗口用 ok，用 all_writes 的判定 = wrong_tool
+
+[G] 归因分离与自我证伪
+G1 结果层判据 = same_path_shifted
+G2 原因层判据 = different_reason（BASE 等待号=-37 / EARLY_B=-170；BASE int 2 次 / EARLY_B 0 次）
+G3 窗口截断判据 = window_artifact_timing_shift（短时末 PC 0x0406A0/0x13796C，长时同为 0x137966）
+G4 规矩 82：短窗口把时机差读成路径差；pcs[N-1] 与 cpu.pc 差一条指令
+G5 规矩 83：结果层同 ≠ 原因层同；all_writes 只记 RAM
+G6 V85C 草稿 C4 曾因混入 all_writes 计数得 False，是判据口径错，不是证据错
+
+[H] 综合判据与边界
+H1 窗口判据=True 值归因=True 结果层=True 原因层=True 收敛态=True
+H2 综合判据 = short_window_artifact_resolved_early_context_switch
+H3 所有写 B 单元都是反事实补全；任务换手是既有代码的自然执行，不等于真机发生过
+H4 不能报：清 B 位唤醒了任务 9 / EARLY_B 走了一条新路径 / 显示链通了 / 出画面
+H5 链未闭合；开放项见 KNOWN_ISSUES KI#335
+
+DONE V85 A–H 八段，7 台独立机器（4 短窗口反事实 + 2 长窗口 + 1 标准收敛态），反事实全部标注
