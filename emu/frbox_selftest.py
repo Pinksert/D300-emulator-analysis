@@ -9131,6 +9131,285 @@ def test_v85():
         check("V85 结果文件存在", False, True)
 
 
+def test_v86():
+    """V86：没有「优先级」，是返回码层与调度层；规矩 84/85。"""
+    import os
+    import io
+    import frbox
+    from frbox import svc86 as C
+
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc86.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc86.txt")
+
+    # ---- 静态口径常量（KI#270：不硬编码当前版本号）
+    check("V86 boot 步数", C.BOOT_STEP, 483841)
+    check("V86 陷阱入口", C.TRAP, 0x040668)
+    check("V86 晚补挂钩", C.HOOK2, 0x041BFC)
+    check("V86 挂钩步数", C.HOOK_STEPS, 43)
+    check("V86 长窗口", C.AFTER_LONG, 600)
+    check("V86 短窗口", C.AFTER_SHORT, 260)
+    check("V86 对齐步数", C.ALIGN, 80)
+    check("V86 主循环立即数", C.MAIN_SVC_IMM32, 0xFFFFFF56)
+    check("V86 真服务号", C.MAIN_SVC_32, -170)
+    check("V86 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("V86 KI 范围", C.KI_RANGE, "KI#336-339")
+    check("V86 综合判据常量", C.VERDICT,
+          "two_layer_resolved_cross_segment_gate_chain_window_artifact")
+
+    # ---- 两单元与取值
+    check("V86 A 单元", C.SRC_A, 0x000083E4)
+    check("V86 B 单元", C.SRC_B, 0x68000970)
+    check("V86 A 原值", C.A_ORIG, 0xFFFFFFFF)
+    check("V86 A 清零", C.A_ZERO, 0x00000000)
+    check("V86 B 置位", C.B_SET, 0x80000000)
+    check("V86 B 清位", C.B_CLR, 0x00000000)
+    check("V86 返回码 0xAB", C.RET_85, 0x000000AB)
+    check("V86 命令码 -85", C.CMD_CODE, -85)
+    check("V86 陷阱口 r13", C.R13_ENTRY, 0xFFFFFFFF)
+    check("V86 陷阱口 r14", C.R14_ENTRY, 0x9F805ADC)
+    check("V86 陷阱口 r15", C.R15_ENTRY, 0x000083F8)
+
+    # ---- A 判据 / 跨段
+    check("V86 cmp2 r13", C.CMP2_R13, 0x041C0E)
+    check("V86 blt 早判", C.BLT_EARLY, 0x041C10)
+    check("V86 cmp0 r13", C.CMP0_R13, 0x041C24)
+    check("V86 beq A=0", C.BEQ_A_ZERO, 0x041C26)
+    check("V86 blt 晚判", C.BLT_LATE, 0x041C28)
+    check("V86 beq rel9 原值", C.BEQ_REL9, 199)
+    check("V86 beq sx8", C.BEQ_SX8, -57)
+    check("V86 −106 段入口", C.SEG106_ENTRY, 0x041BB6)
+    check("V86 −106 段读 B", C.SEG106_LDB, 0x041BB8)
+    check("V86 −85 入边 bne", C.BNE_106, 0x041BC6)
+    check("V86 −85 入边 beq", C.BEQ_106, 0x041BCC)
+    check("V86 bne rel9", C.BNE_106_REL9, 105)
+    check("V86 beq rel9", C.BEQ_106_REL9, 102)
+    check("V86 −85 出口", C.EXIT_85, 0x041C9A)
+    check("V86 −85 ret:d", C.RET_D_85, 0x041C9E)
+    check("V86 −85 延迟槽", C.SLOT_85, 0x041CA0)
+    check("V86 A 写点", C.A_WRITER, 0x040692)
+    check("V86 A 写点指令", C.A_WRITER_MN, "stm1")
+    check("V86 stm1 步索引", C.A_WRITER_STEP_IDX, 20)
+    check("V86 stm1 执行 PC", C.A_WRITER_EXEC_PC, 0x040694)
+    check("V86 读 A 时 r14", C.R14_AT_LD13, 0x000083B0)
+    check("V86 读 A disp10", C.LD_R13_DISP, 13)
+    check("V86 rel9 表项数", len(C.REL9_ROWS), 11)
+    check("V86 rel9 表首行", C.REL9_ROWS[0], (0x041C26, 199, -57, 0x041BB6))
+    check("V86 rel9 表末行", C.REL9_ROWS[-1], (0x041B48, 20, 20, 0x041B72))
+
+    # ---- 两层事件
+    check("V86 服务返回点", C.RET_PC, 0x0406B4)
+    check("V86 extsb", C.EXTSB_PC, 0x0406BE)
+    check("V86 陷阱 reti", C.TRAP_RETI, 0x0406E2)
+    check("V86 调度 reti", C.SCHED_RETI, 0x040EB6)
+    check("V86 派发器", C.DISPATCH, 0x040D32)
+    check("V86 任务9 入口", C.TASK9_ENTRY, 0x1352EA)
+    check("V86 表常量 ldi", C.CONST_LDI, 0x1378FA)
+    check("V86 共享尾读 B", C.LD_B_GATE, 0x041B32)
+    check("V86 共享尾 bne", C.BNE_GATE, 0x041B48)
+    check("V86 共享尾落点", C.TAKE_FALL, 0x041B4A)
+    check("V86 共享尾跳点", C.TAKE_JUMP, 0x041B72)
+    check("V86 主循环跳", C.MAIN_JMP, 0x175282)
+    check("V86 命令段", C.CMD_SEG, 0x17573C)
+    check("V86 命令比较", C.CMD_CMP, 0x175740)
+    check("V86 写回调用", C.WB_CALL, 0x17574C)
+    check("V86 写回函数", C.WB_FN, 0x175908)
+    check("V86 ORDER 项数", len(C.ORDER), 22)
+    check("V86 ORDER 首项", C.ORDER[0], ("CMP0_R13", 0x041C24, 28))
+    check("V86 ORDER 末项", C.ORDER[-1], ("CONST_LDI", 0x1378FA, 325))
+    check("V86 ORDER_KEYS", C.ORDER_KEYS,
+          ("EXIT_85", "SVC_RET", "MAIN_JMP", "WB_FN", "SCHED_RETI", "TASK9"))
+
+    # ---- 2x2 实测
+    check("V86 CUR 槽", C.CUR, 0x68000000)
+    check("V86 就绪位图", C.READY, 0x68000004)
+    check("V86 任务7 TCB", C.TCB7, 0x68000244)
+    check("V86 任务9 TCB", C.TCB9, 0x6800029C)
+    check("V86 reti 就绪位图", C.READY_RETI, 0x036E0000)
+    check("V86 组合数", len(C.COMBO), 4)
+    check("V86 组合标签", C.COMBO_TAGS,
+          ("SAME_AB", "A0_BSET", "AOR_BCLR", "A0_BCLR"))
+    check("V86 唯一 −85 组", C.ONLY_85_TAG, "A0_BCLR")
+    _exp = {
+        "SAME_AB": (0x00000000, 401, 0xFFDB0000, 0x0000000A, 2, 334,
+                    0x137968, 0x001BDBE2, False, False, "jump"),
+        "A0_BSET": (0x00000000, 398, 0xFFDB0000, 0x0000000A, 2, 331,
+                    0x13796E, 0x001BDBE2, False, False, "not_reached"),
+        "AOR_BCLR": (0x00000000, 198, 0xFF560000, 0xA2A05E1C, 0, 221,
+                     0x137968, 0x001BDC1C, False, False, "fall"),
+        "A0_BCLR": (0x000000AB, 314, 0xFFD20000, 0x00000001, 1, 303,
+                    0x13796E, 0x001BDBFA, True, True, "fall"),
+    }
+    for _tag in C.COMBO_TAGS:
+        _c, _e = C.COMBO[_tag], _exp[_tag]
+        check("V86 %s 八项实测" % _tag,
+              (_c["ret"], _c["reti"], _c["p20"], _c["p14"], _c["ints"],
+               _c["npc"], _c["end_pc"], _c["end_r4"]), _e[:8])
+        check("V86 %s −85/链/B门" % _tag,
+              (_c["e85"], _c["chain"], _c["b_gate"]), _e[8:])
+
+    # ---- 短/长窗口
+    check("V86 短 SAME_AB PC 数", C.SHORT["SAME_AB"]["npc"], 192)
+    check("V86 短 A0_BCLR PC 数", C.SHORT["A0_BCLR"]["npc"], 226)
+    check("V86 短 SAME_AB 末PC", C.SHORT["SAME_AB"]["end_pc"], 0x0413B4)
+    check("V86 短 A0_BCLR 末PC", C.SHORT["A0_BCLR"]["end_pc"], 0x0404E8)
+    check("V86 短 SAME_AB 末r4", C.SHORT["SAME_AB"]["end_r4"], 0x0000000A)
+    check("V86 短 A0_BCLR 末r4", C.SHORT["A0_BCLR"]["end_r4"], 0x9F805AB0)
+    check("V86 短 A0_BCLR 返回码", C.SHORT["A0_BCLR"]["ret"], 0x000000AB)
+    check("V86 短 A0_BCLR 链命中", C.SHORT["A0_BCLR"]["chain"], True)
+    check("V86 短两组 reti 均 None",
+          (C.SHORT["SAME_AB"]["reti"], C.SHORT["A0_BCLR"]["reti"]),
+          (None, None))
+    check("V86 长 SAME_AB reti", C.LONG["SAME_AB"]["reti"], 401)
+    check("V86 长 A0_BCLR reti", C.LONG["A0_BCLR"]["reti"], 314)
+    check("V86 长 SAME_AB 任务9", C.LONG["SAME_AB"]["task9"], 402)
+    check("V86 长 A0_BCLR 任务9", C.LONG["A0_BCLR"]["task9"], 315)
+    check("V86 短窗口无 reti 标志", C.SHORT_WINDOW_NO_RETI, True)
+    check("V86 长窗口都有 reti 标志", C.LONG_WINDOW_BOTH_RETI, True)
+
+    # ---- 标准收敛态
+    check("V86 收敛 boot", C.CONVERGE_BOOT, 191520)
+    check("V86 收敛 IRQ", C.CONVERGE_IRQ, 0x2B)
+    check("V86 收敛 RUN", C.CONVERGE_RUN, 500000)
+    check("V86 收敛末PC", C.CONVERGE_TAIL, 0x0407DC)
+    check("V86 覆盖命中 PC 数", len(C.COV_HIT), 9)
+    check("V86 覆盖未命中 PC 数", len(C.COV_MISS), 2)
+    check("V86 覆盖命中常量", C.COV_HIT_COUNT, 9)
+    check("V86 覆盖未命中常量", C.COV_MISS_COUNT, 2)
+    check("V86 覆盖命中首项", C.COV_HIT[0], 0x041BB6)
+    check("V86 覆盖未命中集合", C.COV_MISS, (0x175282, 0x175908))
+
+    # ---- 机器与规矩
+    check("V86 机器数", C.MACHINE_COUNT, 9)
+    check("V86 新规矩", C.NEW_RULES, (84, 85))
+
+    # ---- 纯函数：位与地址
+    check("V86 sx8 0xFF", C.sx(0xFF, 8), -1)
+    check("V86 sx8 0x7F", C.sx(0x7F, 8), 127)
+    check("V86 sx8 199", C.sx8(199), -57)
+    check("V86 sx8 105", C.sx8(105), 105)
+    check("V86 sx8 248", C.sx8(248), -8)
+    check("V86 rel9 199→0x041BB6", C.rel9_target(0x041C26, 199), 0x041BB6)
+    check("V86 rel9 187→0x041B88", C.rel9_target(0x041C10, 187), 0x041B88)
+    check("V86 rel9 174→0x041B86", C.rel9_target(0x041C28, 174), 0x041B86)
+    check("V86 rel9 105→0x041C9A", C.rel9_target(0x041BC6, 105), 0x041C9A)
+    check("V86 rel9 102→0x041C9A", C.rel9_target(0x041BCC, 102), 0x041C9A)
+    check("V86 rel9 74→0x041CA2", C.rel9_target(0x041C0C, 74), 0x041CA2)
+    check("V86 rel9 20→0x041B72", C.rel9_target(0x041B48, 20), 0x041B72)
+    check("V86 rel9 表逐行自洽",
+          all(C.rel9_target(p, r) == t for p, r, _s, t in C.REL9_ROWS), True)
+    check("V86 rel9 表 sx 自洽",
+          all(C.sx8(r) == s for _p, r, s, _t in C.REL9_ROWS), True)
+    check("V86 disp10_addr A", C.disp10_addr(0x000083B0, 13), 0x000083E4)
+    check("V86 disp10_addr B", C.disp10_addr(0x68000968, 2), 0x68000970)
+    check("V86 reason_code -37", C.reason_code(0xFFDB0000), -37)
+    check("V86 reason_code -170", C.reason_code(0xFF560000), -170)
+    check("V86 reason_code -46", C.reason_code(0xFFD20000), -46)
+
+    # ---- 纯函数：真值表与两层
+    check("V86 combo 合取", C.combo_truth(0, 0), "ret_minus_85")
+    check("V86 combo A≠0", C.combo_truth(0xFFFFFFFF, 0), "ret_zero")
+    check("V86 combo B≠0", C.combo_truth(0, 0x80000000), "ret_zero")
+    _rows = [{"tag": t, "e85": C.COMBO[t]["e85"], "switched": True}
+             for t in C.COMBO_TAGS]
+    check("V86 优先级判据", C.priority_verdict(_rows), "no_priority_two_layers")
+    _rows2 = [dict(r, switched=(r["tag"] != "A0_BCLR")) for r in _rows]
+    check("V86 互斥分支判据", C.priority_verdict(_rows2),
+          "mutually_exclusive_branches")
+    check("V86 优先级空表", C.priority_verdict([]), "inconclusive")
+    check("V86 窗口起算 trap", C.window_start_kind("trap"), "trap_entry")
+    check("V86 窗口起算 hook2", C.window_start_kind("hook2"), "after_hook2")
+    check("V86 窗口起算未知", C.window_start_kind("x"), "unknown")
+    check("V86 同起算可比", C.comparable_windows("hook2", "hook2"), True)
+    check("V86 异起算不可比",
+          C.comparable_windows("trap_entry", "after_hook2"), False)
+    _steps = dict((k, s) for k, _p, s in C.ORDER)
+    check("V86 ORDER 严格单调", C.order_monotonic(_steps), True)
+    check("V86 ORDER 缺项不单调",
+          C.order_monotonic(dict(_steps, WB_FN=None)), False)
+    check("V86 ORDER 乱序不单调",
+          C.order_monotonic(dict(_steps, SCHED_RETI=10)), False)
+    check("V86 A 语义栈帧槽",
+          C.a_semantic_verdict(0xFFFFFFFF, 0xFFFFFFFF, "stm1"),
+          "caller_r13_stack_slot")
+    check("V86 A 语义非批量压栈",
+          C.a_semantic_verdict(0xFFFFFFFF, 0xFFFFFFFF, "or"), "unknown")
+    check("V86 跨段 backward",
+          C.cross_segment_verdict(0x041C26, 199, 0x041BB6,
+                                  0x041BEA, 0x041E80),
+          "cross_segment_backward")
+    check("V86 跨段正跳不算",
+          C.cross_segment_verdict(0x041BC6, 105, 0x041C9A,
+                                  0x041BEA, 0x041E80), "same_direction")
+
+    # ---- 纯函数：等形 / 归因 / 覆盖 / 窗口 / 综合
+    _r1 = {"boot": 483841, "hook": 0x041BFC, "post": 600}
+    _r2 = dict(_r1)
+    _r3 = dict(_r1, post=260)
+    check("V86 equal_shape 空", C.equal_shape([]), False)
+    check("V86 equal_shape 全同", C.equal_shape([_r1, _r2]), True)
+    check("V86 equal_shape 有异", C.equal_shape([_r1, _r3]), False)
+    check("V86 same_value 同",
+          C.same_value_verdict({"a": 1}, {"a": 1}, ("a",)), True)
+    check("V86 same_value 异",
+          C.same_value_verdict({"a": 1}, {"a": 2}, ("a",)), False)
+    check("V86 覆盖分层",
+          C.coverage_scope_verdict(9, 2),
+          "kernel_code_ran_command_chain_not_reached")
+    check("V86 覆盖分层不足",
+          C.coverage_scope_verdict(8, 2), "inconclusive")
+    check("V86 短窗口时机差",
+          C.short_window_verdict(True, True),
+          "window_artifact_timing_shift")
+    check("V86 短窗口不足", C.short_window_verdict(False, True),
+          "inconclusive")
+    check("V86 verdict 全真",
+          C.verdict(True, True, True, True, True, True, True), C.VERDICT)
+    check("V86 verdict 有假",
+          C.verdict(False, True, True, True, True, True, True), "open")
+    check("V86 verdict 事件已定位",
+          C.verdict(True, True, True, True, True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 设施源码边界
+    src = io.open(_SRC, encoding="utf-8").read()
+    for _key in ("KI#335", "KI#336", "规矩 84", "规矩 85", "反事实补全",
+                 "链未闭合", "调用者 r13", "栈帧保存槽", "sx8",
+                 "0x041BB6", "窗口起算点", "coverage", "不能报",
+                 "返回码层", "调度层", "任务 9"):
+        check("V86 源码含 %s" % _key, _key in src, True)
+
+    # ---- 结果文件
+    if os.path.exists(_RES):
+        res = io.open(_RES, encoding="utf-8").read()
+        lines = res.splitlines()
+        check("V86 结果行数", len(lines), 140)
+        check("V86 结果零 Traceback", "Traceback" in res, False)
+        check("V86 结果零 Error", "Error" in res, False)
+        check("V86 结果含标题", "没有优先级，是返回码层与调度层" in res, True)
+        for seg in "ABCDEFGH":
+            check("V86 结果含 [%s] 段" % seg, "[%s]" % seg in res, True)
+        for _key in ("9 台独立机器", "DONE V86", "反事实补全",
+                     "KI#336-339", "链未闭合", "规矩 84", "规矩 85",
+                     "no_priority_two_layers", "window_artifact_timing_shift",
+                     "caller_r13_stack_slot", "cross_segment_backward",
+                     "kernel_code_ran_command_chain_not_reached",
+                     "F5 严格单调 = True", "F6 两次 reti 后 80 步 PC 逐项相同 = True",
+                     "B1 等形三项（boot/hook/post）全同 = True",
+                     "B2 NO_PATCH ≡ SAME_AB 六项逐项相同 = True",
+                     "E4 命中 9/9、未命中 2/2", "0x000000AB", "0x041BB6",
+                     "0x041C9A", "0x040EB6", "0x1352EA", "不能报",
+                     C.VERDICT):
+            check("V86 结果含 %s" % _key[:24], _key in res, True)
+        check("V86 结果含四组 reti",
+              all(t in res for t in ("reti=401", "reti=398",
+                                     "reti=198", "reti=314")), True)
+        check("V86 结果含四组等待号",
+              all(("=%d" % n) in res for n in (-37, -170, -46)), True)
+    else:
+        check("V86 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -9217,6 +9496,7 @@ def main():
     test_v83()
     test_v84()
     test_v85()
+    test_v86()
     test_lists()
     test_bctrl()
     test_dual40()
