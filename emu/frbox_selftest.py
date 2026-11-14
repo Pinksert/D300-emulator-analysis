@@ -8430,6 +8430,238 @@ def test_v83():
     check("V83 结果含 DONE", "DONE V83" in res, True)
 
 
+def test_v84():
+    """V84：两道内部条件的数据源、写点与干预层级；规矩 80/81。"""
+    import os
+    import io
+    import re
+    import frbox
+    from frbox import svc84 as C
+
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc84.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc84.txt")
+
+    # ---- 静态口径常量
+    check("V84 boot 步数", C.BOOT_STEP, 483841)
+    check("V84 陷阱入口", C.TRAP, 0x040668)
+    check("V84 服务返回点", C.RET_PC, 0x0406B4)
+    check("V84 早补挂钩", C.HOOK1, 0x040668)
+    check("V84 晚补挂钩", C.HOOK2, 0x041BFC)
+    check("V84 后续步数", C.AFTER, 260)
+    check("V84 主循环立即数", C.MAIN_SVC_IMM32, 0xFFFFFF56)
+    check("V84 真服务号", C.MAIN_SVC_32, -170)
+    check("V84 ROM 基址", C.ROM_BASE, 0x00040000)
+    check("V84 ROM 结束", C.ROM_END, 0x00740000)
+    check("V84 RAM 段基址", C.RAM_REGION[0], 0x00001000)
+    check("V84 RAM 段大小", C.RAM_REGION[1], 0x0003F000)
+    check("V84 RAM 段类型", C.RAM_REGION[2], "ram")
+    check("V84 内核段基址", C.KERN_REGION[0], 0x68000000)
+    check("V84 内核段大小", C.KERN_REGION[1], 0x00020000)
+    check("V84 内核段类型", C.KERN_REGION[2], "ram-kernel")
+
+    # ---- 两道条件与数据源
+    check("V84 读 r13 的 PC", C.LD_R13_PC, 0x041BFE)
+    check("V84 读 r13 的 disp10", C.LD_R13_DISP, 13)
+    check("V84 读 r13 时的 r14", C.R14_AT_LD13, 0x000083B0)
+    check("V84 单元 A", C.SRC_A, 0x000083E4)
+    check("V84 A 读到的值", C.SRC_A_AT_LOAD, 0xFFFFFFFF)
+    check("V84 读 r8 的 PC", C.LD_R8_PC, 0x041BB8)
+    check("V84 读 r8 的 disp10", C.LD_R8_DISP, 2)
+    check("V84 读 r8 时的 r14", C.R14_AT_LD8, 0x68000968)
+    check("V84 单元 B", C.SRC_B, 0x68000970)
+    check("V84 B 读到的值", C.SRC_B_AT_LOAD, 0x80000000)
+    check("V84 cmp r13", C.CMP_R13, 0x041C24)
+    check("V84 beq 到错误区", C.BEQ_ERR, 0x041C26)
+    check("V84 错误区中点", C.ERR_MID, 0x041BB6)
+    check("V84 第二道门", C.AND_GATE, 0x041BCA)
+    check("V84 beq -85", C.BEQ_85, 0x041BCC)
+    check("V84 -85 出口入口", C.EXIT_85, 0x041C9A)
+    check("V84 -85 ret:d", C.RET_D_85, 0x041C9E)
+    check("V84 -85 延迟槽", C.SLOT_85, 0x041CA0)
+    check("V84 MAIN_JMP", C.MAIN_JMP, 0x175282)
+    check("V84 CMD_SEG", C.CMD_SEG, 0x17573C)
+    check("V84 CMD_CMP", C.CMD_CMP, 0x175740)
+    check("V84 WB_CALL", C.WB_CALL, 0x17574C)
+    check("V84 WB_FN", C.WB_FN, 0x175908)
+    check("V84 链键数", len(C.GATE_KEYS), 5)
+    check("V84 出口键数", len(C.EXIT_KEYS), 3)
+
+    # ---- 动态写点
+    check("V84 A 主写点", C.A_WRITER, 0x040692)
+    check("V84 A 主写点助记符", C.A_WRITER_MN, "stm1")
+    check("V84 A 主写点执行 PC", C.A_WRITER_EXEC_PC, 0x040694)
+    check("V84 A 写入步数", C.A_WRITER_STEP, 21)
+    check("V84 读 A 步数", C.LD_R13_STEP, 44)
+    check("V84 写入早于读取", C.A_WRITER_STEP < C.LD_R13_STEP, True)
+    check("V84 A 主写点次数", C.A_WRITER_COUNT, 71)
+    check("V84 A 主写点值种数", len(C.A_WRITER_VALS), 14)
+    check("V84 A 值域含 FFFFFFFF", 0xFFFFFFFF in C.A_WRITER_VALS, True)
+    check("V84 A 值域含 0x260", 0x00000260 in C.A_WRITER_VALS, True)
+    check("V84 A 值域含 0x9F58C4D0", 0x9F58C4D0 in C.A_WRITER_VALS, True)
+    check("V84 A 值域去重数", len(set(C.A_WRITER_VALS)), 14)
+    check("V84 A 写点 PC 数", C.A_WRITER_PCS, 6)
+    check("V84 B 置位写点", C.B_WRITER_SET, 0x041A60)
+    check("V84 B 清位写点", C.B_WRITER_CLR, 0x041AFE)
+    check("V84 B 置位值", C.B_SET_VAL, 0x80000000)
+    check("V84 B 清位值", C.B_CLR_VAL, 0x00000000)
+    check("V84 B 写点 PC 数", C.B_WRITER_PCS, 4)
+    check("V84 静态写点 A", C.STATIC_WRITERS_A, 0)
+    check("V84 静态写点 B", C.STATIC_WRITERS_B, 0)
+
+    # ---- 收敛态
+    check("V84 收敛 boot", C.CONVERGE_BOOT, 191520)
+    check("V84 收敛 IRQ", C.CONVERGE_IRQ, 0x2B)
+    check("V84 收敛 RUN", C.CONVERGE_RUN, 500000)
+    check("V84 收敛末 PC", C.CONVERGE_TAIL, 0x0407DC)
+    check("V84 收敛 RAM 写总数", C.CONVERGE_RAM_WRITES, 113859)
+    check("V84 锚点 RAM 写总数", C.ANCHOR_RAM_WRITES, 109261)
+    check("V84 收敛态写入多于锚点", C.CONVERGE_RAM_WRITES > C.ANCHOR_RAM_WRITES, True)
+    check("V84 A 锚点前写入", C.A_WRITES_ANCHOR, 76)
+    check("V84 A 读时写入", C.A_WRITES_TO_LD13, 77)
+    check("V84 两口径差 1 次 stm1",
+          C.A_WRITES_TO_LD13 - C.A_WRITES_ANCHOR, 1)
+    check("V84 A 收敛写入", C.A_WRITES_CONVERGE, 182)
+    check("V84 B 锚点写入", C.B_WRITES_ANCHOR, 4)
+    check("V84 B 收敛写入", C.B_WRITES_CONVERGE, 5)
+    check("V84 A 锚点前值", C.A_VAL_ANCHOR, 0x00000260)
+    check("V84 A 收敛末值", C.A_VAL_CONVERGE, 0x9F58C4D0)
+    check("V84 B 锚点前值", C.B_VAL_ANCHOR, 0x80000000)
+    check("V84 B 收敛末值", C.B_VAL_CONVERGE, 0x00000000)
+    check("V84 A 三时刻三值",
+          len({C.A_VAL_ANCHOR, C.SRC_A_AT_LOAD, C.A_VAL_CONVERGE}), 3)
+    check("V84 B 置位后再清位", C.B_VAL_ANCHOR != C.B_VAL_CONVERGE, True)
+
+    # ---- 等形反事实
+    check("V84 反事实组数", len(C.CF_GROUPS), 7)
+    check("V84 组名", tuple(t for t, _e, _l in C.CF_GROUPS),
+          ("BASE", "EARLY_A", "EARLY_B", "EARLY_AB", "LATE_A0",
+           "LATE_AB", "LATE_BOTH"))
+    check("V84 BASE 不写", C.CF_GROUPS[0][1] == () and C.CF_GROUPS[0][2] == (), True)
+    check("V84 EARLY_AB 早补两单元", len(C.CF_GROUPS[3][1]), 2)
+    check("V84 LATE_BOTH 晚补两单元", len(C.CF_GROUPS[6][2]), 2)
+    check("V84 服务返回码", C.CF_RET_85, 0x000000AB)
+    check("V84 BASE PC 数", C.CF_BASE_NPC, 166)
+    check("V84 两门全开 PC 数", C.CF_OPEN_NPC, 210)
+    check("V84 PC 数差", C.CF_OPEN_NPC - C.CF_BASE_NPC, 44)
+    check("V84 BASE 末 r4", C.CF_BASE_R4, 0x0000000A)
+    check("V84 两门全开末 r4", C.CF_OPEN_R4, 0x0000000B)
+    check("V84 副作用 PC 数", C.CF_SIDE_NPC, 260)
+    check("V84 副作用末 r4", C.CF_SIDE_R4, 0x001BDBAE)
+    check("V84 两门全开组", C.CF_OPEN_TAGS, ("LATE_AB", "LATE_BOTH"))
+    check("V84 独立机器数", C.MACHINE_COUNT, 9)
+    check("V84 判据串", C.VERDICT,
+          "source_units_located_memory_patch_natural_flow_gates_open")
+
+    # ---- 纯函数：sx / disp10_addr
+    check("V84 sx8 0xFF", C.sx(0xFF, 8), -1)
+    check("V84 sx8 0x7F", C.sx(0x7F, 8), 127)
+    check("V84 sx32 FFFFFFFF", C.sx(0xFFFFFFFF, 32), -1)
+    check("V84 disp10 A 推导", C.disp10_addr(C.R14_AT_LD13, 13), C.SRC_A)
+    check("V84 disp10 B 推导", C.disp10_addr(C.R14_AT_LD8, 2), C.SRC_B)
+    check("V84 disp10 负偏移", C.disp10_addr(0x00001000, 0xFF), 0x00000FFC)
+    check("V84 disp10 掩码 32 位", C.disp10_addr(0xFFFFFFF0, 4), 0x00000000)
+
+    # ---- 纯函数：段与常量
+    check("V84 A 是普通 RAM", C.region_kind(C.SRC_A), "ram")
+    check("V84 B 是内核 RAM", C.region_kind(C.SRC_B), "ram-kernel")
+    check("V84 处理函数是 ROM", C.region_kind(0x041BEA), "rom")
+    check("V84 未映射", C.region_kind(0x90000000), "unmapped")
+    check("V84 A 不是 ROM 常量", C.is_rom_constant(C.SRC_A), False)
+    check("V84 B 不是 ROM 常量", C.is_rom_constant(C.SRC_B), False)
+    check("V84 0x041BEA 是 ROM 常量", C.is_rom_constant(0x041BEA), True)
+
+    # ---- 纯函数：写点口径与归类
+    check("V84 静态假阴性 76", C.static_writer_verdict(0, 76),
+          "static_false_negative")
+    check("V84 静态假阴性 4", C.static_writer_verdict(0, 4),
+          "static_false_negative")
+    check("V84 确实无人写", C.static_writer_verdict(0, 0),
+          "no_writers_observed")
+    check("V84 静态可见", C.static_writer_verdict(2, 5), "static_visible")
+    check("V84 stm1 归批量压栈", C.writer_class("stm1"), "batch_push")
+    check("V84 stm0 归批量压栈", C.writer_class("stm0"), "batch_push")
+    check("V84 or 归置位", C.writer_class("or"), "bit_set")
+    check("V84 and 归清位", C.writer_class("and"), "bit_clear")
+    check("V84 ld 归其它", C.writer_class("ld"), "other")
+
+    # ---- 纯函数：时机与层级
+    check("V84 早补被覆盖", C.overlay_verdict(0, 0xFFFFFFFF, True),
+          "overwritten")
+    check("V84 早补无中间写", C.overlay_verdict(0, 0, False),
+          "early_survives")
+    check("V84 同值覆写", C.overlay_verdict(0, 0, True),
+          "same_value_rewrite")
+    check("V84 层级 寄存器", C.patch_layer("register"), "register")
+    check("V84 层级 内存", C.patch_layer("memory"), "memory")
+    check("V84 层级 器件事件", C.patch_layer("device_event"), "device_event")
+    check("V84 层级 未知", C.patch_layer("x"), "unknown")
+
+    # ---- 纯函数：等形 / 门 / 综合判据
+    eq = [{"boot": 483841, "hooks": (1, 2), "post": 260} for _ in range(7)]
+    check("V84 等形 7 台全同", C.equal_shape(eq), True)
+    eq2 = eq + [{"boot": 483841, "hooks": (1, 3), "post": 260}]
+    check("V84 等形挂钩不同", C.equal_shape(eq2), False)
+    check("V84 等形空表", C.equal_shape([]), False)
+    check("V84 门全关", C.gate_verdict(False, False, False), "both_closed")
+    check("V84 只开门1", C.gate_verdict(True, False, False), "gate1_only")
+    check("V84 两门开链中", C.gate_verdict(True, True, True),
+          "both_open_chain_hit")
+    check("V84 两门开链未中", C.gate_verdict(True, True, False),
+          "both_open_chain_miss")
+    args = (True, True, True, True, True, True, True, False)
+    check("V84 综合判据", C.source_verdict(*args), C.VERDICT)
+    check("V84 综合判据 事件已定位",
+          C.source_verdict(True, True, True, True, True, True, True, True),
+          "event_semantics_located")
+    check("V84 综合判据 静态可见则 open",
+          C.source_verdict(False, True, True, True, True, True, True, False),
+          "open")
+    check("V84 综合判据 晚补未返 0xAB 则 open",
+          C.source_verdict(True, True, True, True, True, False, True, False),
+          "open")
+    check("V84 综合判据 链未中则 open",
+          C.source_verdict(True, True, True, True, True, True, False, False),
+          "open")
+    check("V84 综合判据 A 是 ROM 则 open",
+          C.source_verdict(True, True, False, True, True, True, True, False),
+          "open")
+
+    # ---- 设施文档边界
+    src = io.open(_SRC, encoding="utf-8", errors="replace").read()
+    for key in ("规矩 80", "规矩 81", "stm1", "writers_of", "KI#327",
+                "all_writes", "vec 0x18", "链仍未闭合", "反事实补全",
+                "栈帧保存槽", "位标志字", "干预层级", "补早了会被覆盖"):
+        check("V84 设施文档含 %s" % key, key in src, True)
+    for key in ("所有服务语义已解出", "真机已复现", "显示链通了",
+                "写一次内存单元就等于器件事件", "A 是器件状态字"):
+        check("V84 禁语：%s" % key, key in src, True)
+    check("V84 版本格式（不硬编码当前版）",
+          frbox.__version__.startswith("0."), True)
+
+    # ---- 正式结果文件
+    res = io.open(_RES, encoding="utf-8", errors="replace").read()
+    check("V84 结果无 Traceback", "Traceback" in res, False)
+    check("V84 结果无 Error 词", len(re.findall(r"\bError\b", res)), 0)
+    for seg in ("[A]", "[B]", "[C]", "[D]", "[E]", "[F]", "[G]", "[H]"):
+        check("V84 结果含 %s 段" % seg, seg in res, True)
+    check("V84 结果含 9 台独立机器", "9 台独立机器" in res, True)
+    check("V84 结果含综合判据", C.VERDICT in res, True)
+    check("V84 结果含 0x000000AB", "0x000000AB" in res, True)
+    check("V84 结果含 0x000083E4", "0x000083E4" in res, True)
+    check("V84 结果含 0x68000970", "0x68000970" in res, True)
+    check("V84 结果含 stm1", "stm1" in res, True)
+    check("V84 结果含 LATE_BOTH", "LATE_BOTH" in res, True)
+    check("V84 结果含两口径 C1b", "C1b" in res, True)
+    check("V84 结果含 77 次", "77 次" in res, True)
+    check("V84 结果含 CUR_TCB 链", "0x68000968" in res, True)
+    check("V84 结果含规矩 80", "规矩 80" in res, True)
+    check("V84 结果含规矩 81", "规矩 81" in res, True)
+    check("V84 结果含链未闭合", "链未闭合" in res, True)
+    check("V84 结果含等形全同 True", "全同 = True" in res, True)
+    check("V84 结果含 DONE", "DONE V84" in res, True)
+
+
 def test_v82():
     """V82：真内核分发表 32 位有符号索引口径、-170 号处理函数、规矩 76/77。"""
     import os
@@ -8717,6 +8949,7 @@ def main():
     test_v81()
     test_v82()
     test_v83()
+    test_v84()
     test_lists()
     test_bctrl()
     test_dual40()
