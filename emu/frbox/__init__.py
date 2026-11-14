@@ -158,6 +158,17 @@
                    覆盖，晚补 A + 补 B 时服务自然返回 0xAB 并命中命令分发链；
                    规矩 80 分清数据源类型与静态/动态写点 / 规矩 81
                    分清干预层级与写入时机，仍非真机器件事件）
+    frbox.svc85    短窗口把时机差读成路径差（V85，纯函数；
+                   结 KI#331 最后一条：V84 的 EARLY_B「副作用」不是另一条路径，
+                   而是同一次任务换手被提前 203 步。0x041B32 ld disp10=2,r8
+                   读 B 单元 0x68000970 → 0x041B48 bne；B=0 落 0x041B4A 另一条尾
+                   → 0x040D32 派发器 → 0x040EB6 reti → 任务 9 入口 0x1352EA；
+                   末 r4=0x1BDBAE 是 0x1378FA ldi:32 的 ROM 常量（V46 的 0x40
+                   器件表 0 源地址），不是状态字。4 台短窗口等形反事实证差异来自
+                   值而非写动作、只清 B 不动 A 就够；600 步长窗口证 BASE reti@444 /
+                   EARLY_B@241、之后 80 步 PC 逐项相同、末 PC 同为 0x137966。
+                   规矩 82 窗口长度 / 规矩 83 结果层≠原因层与 all_writes 只记 RAM；
+                   标准收敛态 coverage 四 PC 全命中，不是新功能、不是唤醒，链未闭合）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -171,4 +182,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.84.0"
+__version__ = "0.85.0"
