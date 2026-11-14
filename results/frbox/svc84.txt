@@ -1,0 +1,100 @@
+============================================================================
+V84 · 两道条件不在寄存器里，在陷阱栈帧槽和对象位标志字里 —— A–H 八段 / 9 台机器
+============================================================================
+
+[A] 静态推导：disp10 → 实际单元（只读 ROM）
+A1 0x041BFE ld disp10=13(0xD) ri=r13；disp10=13 → r14(0x000083B0)+52 = 0x000083E4
+A2 0x041BB8 ld disp10=2(0x2) ri=r8；disp10=2 → r14(0x68000968)+8 = 0x68000970
+A3 推导单元 == 设施常量：A True / B True
+A4 段归属纯函数：A=ram B=ram-kernel；两者是 ROM 常量吗？False / False
+A5 静态可定址写点 writers_of：A=0 B=0（设施 0 / 0）
+
+[B] 只观测轨迹机：单步实测 A / B 的地址与值（1 台，不改任何状态）
+B0 锚点 pc=0x040668 r12=0xFFFFFF56（== 0x040668 / -170 ? True）
+B1 锚点前 A=0x00000260 B=0x80000000
+B2 到 0x041BFE 第 44 步：r14=0x000083B0 A=0x000083E4 mem=0xFFFFFFFF
+B3 CUR_TCB 链（0x041C00 / 0x041C06 / 0x041C20 / 0x041C24 处实测）：
+     0x041C00 r14=0x000083B0 r8=0x00000000 r13=0xFFFFFFFF
+     0x041C06 r14=0x000083B0 r8=0x68000000 r13=0xFFFFFFFF
+     0x041C20 r14=0x00055264 r8=0x000000B0 r13=0xFFFFFFFF
+     0x041C24 r14=0x68000968 r8=0x000000B0 r13=0xFFFFFFFF
+B4 第 44 步读到 A=0xFFFFFFFF（设施 0xFFFFFFFF）→ True
+
+[C] 同一台只观测轨迹机的 bus.all_writes：谁决定了 A 的值
+C1 到 0x041BFE 口径：A 写入 77 次 / B 写入 4 次（设施 77 / 4）→ True / True
+C1b 锚点前口径：A 写入 76 次（设施 76）；差 1 次 = 第 21 步 stm1
+C2 A 写点 PC：0x040692×71 0x0417E2×2 0x04080A×1 0x120928×1 0x120D9E×1 0x041B78×1
+C3 主写点 0x040692 写了 71 次、14 种值（设施 71 次 / 14 种）→ True / True
+C4 B 写点 PC：0x0407F4×1 0x040936×1 0x041AFE×1 0x041A60×1
+C5 A 写点 PC 数=6 B 写点 PC 数=4（设施 6 / 4）
+C6 静态/动态口径判定：A=static_false_negative B=static_false_negative
+C7 从陷阱入口到 0x041BFE 之间对 A / B 的写入时间线（B 段逐步记录）：
+     A step=21  执行pc=0x040694 addr=0x000083E4 val=0xFFFFFFFF 写点pc=0x040692
+C8 写 A=0xFFFFFFFF 的时刻/写点 = step21@0x040692（设施 step=21 / 0x040692）→ True
+C9 主写点指令 = stm1（设施 stm1），读取步数 44
+
+[D] 标准收敛态机（1 台，V65–V84 逐字相同的设备策略）
+D1 末 PC=0x0407DC（设施 0x0407DC → True），RAM 写总数=113859（设施 113859）
+D2 A 写入 182 次（设施 182），末值 0x9F58C4D0（设施 0x9F58C4D0）
+D3 B 写入 5 次（设施 5），末值 0x00000000（设施 0x00000000）
+D4 A 三个时刻三值：锚点前 0x00000260 → 读时 0xFFFFFFFF → 收敛末 0x9F58C4D0
+D5 判定：静态写点 0 但动态写入 > 0 ⇒ 不是「没人写」
+
+[E] 三个写点的指令语义（只读 ROM）
+  E1 陷阱分发器含 stm1：
+     0x04068C st       rs2=4                    
+     0x04068E st       rs2=5                    
+     0x040690 st       rs2=1                    
+     0x040692 stm1                              <== 写点
+     0x040694 stm0                              
+     0x040696 ldi:20   i20=1088(0x440) ri=r14   
+  E2 B 置位：
+     0x041A5C ld       disp10=2(0x2) ri=r7      
+     0x041A5E or       ri=r5 rj=r7              
+     0x041A60 st       disp10=2(0x2) ri=r5      <== 写点
+     0x041A62 orccr    u8=16(0x10)              
+  E3 B 清位：
+     0x041AF8 ld       ri=r14 rj=r14            
+     0x041AFA ld       disp10=2(0x2) ri=r7      
+     0x041AFC and      ri=r5 rj=r7              
+     0x041AFE st       disp10=2(0x2) ri=r5      <== 写点
+E4 写点归类：stm1=batch_push / or=bit_set / and=bit_clear
+E5 ⇒ A 是陷阱分发器栈帧保存槽（调用者 r13），B 是内核对象位标志字
+
+[F] 只补内存单元、不改寄存器的等形反事实（7 台独立机器）
+F1 等形三项（boot / hooks / post）全同 = True
+F2 组          读A           读B           返回点r12       末r4        PC数    链全中    命中
+BASE       0xFFFFFFFF   —            0x00000000   0x0000000A 166    False  LD_R13 CMP_R13 BEQ_ERR
+EARLY_A    0xFFFFFFFF   —            0x00000000   0x0000000A 166    False  LD_R13 CMP_R13 BEQ_ERR
+EARLY_B    0xFFFFFFFF   —            0x00000000   0x001BDBAE 260    False  LD_R13 CMP_R13 BEQ_ERR
+EARLY_AB   0xFFFFFFFF   —            0x00000000   0x001BDBAE 260    False  LD_R13 CMP_R13 BEQ_ERR
+LATE_A0    0x00000000   0x80000000   0x00000000   0x0000000A 163    False  LD_R13 CMP_R13 BEQ_ERR ERR_MID LD_R8 AND_GATE BEQ_85
+LATE_AB    0x00000000   0x00000000   0x000000AB   0x0000000B 210    True   LD_R13 CMP_R13 BEQ_ERR ERR_MID LD_R8 AND_GATE BEQ_85 EXIT_85 RET_D_85 SLOT_85 MAIN_JMP CMD_SEG CMD_CMP WB_CALL WB_FN
+LATE_BOTH  0x00000000   0x00000000   0x000000AB   0x0000000B 210    True   LD_R13 CMP_R13 BEQ_ERR ERR_MID LD_R8 AND_GATE BEQ_85 EXIT_85 RET_D_85 SLOT_85 MAIN_JMP CMD_SEG CMD_CMP WB_CALL WB_FN
+F3 B 单元实测 r14 = 0x68000968 0x68000968（设施 0x68000968，disp10=2 → 0x68000970）
+F4 EARLY_A 与 BASE 逐项相同 = True（早补被 stm1 覆盖）
+F5 LATE_AB 与 LATE_BOTH 逐项相同 = True（B 无中间写入）
+F6 改写确实改变执行：LATE_AB 不同PC=210 vs BASE=166，差=44
+F7 服务自己返回码 = 0x000000AB 0x000000AB（设施 0x000000AB，经 0x0406BE extsb 得 -85）
+
+[G] 归因分离：两道门与副作用
+G1 BASE       门1(ERR_MID)=False 门2(EXIT_85)=False SLOT_85=False MAIN_JMP=False WB_FN=False 判据=both_closed
+G1 EARLY_A    门1(ERR_MID)=False 门2(EXIT_85)=False SLOT_85=False MAIN_JMP=False WB_FN=False 判据=both_closed
+G1 EARLY_B    门1(ERR_MID)=False 门2(EXIT_85)=False SLOT_85=False MAIN_JMP=False WB_FN=False 判据=both_closed
+G1 EARLY_AB   门1(ERR_MID)=False 门2(EXIT_85)=False SLOT_85=False MAIN_JMP=False WB_FN=False 判据=both_closed
+G1 LATE_A0    门1(ERR_MID)=True  门2(EXIT_85)=False SLOT_85=False MAIN_JMP=False WB_FN=False 判据=gate1_only
+G1 LATE_AB    门1(ERR_MID)=True  门2(EXIT_85)=True  SLOT_85=True  MAIN_JMP=True  WB_FN=True  判据=both_open_chain_hit
+G1 LATE_BOTH  门1(ERR_MID)=True  门2(EXIT_85)=True  SLOT_85=True  MAIN_JMP=True  WB_FN=True  判据=both_open_chain_hit
+G2 LATE_A0 只开门1、LATE_AB 开两门 ⇒ 第二道门独立 = True
+G3 EARLY_B / EARLY_AB 清掉 B 但门1 关：PC数=260 末r4=0x001BDBAE，−85 出口未命中 = True（具体去向本版未追，列为开放项）
+G4 干预层级：V83=改register，V84=改memory；两者都不等于device_event
+G5 时机判定 EARLY_A = overwritten（写入发生在读之前 21 步 stm1 覆盖）
+
+[H] 综合判据与边界
+H1 静态写点 0=True 动态写入>0=True A/B 是 RAM=True/True 早补被覆盖=True 晚补返回0xAB=True 链全中=True
+H2 综合判据 = source_units_located_memory_patch_natural_flow_gates_open
+H3 规矩 80：writers_of==0 ≠ 没人写；A 是 stm1 栈帧保存槽不是状态字
+H4 规矩 81：补寄存器 ≠ 补内存单元 ≠ 补器件事件；早补会被覆盖
+H5 边界：所有写内存单元都是反事实补全，不是固件行为 / 真机器件事件；链未闭合
+
+DONE V84 A–H 八段，9 台独立机器（1 只观测轨迹机 + 1 标准收敛态机 + 7 等形反事实机），反事实全部标注
