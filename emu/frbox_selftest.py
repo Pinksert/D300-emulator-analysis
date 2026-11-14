@@ -8865,6 +8865,272 @@ def test_v82():
 
 
 
+def test_v85():
+    """V85：短窗口把时机差读成路径差；规矩 82/83。"""
+    import os
+    import io
+    import frbox
+    from frbox import svc85 as C
+
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc85.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc85.txt")
+
+    # ---- 静态口径常量
+    check("V85 boot 步数", C.BOOT_STEP, 483841)
+    check("V85 陷阱入口", C.TRAP, 0x040668)
+    check("V85 服务返回点", C.RET_PC, 0x0406B4)
+    check("V85 早补挂钩", C.HOOK1, 0x040668)
+    check("V85 晚补挂钩", C.HOOK2, 0x041BFC)
+    check("V85 短窗口", C.AFTER, 260)
+    check("V85 长窗口", C.LONG_AFTER, 600)
+    check("V85 对齐步数", C.ALIGN, 80)
+    check("V85 主循环立即数", C.MAIN_SVC_IMM32, 0xFFFFFF56)
+    check("V85 真服务号", C.MAIN_SVC_32, -170)
+    check("V85 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+
+    # ---- B 单元与分叉门
+    check("V85 B 单元", C.SRC_B, 0x68000970)
+    check("V85 B 置位值", C.SRC_B_SET, 0x80000000)
+    check("V85 B 清位值", C.SRC_B_CLR, 0x00000000)
+    check("V85 门处 r14", C.R14_AT_GATE, 0x68000968)
+    check("V85 读 B 指令", C.LD_B_GATE, 0x041B32)
+    check("V85 disp10", C.LD_B_DISP, 2)
+    check("V85 and 指令", C.AND_R9_R6, 0x041B46)
+    check("V85 bne 指令", C.BNE_GATE, 0x041B48)
+    check("V85 跳落点", C.TAKE_JUMP, 0x041B72)
+    check("V85 落落点", C.TAKE_FALL, 0x041B4A)
+    check("V85 正常返回延迟槽", C.NORMAL_RET_SLOT, 0x041B84)
+    check("V85 固件清 B 写点", C.B_CLR_PC, 0x041AFE)
+    check("V85 固件清 B 步数", C.B_CLR_STEP_BASE, 195)
+    check("V85 BASE and", C.BASE_AND, 0x80000000)
+    check("V85 EARLY and", C.EARLY_AND, 0x00000000)
+
+    # ---- 换手链
+    check("V85 派发器", C.DISPATCH, 0x040D32)
+    check("V85 调度器入口", C.SCHED_SRCH, 0x040E18)
+    check("V85 reti", C.RETI, 0x040EB6)
+    check("V85 BASE reti 步", C.RETI_STEP_BASE, 444)
+    check("V85 EARLY reti 步", C.RETI_STEP_EARLY, 241)
+    check("V85 提前步数", C.ADVANCE, 203)
+    check("V85 队列函数", C.QUEUE_FN, 0x041EBA)
+    check("V85 位图函数", C.READYMAP_FN, 0x04188E)
+    check("V85 调度 call", C.SCHED_CALL, 0x040E46)
+
+    # ---- 任务身份
+    check("V85 CUR 槽", C.CUR, 0x68000000)
+    check("V85 就绪位图", C.READY, 0x68000004)
+    check("V85 任务7 TCB", C.TCB7, 0x68000244)
+    check("V85 任务9 TCB", C.TCB9, 0x6800029C)
+    check("V85 任务7 号", C.TASK7_ID, 7)
+    check("V85 任务9 号", C.TASK9_ID, 9)
+    check("V85 任务7 入口", C.TASK7_ENTRY, 0x175192)
+    check("V85 任务9 入口", C.TASK9_ENTRY, 0x1352EA)
+    check("V85 锚点就绪位图", C.READY_ANCHOR, 0x076E0000)
+    check("V85 reti 就绪位图", C.READY_RETI, 0x036E0000)
+    check("V85 任务7 等待态", C.TCB7_STATE, 0x04)
+    check("V85 任务9 就绪态", C.TCB9_STATE, 0x00)
+
+    # ---- 等待态（结果层/原因层）
+    check("V85 BASE +0x14", C.BASE_TCB7_P14, 0x0000000A)
+    check("V85 BASE +0x20", C.BASE_TCB7_P20, 0xFFDB0000)
+    check("V85 EARLY +0x14", C.EARLY_TCB7_P14, 0xA2A05E1C)
+    check("V85 EARLY +0x20", C.EARLY_TCB7_P20, 0xFF560000)
+    check("V85 BASE 等待服务号", C.BASE_WAIT_SVC, -37)
+    check("V85 EARLY 等待服务号", C.EARLY_WAIT_SVC, -170)
+    check("V85 BASE int 次数", C.BASE_INTS_600, 2)
+    check("V85 EARLY int 次数", C.EARLY_INTS_600, 0)
+    check("V85 BASE int 步数", C.BASE_INT_STEPS, (137, 233))
+    check("V85 BASE int PC", C.BASE_INT_PCS, (0x175414, 0x17588E))
+
+    # ---- 表下载 / ROM 常量
+    check("V85 常量 ldi", C.CONST_LDI, 0x1378FA)
+    check("V85 常量立即数", C.CONST_IMM, 0x001BDBAE)
+    check("V85 表0 源", C.TABLE0_SRC, 0x001BDBAE)
+    check("V85 表0 项数", C.TABLE0_ITEMS, 256)
+    check("V85 表0 首值", C.TABLE0_FIRST, 0x0000)
+    check("V85 表0 末值", C.TABLE0_LAST, 0x3FC0)
+    check("V85 表0 步长", C.TABLE0_DELTA, 0x40)
+    check("V85 下载窗口", C.DOWNLOAD_WIN, 0x40010000)
+    check("V85 表0 目标偏移", C.DOWNLOAD_OFF0, 0x10200)
+    check("V85 拷贝环", C.COPY_LOOP, 0x137968)
+    check("V85 表下载函数", C.TABLE_FN, 0x1378EA)
+    check("V85 调用拷贝环", C.CALL_TO_COPY, 0x13790A)
+
+    # ---- 窗口口径
+    check("V85 短 BASE PC 数", C.SHORT_BASE_NPC, 166)
+    check("V85 短 SIDE PC 数", C.SHORT_SIDE_NPC, 260)
+    check("V85 长 BASE PC 数", C.LONG_BASE_NPC, 343)
+    check("V85 长 SIDE PC 数", C.LONG_SIDE_NPC, 264)
+    check("V85 短 BASE 窗口内末PC", C.SHORT_BASE_END_IN, 0x04069E)
+    check("V85 短 SIDE 窗口内末PC", C.SHORT_SIDE_END_IN, 0x13796A)
+    check("V85 短 BASE 跑满末PC", C.SHORT_BASE_END_AFTER, 0x0406A0)
+    check("V85 短 SIDE 跑满末PC", C.SHORT_SIDE_END_AFTER, 0x13796C)
+    check("V85 长窗口末PC", C.LONG_END_PC, 0x137966)
+    check("V85 长 BASE 末r4", C.BASE_LONG_R4, 0x001BDBD6)
+    check("V85 长 EARLY 末r4", C.EARLY_LONG_R4, 0x001BDC10)
+
+    # ---- 标准收敛态与反事实组
+    check("V85 收敛 boot", C.CONVERGE_BOOT, 191520)
+    check("V85 收敛 IRQ", C.CONVERGE_IRQ, 0x2B)
+    check("V85 收敛 RUN", C.CONVERGE_RUN, 500000)
+    check("V85 收敛末PC", C.CONVERGE_TAIL, 0x0407DC)
+    check("V85 收敛 coverage PC 集", C.CONVERGE_COV_PCS,
+          (0x1378FA, 0x137968, 0x1352EA, 0x040EB6))
+    check("V85 反事实组数", len(C.CF_GROUPS), 4)
+    check("V85 反事实组名", tuple(g[0] for g in C.CF_GROUPS),
+          ("BASE", "EARLY_B", "SAME_B", "LATE_B"))
+    check("V85 EARLY_B 早补 B=0", C.CF_GROUPS[1][1], ((0x68000970, 0),))
+    check("V85 SAME_B 早补同值", C.CF_GROUPS[2][1],
+          ((0x68000970, 0x80000000),))
+    check("V85 LATE_B 晚补 B=0", C.CF_GROUPS[3][2], ((0x68000970, 0),))
+    check("V85 值归因标签", C.VALUE_TAGS, ("EARLY_B", "LATE_B"))
+    check("V85 机器数", C.MACHINE_COUNT, 7)
+    check("V85 综合判据常量", C.VERDICT,
+          "short_window_artifact_resolved_early_context_switch")
+
+    # ---- 纯函数：位与地址
+    check("V85 sx8(0xFF)", C.sx(0xFF, 8), -1)
+    check("V85 sx8(0x7F)", C.sx(0x7F, 8), 127)
+    check("V85 sx16(0xFFDB)", C.sx(0xFFDB, 16), -37)
+    check("V85 sx16(0xFF56)", C.sx(0xFF56, 16), -170)
+    check("V85 disp10_addr B", C.disp10_addr(0x68000968, 2), 0x68000970)
+    check("V85 disp10_addr A", C.disp10_addr(0x000083B0, 13), 0x000083E4)
+    check("V85 reason_code -37", C.reason_code(0xFFDB0000), -37)
+    check("V85 reason_code -170", C.reason_code(0xFF560000), -170)
+    check("V85 reason_code 0", C.reason_code(0x00000000), 0)
+
+    # ---- 纯函数：门与落点
+    check("V85 b_gate 置位", C.b_gate(0x80000000), "jump")
+    check("V85 b_gate 清位", C.b_gate(0), "fall")
+    check("V85 b_gate 掩码", C.b_gate(0x00000001, 0xFFFFFFFE), "fall")
+    check("V85 gate_target jump", C.gate_target("jump"), 0x041B72)
+    check("V85 gate_target fall", C.gate_target("fall"), 0x041B4A)
+    check("V85 gate_target 未知", C.gate_target("x"), "unknown")
+
+    # ---- 纯函数：等形
+    r1 = {"boot": 483841, "hooks": (0x040668, 0x041BFC),
+          "post": 260, "window": 260}
+    r2 = dict(r1)
+    r3 = dict(r1, post=600)
+    check("V85 equal_shape 空", C.equal_shape([]), False)
+    check("V85 equal_shape 全同", C.equal_shape([r1, r2]), True)
+    check("V85 equal_shape 有异", C.equal_shape([r1, r3]), False)
+
+    # ---- 纯函数：值归因
+    vb = {"npc": 166, "end_pc": 0x0406A0, "end_r4": 0xA,
+          "hit_switch": False}
+    vs = dict(vb)
+    ve = {"npc": 260, "end_pc": 0x13796C, "end_r4": 0x1BDBAE,
+          "hit_switch": True}
+    vx = dict(vb, npc=167)
+    check("V85 patch 值归因", C.patch_value_verdict(vb, vs, ve),
+          "value_not_write_action")
+    check("V85 patch 无差异", C.patch_value_verdict(vb, vs, vb),
+          "no_difference")
+    check("V85 patch 写动作", C.patch_value_verdict(vb, vx, ve),
+          "write_action_side_effect")
+
+    # ---- 纯函数：窗口口径
+    check("V85 window_end 同", C.window_end_kind(0x1000, 0x1000), "same")
+    check("V85 window_end 一条", C.window_end_kind(0x04069E, 0x0406A0),
+          "one_sequential_instruction")
+    check("V85 window_end 其它", C.window_end_kind(0x1000, 0x1010), "other")
+    check("V85 advance", C.advance_steps(444, 241), 203)
+    check("V85 short_window 时机差",
+          C.short_window_verdict((0x1, 0x2), (0x3, 0x3), True, 203),
+          "window_artifact_timing_shift")
+    check("V85 short_window 真路径差",
+          C.short_window_verdict((0x1, 0x2), (0x1, 0x2), False, 0),
+          "genuine_path_difference")
+    check("V85 short_window 不足",
+          C.short_window_verdict((0x1, 0x1), (0x1, 0x1), True, 0),
+          "inconclusive")
+
+    # ---- 纯函数：结果层 / 原因层 / 表 / 工具
+    check("V85 path_identity 同",
+          C.path_identity_verdict(True, True, True, True), "same_path_shifted")
+    check("V85 path_identity 异",
+          C.path_identity_verdict(True, False, True, True), "different_path")
+    check("V85 wait_reason 异",
+          C.wait_reason_verdict(0xFFDB0000, 0xFF560000, 0xA, 0xA2A05E1C),
+          "different_reason")
+    check("V85 wait_reason 同",
+          C.wait_reason_verdict(0xFFDB0000, 0xFFDB0000, 0xA, 0xA),
+          "same_reason")
+    check("V85 表0 线性", C.table0_shape(0, 0x3FC0, 256, 0x40), True)
+    check("V85 表0 非线性", C.table0_shape(0, 0x3FC0, 256, 0x20), False)
+    check("V85 工具 all_writes+ram",
+          C.tool_scope_verdict("all_writes", "ram"), "ok")
+    check("V85 工具 all_writes+device",
+          C.tool_scope_verdict("all_writes", "device"), "wrong_tool")
+    check("V85 工具 coverage",
+          C.tool_scope_verdict("coverage", "device"), "ok")
+    check("V85 verdict 全真",
+          C.verdict(True, True, True, True, True), C.VERDICT)
+    check("V85 verdict 开窗假", C.verdict(False, True, True, True, True),
+          "open")
+    check("V85 verdict 事件已定位",
+          C.verdict(True, True, True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 设施源码边界
+    src = io.open(_SRC, encoding="utf-8").read()
+    check("V85 源码含 KI#331", "KI#331" in src, True)
+    check("V85 源码含规矩 82", "规矩 82" in src, True)
+    check("V85 源码含规矩 83", "规矩 83" in src, True)
+    check("V85 源码含 all_writes", "all_writes" in src, True)
+    check("V85 源码含链仍未闭合", "链仍未闭合" in src, True)
+    check("V85 源码含反事实补全", "反事实补全" in src, True)
+    check("V85 源码含窗口", "窗口" in src, True)
+    check("V85 源码禁语新路径", "EARLY_B 走了一条新路径" in src, True)
+    check("V85 源码禁语唤醒", "清 B 位唤醒了任务 9" in src, True)
+    check("V85 源码含任务换手", "任务换手" in src, True)
+    check("V85 源码含 203", "203" in src, True)
+    check("V85 源码含 TCB+0x20", "TCB+0x20" in src, True)
+    check("V85 源码含 0x40 器件", "0x40" in src, True)
+
+    # ---- 结果文件
+    if os.path.exists(_RES):
+        res = io.open(_RES, encoding="utf-8").read()
+        lines = res.splitlines()
+        check("V85 结果行数", len(lines), 109)
+        check("V85 结果零 Traceback", "Traceback" in res, False)
+        check("V85 结果零 Error", "Error" in res, False)
+        check("V85 结果含标题", "短窗口把时机差读成路径差" in res, True)
+        for seg in "ABCDEFGH":
+            check("V85 结果含 [%s] 段" % seg, "[%s]" % seg in res, True)
+        check("V85 结果含 7 台机器", "7 台独立机器" in res, True)
+        check("V85 结果含 DONE", "DONE V85" in res, True)
+        check("V85 结果含反事实标注", "反事实补全" in res, True)
+        check("V85 结果含 KI#335", "KI#335" in res, True)
+        check("V85 结果含链未闭合", "链未闭合" in res, True)
+        check("V85 结果含等形 True", "全同 = True" in res, True)
+        check("V85 结果含 203", "提前=203 步" in res, True)
+        check("V85 结果含 80 步对齐", "80 步 PC 序列逐项相同 = True" in res, True)
+        check("V85 结果含 444/241", "BASE=444 EARLY_B=241" in res, True)
+        check("V85 结果含 step195", "step195@0x041AFE" in res, True)
+        check("V85 结果含 0x1BDBAE", "0x1BDBAE" in res, True)
+        check("V85 结果含表0线性", "线性判据=True" in res, True)
+        check("V85 结果含四 PC 全命中", "四 PC 全命中 = True" in res, True)
+        check("V85 结果含窗口判据",
+              "window_artifact_timing_shift" in res, True)
+        check("V85 结果含值归因",
+              "value_not_write_action" in res, True)
+        check("V85 结果含结果层", "same_path_shifted" in res, True)
+        check("V85 结果含原因层", "different_reason" in res, True)
+        check("V85 结果含规矩 82", "规矩 82" in res, True)
+        check("V85 结果含规矩 83", "规矩 83" in res, True)
+        check("V85 结果含综合判据", C.VERDICT in res, True)
+        check("V85 结果含禁语", "不能报" in res, True)
+        check("V85 结果含任务9身份", "任务号=9 入口=0x1352EA" in res, True)
+        check("V85 结果含等待号 -37", "等待服务号=-37" in res, True)
+        check("V85 结果含等待号 -170", "等待服务号=-170" in res, True)
+        check("V85 结果含工具口径", "wrong_tool" in res, True)
+    else:
+        check("V85 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -8950,6 +9216,7 @@ def main():
     test_v82()
     test_v83()
     test_v84()
+    test_v85()
     test_lists()
     test_bctrl()
     test_dual40()
