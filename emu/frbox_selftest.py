@@ -9712,6 +9712,317 @@ def test_v87():
         check("V87 结果文件存在", False, True)
 
 
+def test_v88():
+    from frbox import svc88 as C
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc88.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc88.txt")
+
+    # ---- 收敛锚点与数据源
+    for _k, _v, _w in (
+            ("boot step", C.BOOT_STEP, 483841),
+            ("trap", C.TRAP, 0x040668),
+            ("hook2", C.HOOK2, 0x041BFC),
+            ("hook steps", C.HOOK_STEPS, 43),
+            ("after long", C.AFTER_LONG, 600),
+            ("main svc imm32", C.MAIN_SVC_IMM32, 0xFFFFFF56),
+            ("main svc", C.MAIN_SVC_32, -170),
+            ("SRC_A", C.SRC_A, 0x000083E4),
+            ("SRC_B", C.SRC_B, 0x68000970),
+            ("A_ORIG", C.A_ORIG, 0xFFFFFFFF),
+            ("B_ORIG", C.B_ORIG, 0x80000000),
+            ("END_CUR", C.END_CUR, 0x6800029C),
+            ("END_READY", C.END_READY, 0x036E0000),
+            ("TBL_ZERO", C.TBL_ZERO, 0x040660),
+            ("表内服务号", C.TABLE_SVC_COUNT, 100),
+            ("表内入口", C.TABLE_ENTRY_COUNT, 89),
+            ("别名组数", C.TABLE_ALIAS_PAIRS, 8),
+            ("别名服务号数", C.ALIAS_SVC_COUNT, 19),
+            ("引用 r12 组数", C.ALIAS_WITH_R12, 4),
+            ("未引用 r12 组数", C.ALIAS_WITHOUT_R12, 4)):
+        check("V88 %s" % _k, _v, _w)
+
+    # ---- cmp2 语义常量
+    for _k, _v, _w in (
+            ("cmp2 m4", C.CMP2_M4, 15),
+            ("cmp2 基准", C.CMP2_BASIS, -1),
+            ("cmp2 imm32", C.CMP2_IMM32, 0xFFFFFFFF),
+            ("cmp0 基准", C.CMP0_BASIS, 0),
+            ("cmp2 r10", C.CMP2_R10, 0x041C0A),
+            ("beq r10", C.BEQ_R10, 0x041C0C),
+            ("cmp2 r13", C.CMP2_R13, 0x041C0E),
+            ("blt 早判", C.BLT_EARLY, 0x041C10),
+            ("主链下一条", C.MAIN_CHAIN, 0x041C12),
+            ("cmp0 r13", C.CMP0_R13, 0x041C24),
+            ("beq A=0", C.BEQ_A0, 0x041C26),
+            ("blt 晚判", C.BLT_LATE, 0x041C28),
+            ("fall 正值", C.FALL_POS, 0x041C2A),
+            ("ld r13", C.LD_R13, 0x041BFE),
+            ("ld r10", C.LD_R10, 0x041C08),
+            ("andccr 170", C.ANDCCR_170, 0x041C22),
+            ("TAIL_88", C.TAIL_88, 0x041B88),
+            ("RETD_88", C.RETD_88, 0x041B8A),
+            ("SLOT_88", C.SLOT_88, 0x041B8C),
+            ("SLOT_88 i8", C.SLOT_88_I8, 223),
+            ("返回码无符号", C.RET_M33_U, 0x000000DF),
+            ("返回码有符号", C.RET_M33_SIGNED, -33),
+            ("TAIL_86", C.TAIL_86, 0x041B86),
+            ("TAIL_30", C.TAIL_30, 0x041B30),
+            ("TAIL_B6", C.TAIL_B6, 0x041BB6),
+            ("TAIL_A2", C.TAIL_A2, 0x041CA2),
+            ("TAIL_8E", C.TAIL_8E, 0x041B8E),
+            ("EXIT_85", C.EXIT_85, 0x041C9A),
+            ("TAIL_88 入边", C.INEDGE_88, 7),
+            ("blt 早判 rel9", C.BLT_EARLY_REL9, 187),
+            ("blt 早判 sx8", C.BLT_EARLY_SX8, -69),
+            ("beq r10 rel9", C.BEQ_R10_REL9, 74),
+            ("beq r10 sx8", C.BEQ_R10_SX8, 74)):
+        check("V88 %s" % _k, _v, _w)
+    check("V88 blt 早判落点", C.rel9_target(C.BLT_EARLY, C.BLT_EARLY_REL9),
+          C.TAIL_88)
+    check("V88 beq r10 落点", C.rel9_target(C.BEQ_R10, C.BEQ_R10_REL9),
+          C.TAIL_A2)
+
+    # ---- 全 ROM cmp2 模板普查
+    for _k, _v, _w in (
+            ("ROM 解码数", C.ROM_DECODED, 3543659),
+            ("cmp2 总数", C.CMP2_TOTAL, 2665),
+            ("m4=15 数量", C.M4_15_COUNT, 247),
+            ("m4=0 数量", C.M4_0_COUNT, 1447),
+            ("m4=15 配 beq/blt", C.M4_15_BEQ_BLT, 82),
+            ("后继 beq", C.FOLLOW_BEQ, 75),
+            ("后继 blt", C.FOLLOW_BLT, 48),
+            ("后继 beq:d", C.FOLLOW_BEQD, 28),
+            ("后继 blt:d", C.FOLLOW_BLTD, 2),
+            ("无后继", C.FOLLOW_NONE, 52),
+            ("ri 覆盖", C.RI_SPAN, 16),
+            ("m4 种类", C.M4_KINDS, 16)):
+        check("V88 %s" % _k, _v, _w)
+    check("V88 模板行数", len(C.TEMPLATE_ROWS), 7)
+    for _pc, _m4, _ri, _f, _r9, _tgt in C.TEMPLATE_ROWS:
+        check("V88 模板 0x%06X 基准" % _pc, C.m4_basis(_m4), -1)
+        check("V88 模板 0x%06X 落点" % _pc,
+              C.rel9_target(_pc + 2, _r9), _tgt)
+        check("V88 模板 0x%06X 判据" % _pc,
+              C.template_verdict(_m4, _f), "minus_one_sentinel")
+    check("V88 m4 基准全表",
+          tuple(C.m4_basis(m) for m in range(16)),
+          tuple(m - 16 for m in range(16)))
+    check("V88 m4=0 不是 −1 哨兵", C.template_verdict(0, "beq"),
+          "other_basis")
+
+    # ---- 分派区 r12（规矩 90）
+    for _k, _v, _w in (
+            ("TRAP r12", C.TRAP_R12, 0xFFFFFF56),
+            ("LSL_R12", C.LSL_R12, 0x0406A4),
+            ("LSL 后", C.LSL_AFTER, 0xFFFFFEAC),
+            ("LDI_TBL", C.LDI_TBL, 0x0406A6),
+            ("LDI_TBL 立即数", C.LDI_TBL_IMM, 263776),
+            ("LDUH_HALF", C.LDUH_HALF, 0x0406AC),
+            ("EXTSH_HALF", C.EXTSH_HALF, 0x0406AE),
+            ("ADD_R13", C.ADD_R13, 0x0406B0),
+            ("CALL_R12", C.CALL_R12, 0x0406B2),
+            ("SVC_RET", C.SVC_RET, 0x0406B4),
+            ("EXTSB_R12", C.EXTSB_R12, 0x0406BE),
+            ("STM1", C.STM1, 0x040692),
+            ("HALF_170", C.HALF_170, 0x158A),
+            ("CALL_R12_VALUE", C.CALL_R12_VALUE, 0x00041BEA),
+            ("ENTRY_170", C.ENTRY_170, 0x041BEA),
+            ("SLOT_170", C.SLOT_170, 0x04050C)):
+        check("V88 %s" % _k, _v, _w)
+    check("V88 −170 槽", C.slot_of(-170), C.SLOT_170)
+    check("V88 −170 入口", C.target_of(C.HALF_170), C.ENTRY_170)
+    check("V88 half 符号扩展", C.extsh(C.HALF_170), 0x158A)
+    check("V88 别名同 half 不分流",
+          C.dispatch_r12_verdict(C.HALF_170, C.HALF_170, -170, -169),
+          "same_entry_r12_no_svc_dispatch")
+    check("V88 不同 half 是不同入口",
+          C.dispatch_r12_verdict(0x158A, 0x1532, -170, -106),
+          "different_entry")
+    check("V88 同号不判分流",
+          C.dispatch_r12_verdict(0x158A, 0x158A, -170, -170),
+          "same_service")
+
+    # ---- 8 组别名入口 r12 引用普查
+    check("V88 别名行数", len(C.ALIAS_ROWS), 8)
+    check("V88 别名服务号总数",
+          sum(len(ss) for _e, ss, _c, _r in C.ALIAS_ROWS), 19)
+    check("V88 有引用组数",
+          sum(1 for _e, _s, c, _r in C.ALIAS_ROWS if c), 4)
+    check("V88 无引用组数",
+          sum(1 for _e, _s, c, _r in C.ALIAS_ROWS if not c), 4)
+    for _e, _ss, _cnt, _refs in C.ALIAS_ROWS:
+        check("V88 别名 0x%06X 引用数" % _e, len(_refs), _cnt)
+        check("V88 别名 0x%06X 判据" % _e,
+              C.alias_ref_verdict(_cnt),
+              "r12_used_as_address" if _cnt else "r12_absent_no_split")
+
+    # ---- 纯函数：_sub 的 CCR 与两条 blt
+    for _a, _exp in (
+            (0xFFFFFFFF, (0x00000000, 0, 0, 0, 1)),
+            (0xFFFFFFFE, (0xFFFFFFFF, 1, 0, 1, 0)),
+            (0xFFFFFFFD, (0xFFFFFFFE, 1, 0, 1, 0)),
+            (0x80000000, (0x80000001, 1, 0, 1, 0)),
+            (0x00000000, (0x00000001, 1, 0, 0, 0)),
+            (0x00000001, (0x00000002, 1, 0, 0, 0)),
+            (0x00000002, (0x00000003, 1, 0, 0, 0))):
+        check("V88 cmp2_flags 0x%08X" % _a, C.cmp2_flags(_a), _exp)
+    for _a, _exp in (
+            (0xFFFFFFFF, (0xFFFFFFFF, 0, 0, 1, 0)),
+            (0xFFFFFFFE, (0xFFFFFFFE, 0, 0, 1, 0)),
+            (0x00000000, (0x00000000, 0, 0, 0, 1)),
+            (0x00000001, (0x00000001, 0, 0, 0, 0))):
+        check("V88 cmp0_flags 0x%08X" % _a, C.cmp0_flags(_a), _exp)
+    for _a in (0x80000000, 0xFFFFFFFD, 0xFFFFFFFE, 0xFFFFFFFF,
+               0x00000000, 0x00000001, 0x00000002):
+        _s = C.sx(_a, 32)
+        check("V88 blt 早判 0x%08X" % _a,
+              C.branch_after_cmp2(_a, 15, "blt"), _s <= -2)
+        check("V88 blt 晚判 0x%08X" % _a,
+              C.branch_after_cmp0(_a, "blt"), _s < 0)
+        check("V88 beq 早判 0x%08X" % _a,
+              C.branch_after_cmp2(_a, 15, "beq"), _s == -1)
+        check("V88 beq 晚判 0x%08X" % _a,
+              C.branch_after_cmp0(_a, "beq"), _s == 0)
+        check("V88 四分 0x%08X" % _a, C.quad_dispatch(_a),
+              "EARLY_RET_M33" if _s <= -2 else C.tri_dispatch(_a))
+        check("V88 首次落点 0x%08X" % _a, C.first_landing(_a),
+              "EARLY_RET_M33" if _s <= -2 else "MAIN_CHAIN")
+    for _a, _w in ((0xFFFFFFFF, "basis_zero_only"),
+                   (0xFFFFFFFE, "both_basis"),
+                   (0x00000000, "neither_basis"),
+                   (0x00000001, "neither_basis")):
+        check("V88 基准判据 0x%08X" % _a, C.basis_verdict(_a), _w)
+    check("V88 lt 判据 v^n", C.lt_from_ccr(1, 0, 0), True)
+    check("V88 lt 判据 v^n 抵消", C.lt_from_ccr(1, 0, 1), False)
+    check("V88 eq 判据 z", C.eq_from_ccr(0, 1, 0), True)
+    check("V88 eq 判据 非零", C.eq_from_ccr(1, 0, 0), False)
+    check("V88 gate 恰好一个", C.gate_verdict(True, False, False, False),
+          "exactly_one")
+    check("V88 gate 零个", C.gate_verdict(False, False, False, False), "none")
+    check("V88 gate 多个", C.gate_verdict(True, True, False, False),
+          "ambiguous")
+    check("V88 执行未跳", C.executed_vs_taken(True, False),
+          "executed_not_taken")
+    check("V88 执行且跳", C.executed_vs_taken(True, True), "taken")
+    check("V88 等形三项",
+          C.equal_shape([{"boot": 1, "hook": 2, "post": 3}] * 2), True)
+    check("V88 等形三项不同",
+          C.equal_shape([{"boot": 1, "hook": 2, "post": 3},
+                         {"boot": 1, "hook": 2, "post": 4}]), False)
+    check("V88 窗口 重复进入",
+          C.window_verdict("EARLY_RET_M33", ("TAIL_88", "TAIL_86"), 2),
+          "reentry_overlap_not_two_paths")
+    check("V88 窗口 单次一致",
+          C.window_verdict("MAIN_CHAIN", ("TAIL_86",), 1),
+          "single_entry_consistent")
+    check("V88 覆盖判据",
+          C.overwrite_verdict((0xFFFFFFFE, 0xFFFFFFFF), (0xFFFFFFFE, 0x80000000)),
+          "stm1_overwrote_patch")
+    check("V88 未覆盖判据",
+          C.overwrite_verdict((0xFFFFFFFF,), (0x80000000, 0x80000000)),
+          "patch_persists")
+
+    # ---- CCR 快照与 A 值域 7 组
+    check("V88 CCR 快照行数", len(C.CCR_ROWS), 7)
+    _CCR_PC = {"CMP2_R10": 0x041C0A, "BEQ_R10": 0x041C0C,
+               "CMP2_R13": 0x041C0E, "BLT_EARLY": 0x041C10,
+               "CMP0_R13": 0x041C24, "BEQ_A0": 0x041C26,
+               "BLT_LATE": 0x041C28}
+    _CCR_LT = {"CMP2_R10": False, "BEQ_R10": False, "CMP2_R13": False,
+               "BLT_EARLY": False, "CMP0_R13": False,
+               "BEQ_A0": True, "BLT_LATE": True}
+    for _k, _pc, _r10, _r13, _n, _z, _v, _c in C.CCR_ROWS:
+        check("V88 CCR %s PC" % _k, _pc, _CCR_PC[_k])
+        check("V88 CCR %s r13" % _k, _r13, 0xFFFFFFFF)
+        check("V88 CCR %s lt" % _k,
+              C.lt_from_ccr(_n, _z, _v, _c), _CCR_LT[_k])
+    check("V88 A 值域个数", len(C.AVALS), 7)
+    check("V88 机器组数", len(C.GROUPS), 7)
+    check("V88 等形机数", C.MACHINE_COUNT, 7)
+    check("V88 总机器数", C.MACHINE_TOTAL, 10)
+    for _tag, _a, _lt, _land, _tail, _n, _end, _cum, _seq, _ret in C.GROUPS:
+        check("V88 %s A 值" % _tag, _a in C.AVALS, True)
+        check("V88 %s 首次 lt" % _tag,
+              C.branch_after_cmp2(_a, 15, "blt"), _lt)
+        check("V88 %s 首次落点" % _tag, C.first_landing(_a), _land)
+        check("V88 %s 四分" % _tag, C.quad_dispatch(_a),
+              "EARLY_RET_M33" if _land == "EARLY_RET_M33" else _tail)
+        check("V88 %s cmp2 次数" % _tag, _n,
+              2 if _land == "EARLY_RET_M33" else 1)
+        check("V88 %s r13 序列长度" % _tag, len(_seq), _n)
+    check("V88 提前返回组数",
+          sum(1 for g in C.GROUPS if g[3] == "EARLY_RET_M33"), 3)
+    check("V88 主链组数",
+          sum(1 for g in C.GROUPS if g[3] == "MAIN_CHAIN"), 4)
+
+    # ---- 标准收敛态
+    for _k, _v, _w in (
+            ("CONVERGE_BOOT", C.CONVERGE_BOOT, 191520),
+            ("CONVERGE_IRQ", C.CONVERGE_IRQ, 0x2B),
+            ("CONVERGE_RUN", C.CONVERGE_RUN, 500000),
+            ("CONVERGE_TAIL", C.CONVERGE_TAIL, 0x0407DC)):
+        check("V88 %s" % _k, _v, _w)
+    check("V88 coverage 项数", len(C.COV_CODES), 12)
+    check("V88 coverage 命中数", sum(1 for x in C.COV.values() if x), 9)
+    check("V88 coverage 未命中数", sum(1 for x in C.COV.values() if not x), 3)
+    check("V88 coverage 判据", C.cov_verdict(C.COV),
+          "shared_tail_seen_cmd_chain_unreached")
+
+    # ---- 综合判据与规矩文本
+    check("V88 VERDICT", C.VERDICT,
+          "cmp2_minus_one_sentinel_early_ret_m33_alias_entry_no_svc_dispatch")
+    check("V88 综合全绿",
+          C.source_verdict(True, True, True, True, True, False), C.VERDICT)
+    check("V88 综合缺模板",
+          C.source_verdict(False, True, True, True, True), "open")
+    check("V88 综合缺 CCR",
+          C.source_verdict(True, False, True, True, True), "open")
+    check("V88 综合缺四分",
+          C.source_verdict(True, True, False, True, True), "open")
+    check("V88 综合缺窗口",
+          C.source_verdict(True, True, True, False, True), "open")
+    check("V88 综合缺 r12",
+          C.source_verdict(True, True, True, True, False), "open")
+    src = io.open(_SRC, encoding="utf-8").read()
+    for _key in ("cmp2", "m4_basis", "sub_flags", "quad_dispatch",
+                 "first_landing", "window_verdict", "overwrite_verdict",
+                 "dispatch_r12_verdict", "alias_ref_verdict",
+                 "template_verdict", "规矩 88", "规矩 89", "规矩 90",
+                 "链未闭合", "反事实补全", "0x041B88", "0x000000DF",
+                 "入口地址", "stm1", "不能报"):
+        check("V88 源码含 %s" % _key, _key in src, True)
+
+    # ---- 结果文件
+    if os.path.exists(_RES):
+        res = io.open(_RES, encoding="utf-8").read()
+        lines = res.splitlines()
+        check("V88 结果行数", len(lines) >= 120, True)
+        check("V88 结果零 Traceback", "Traceback" in res, False)
+        check("V88 结果零 Error", "Error" in res, False)
+        check("V88 结果含标题",
+              "cmp2 是 −1 哨兵" in res, True)
+        for seg in "ABCDEFGH":
+            check("V88 结果含 [%s] 段" % seg, "[%s]" % seg in res, True)
+        for _key in ("10 台独立机器", "DONE V88", "反事实补全", "链未闭合",
+                     "规矩 88", "规矩 89", "规矩 90", C.VERDICT,
+                     "minus_one_sentinel", "basis_zero_only",
+                     "reentry_overlap_not_two_paths",
+                     "stm1_overwrote_patch", "same_entry_r12_no_svc_dispatch",
+                     "exactly_one", "EARLY_RET_M33", "r12=0xDF", "#223",
+                     "3543659", "2665", "247", "82", "19 个服务号",
+                     "0x041B88", "0x041C10", "0x0406B2", "0x0407DC",
+                     "shared_tail_seen_cmd_chain_unreached", "不能报",
+                     "H1 前置五项"):
+            check("V88 结果含 %s" % _key[:24], _key in res, True)
+        check("V88 结果含七组标签",
+              all(g[0] in res for g in C.GROUPS), True)
+        check("V88 结果含七条模板",
+              all(("0x%06X" % r[0]) in res for r in C.TEMPLATE_ROWS), True)
+    else:
+        check("V88 结果文件存在", False, True)
+
+
 
 def main():
     print("frbox 自检")
@@ -9801,6 +10112,7 @@ def main():
     test_v85()
     test_v86()
     test_v87()
+    test_v88()
     test_lists()
     test_bctrl()
     test_dual40()
