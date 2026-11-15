@@ -9410,6 +9410,309 @@ def test_v86():
         check("V86 结果文件存在", False, True)
 
 
+def test_v87():
+    """V87：不是服务复用，是按 r13 符号三分汇入共享尾；规矩 86/87。"""
+    import os
+    import io
+    import frbox
+    from frbox import svc87 as C
+
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _SRC = os.path.join(_HERE, "frbox", "svc87.py")
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc87.txt")
+
+    # ---- 静态口径常量（KI#270：不硬编码当前版本号）
+    check("V87 boot 步数", C.BOOT_STEP, 483841)
+    check("V87 陷阱入口", C.TRAP, 0x040668)
+    check("V87 晚补挂钩", C.HOOK2, 0x041BFC)
+    check("V87 挂钩步数", C.HOOK_STEPS, 43)
+    check("V87 长窗口", C.AFTER_LONG, 600)
+    check("V87 主循环立即数", C.MAIN_SVC_IMM32, 0xFFFFFF56)
+    check("V87 真服务号", C.MAIN_SVC_32, -170)
+    check("V87 版本可读且属 0.x", frbox.__version__.startswith("0."), True)
+    check("V87 综合判据常量", C.VERDICT,
+          "shared_tail_resolved_r13_sign_tri_dispatch_not_service_reuse")
+
+    # ---- 两单元与取值
+    check("V87 A 单元", C.SRC_A, 0x000083E4)
+    check("V87 B 单元", C.SRC_B, 0x68000970)
+    check("V87 A 原值", C.A_ORIG, 0xFFFFFFFF)
+    check("V87 A 清零", C.A_ZERO, 0x00000000)
+    check("V87 A 正值", C.A_POS, 0x00000001)
+    check("V87 B 置位", C.B_SET, 0x80000000)
+    check("V87 B 清位", C.B_CLR, 0x00000000)
+    check("V87 返回码 0xAB", C.RET_85, 0x000000AB)
+
+    # ---- 分发表两口径
+    check("V87 表零点", C.TBL_ZERO, 0x040660)
+    check("V87 段低", C.SEG_LO, 0x041B00)
+    check("V87 段高", C.SEG_HI, 0x041E80)
+    check("V87 段内服务号", C.SEG_SVC_COUNT, 14)
+    check("V87 段内入口", C.SEG_ENTRY_COUNT, 12)
+    check("V87 全表服务号", C.TABLE_SVC_COUNT, 100)
+    check("V87 全表入口", C.TABLE_ENTRY_COUNT, 89)
+    check("V87 别名对数", C.TABLE_ALIAS_PAIRS, 8)
+    check("V87 别名表长度", len(C.ALIAS_PAIRS), 8)
+    check("V87 别名表首项", C.ALIAS_PAIRS[0], (0x040672, (-254, -214)))
+    check("V87 别名表末项", C.ALIAS_PAIRS[-1], (0x046E60, (-230, 74, 93, 104)))
+    check("V87 别名 0x041DE4", dict(C.ALIAS_PAIRS)[0x041DE4], (-247, 22))
+    check("V87 别名 0x041D6E", dict(C.ALIAS_PAIRS)[0x041D6E], (4, 67))
+
+    # ---- 五入口与表项
+    check("V87 −46 入口", C.ENTRY_46, 0x041B0A)
+    check("V87 −106 入口", C.ENTRY_106, 0x041B92)
+    check("V87 −170 入口", C.ENTRY_170, 0x041BEA)
+    check("V87 −44 入口", C.ENTRY_44, 0x041CA8)
+    check("V87 −172 入口", C.ENTRY_172, 0x041DD6)
+    check("V87 −46 槽", C.SLOT_46, 0x040604)
+    check("V87 −106 槽", C.SLOT_106, 0x04058C)
+    check("V87 −170 槽", C.SLOT_170, 0x04050C)
+    check("V87 −44 槽", C.SLOT_44, 0x040608)
+    check("V87 −172 槽", C.SLOT_172, 0x040508)
+    check("V87 −46 半字", C.HALF_46, 0x14AA)
+    check("V87 −106 半字", C.HALF_106, 0x1532)
+    check("V87 −170 半字", C.HALF_170, 0x158A)
+    check("V87 −44 半字", C.HALF_44, 0x1648)
+    check("V87 −172 半字", C.HALF_172, 0x1776)
+
+    # ---- A 判据链与 rel9 五条
+    check("V87 cmp2 r10", C.CMP2_R10, 0x041C0A)
+    check("V87 beq r10", C.BEQ_R10, 0x041C0C)
+    check("V87 cmp2 r13", C.CMP2_R13, 0x041C0E)
+    check("V87 blt 早判", C.BLT_EARLY, 0x041C10)
+    check("V87 −170 段 call", C.CALL_170, 0x041C1A)
+    check("V87 −170 段 call rel12", C.CALL_170_REL12, 1554)
+    check("V87 −106 段 call rel12", C.CALL_106_REL12, 1612)
+    check("V87 公共子例程", C.COMMON_SUB, 0x041840)
+    check("V87 两段同调一个子例程",
+          (C.rel12_target(C.CALL_170, C.CALL_170_REL12),
+           C.rel12_target(C.CALL_106, C.CALL_106_REL12)),
+          (C.COMMON_SUB, C.COMMON_SUB))
+    check("V87 bne 1E", C.BNE_1E, 0x041C1E)
+    check("V87 cmp0 r13", C.CMP0_R13, 0x041C24)
+    check("V87 beq A=0", C.BEQ_A0, 0x041C26)
+    check("V87 blt 晚判", C.BLT_LATE, 0x041C28)
+    check("V87 fall 正值", C.FALL_POS, 0x041C2A)
+    check("V87 rel9 表项数", len(C.REL9_ROWS), 5)
+    check("V87 rel9 表首行", C.REL9_ROWS[0], (0x041C0C, 74, 74, 0x041CA2))
+    check("V87 rel9 表末行", C.REL9_ROWS[-1], (0x041C28, 174, -82, 0x041B86))
+    check("V87 bra 86", C.BRA_86, 0x041B86)
+    check("V87 bra rel9", C.BRA_86_REL9, 212)
+    check("V87 bra sx8", C.BRA_86_SX8, -44)
+    check("V87 bra 落点", C.BRA_86_TARGET, 0x041B30)
+
+    # ---- 共享尾与静态入边
+    check("V87 尾 86", C.TAIL_86, 0x041B86)
+    check("V87 尾 88", C.TAIL_88, 0x041B88)
+    check("V87 尾 8E", C.TAIL_8E, 0x041B8E)
+    check("V87 尾 30", C.TAIL_30, 0x041B30)
+    check("V87 尾 B6", C.TAIL_B6, 0x041BB6)
+    check("V87 尾 E4", C.TAIL_E4, 0x041BE4)
+    check("V87 尾 A2", C.TAIL_A2, 0x041CA2)
+    check("V87 尾 9A", C.TAIL_9A, 0x041C9A)
+    check("V87 入边 B6", C.INEDGE_B6, 1)
+    check("V87 入边 86", C.INEDGE_86, 1)
+    check("V87 入边 E4", C.INEDGE_E4, 2)
+    check("V87 入边 9A", C.INEDGE_9A, 2)
+    check("V87 入边 A2", C.INEDGE_A2, 1)
+    check("V87 入口 106 静态入边", C.INEDGE_ENTRY_106, 0)
+    check("V87 入口 170 静态入边", C.INEDGE_ENTRY_170, 0)
+    check("V87 −46 段入边", C.BNE_46, 0x041B12)
+    check("V87 −170 段入边", C.BNE_170, 0x041BF2)
+    check("V87 −106 特有前置 ldi", C.LDI_R0_106, 0x041BAC)
+    check("V87 −106 特有前置 call", C.CALL_106, 0x041BA6)
+    check("V87 −106 andccr", C.ANDCCR_106, 0x041BB4)
+    check("V87 −170 andccr", C.ANDCCR_170, 0x041C22)
+    check("V87 B 门 bne", C.BNE_106, 0x041BC6)
+    check("V87 B 门 beq", C.BEQ_106, 0x041BCC)
+    check("V87 −85 出口", C.EXIT_85, 0x041C9A)
+    check("V87 −85 ret:d", C.RET_D_85, 0x041C9E)
+    check("V87 −85 延迟槽", C.SLOT_85, 0x041CA0)
+    check("V87 快速返回 ret:d", C.RET_D_E4, 0x041BE6)
+    check("V87 快速返回延迟槽", C.SLOT_E4, 0x041BE8)
+    check("V87 延迟槽值", C.SLOT_E4_VAL, 187)
+
+    # ---- 动态真值表 7 组
+    check("V87 机器数", C.MACHINE_COUNT, 7)
+    check("V87 组数", len(C.GROUPS), 7)
+    check("V87 组标签", tuple(g[0] for g in C.GROUPS),
+          ("SAME_AB", "NEG_SET", "NEG_CLR", "ZERO_SET", "ZERO_CLR",
+           "POS_SET", "POS_CLR"))
+    check("V87 汇入点集合", sorted(set(g[3] for g in C.GROUPS)),
+          ["FALL_POS", "TAIL_86", "TAIL_B6"])
+    check("V87 唯一 −85 组", [g[0] for g in C.GROUPS if g[6]], ["ZERO_CLR"])
+    check("V87 唯一 0xAB 组",
+          [g[0] for g in C.GROUPS if g[4] == C.RET_85], ["ZERO_CLR"])
+    check("V87 reti 集合", sorted(set(g[5] for g in C.GROUPS)),
+          [198, 218, 314, 398, 401, 417])
+    check("V87 步 BLT_EARLY", C.STEP_BLT_EARLY, 8)
+    check("V87 步 BEQ_A0", C.STEP_BEQ_A0, 29)
+    check("V87 步 BLT_LATE", C.STEP_BLT_LATE, 30)
+    check("V87 步 TAIL_86", C.STEP_TAIL_86, 31)
+    check("V87 步 TAIL_30", C.STEP_TAIL_30, 32)
+    check("V87 步 TAIL_B6", C.STEP_TAIL_B6, 30)
+    check("V87 步 FALL_POS", C.STEP_FALL_POS, 31)
+    check("V87 SAME_AB ≡ NEG_SET", C.SAME_AB_EQUALS_NEG_SET, True)
+    check("V87 BLT_EARLY 从不跳", C.BLT_EARLY_NEVER_TAKEN, True)
+    check("V87 TAIL_88 全 False", C.TAIL_88_ALL_FALSE, True)
+    check("V87 末 CUR", C.END_CUR, 0x6800029C)
+    check("V87 末 READY", C.END_READY, 0x036E0000)
+    check("V87 末 PC 表", C.END_PC_BY_TAIL,
+          {"TAIL_86": 0x137968, "TAIL_B6": 0x13796E,
+           "FALL_POS": 0x137972})
+
+    # ---- 收敛态 coverage
+    check("V87 收敛 boot", C.CONVERGE_BOOT, 191520)
+    check("V87 收敛 IRQ", C.CONVERGE_IRQ, 0x2B)
+    check("V87 收敛 RUN", C.CONVERGE_RUN, 500000)
+    check("V87 收敛末 PC", C.CONVERGE_TAIL, 0x0407DC)
+    check("V87 主循环跳", C.MAIN_JMP, 0x175282)
+    check("V87 写回函数", C.WB_FN, 0x175908)
+    check("V87 COV 项数", len(C.COV), 14)
+    check("V87 COV_CODES 项数", len(C.COV_CODES), 14)
+    check("V87 COV 命中四项",
+          all(C.COV[k] for k in ("TAIL_86", "TAIL_30", "TAIL_B6", "EXIT_85")),
+          True)
+    check("V87 COV 未命中五项",
+          all(not C.COV[k] for k in
+              ("TAIL_88", "TAIL_8E", "TAIL_E4", "MAIN_JMP", "WB_FN")), True)
+    check("V87 COV 键与码一致",
+          set(C.COV) == set(C.COV_CODES), True)
+
+    # ---- 纯函数：位与地址
+    check("V87 sx 0xFF/8", C.sx(0xFF, 8), -1)
+    check("V87 sx 0x7F/8", C.sx(0x7F, 8), 127)
+    check("V87 sx8 199", C.sx8(199), -57)
+    check("V87 sx8 174", C.sx8(174), -82)
+    check("V87 sx8 212", C.sx8(212), -44)
+    check("V87 sx8 187", C.sx8(187), -69)
+    check("V87 sx8 74", C.sx8(74), 74)
+    check("V87 sx11 1554", C.sx11(1554), -494)
+    check("V87 sx11 1612", C.sx11(1612), -436)
+    check("V87 sx11 2047", C.sx11(2047), -1)
+    check("V87 extsh 0x158A", C.extsh(0x158A), 5514)
+    check("V87 extsh 0x1532", C.extsh(0x1532), 5426)
+    check("V87 rel9 199→B6", C.rel9_target(0x041C26, 199), 0x041BB6)
+    check("V87 rel9 174→86", C.rel9_target(0x041C28, 174), 0x041B86)
+    check("V87 rel9 187→88", C.rel9_target(0x041C10, 187), 0x041B88)
+    check("V87 rel9 183→8E", C.rel9_target(0x041C1E, 183), 0x041B8E)
+    check("V87 rel9 74→A2", C.rel9_target(0x041C0C, 74), 0x041CA2)
+    check("V87 bra 212→30", C.rel9_target(C.BRA_86, 212), 0x041B30)
+    check("V87 rel9 表逐行自洽",
+          all(C.rel9_target(p, r) == t for p, r, _s, t in C.REL9_ROWS), True)
+    check("V87 rel9 表 sx 自洽",
+          all(C.sx8(r) == s for _p, r, s, _t in C.REL9_ROWS), True)
+    check("V87 rel12 目标", C.rel12_target(0x041C1A, 1554), 0x041840)
+    check("V87 slot −170", C.slot_of(-170), 0x04050C)
+    check("V87 slot −106", C.slot_of(-106), 0x04058C)
+    check("V87 slot −46", C.slot_of(-46), 0x040604)
+    check("V87 target 0x158A", C.target_of(0x158A), 0x041BEA)
+    check("V87 target 0x1532", C.target_of(0x1532), 0x041B92)
+    check("V87 target 0x14AA", C.target_of(0x14AA), 0x041B0A)
+
+    # ---- 纯函数：入口 / 别名 / 共享尾
+    _ENTRIES = set(e for e, _ss in C.ALIAS_PAIRS)
+    _ENTRIES.update((C.ENTRY_46, C.ENTRY_106, C.ENTRY_170,
+                     C.ENTRY_44, C.ENTRY_172))
+    check("V87 是入口 0x041BEA", C.is_dispatch_entry(C.ENTRY_170, _ENTRIES), True)
+    check("V87 不是入口 0x041BB6",
+          C.is_dispatch_entry(C.TAIL_B6, _ENTRIES), False)
+    check("V87 不是入口 0x041B86",
+          C.is_dispatch_entry(C.TAIL_86, _ENTRIES), False)
+    check("V87 别名函数 1", C.alias_pairs({1: 0x10, 2: 0x10, 3: 0x20}),
+          [(0x10, (1, 2))])
+    check("V87 别名函数空", C.alias_pairs({1: 0x10, 2: 0x20}), [])
+    check("V87 共享尾判据 B6",
+          C.shared_tail_verdict(C.TAIL_B6, _ENTRIES, 1, True), "shared_tail")
+    check("V87 共享尾判据 86",
+          C.shared_tail_verdict(C.TAIL_86, _ENTRIES, 1, True), "shared_tail")
+    check("V87 服务入口判据",
+          C.shared_tail_verdict(C.ENTRY_106, _ENTRIES, 0, False),
+          "service_entry")
+    check("V87 共享尾判据缺入边",
+          C.shared_tail_verdict(C.TAIL_B6, _ENTRIES, 0, True), "unresolved")
+
+    # ---- 纯函数：三分 / 互斥 / 执行与跳转
+    check("V87 符号类负", C.sign_class(0xFFFFFFFF), "negative")
+    check("V87 符号类零", C.sign_class(0), "zero")
+    check("V87 符号类正", C.sign_class(1), "positive")
+    check("V87 三分负", C.tri_dispatch(0xFFFFFFFF), "TAIL_86")
+    check("V87 三分零", C.tri_dispatch(0), "TAIL_B6")
+    check("V87 三分正", C.tri_dispatch(1), "FALL_POS")
+    check("V87 七组三分与设施一致",
+          all(C.tri_dispatch(g[1]) == g[3] for g in C.GROUPS), True)
+    check("V87 互斥恰好一个", C.gate_verdict(True, False, False), "exactly_one")
+    check("V87 互斥零个", C.gate_verdict(False, False, False), "none")
+    check("V87 互斥多个", C.gate_verdict(True, True, False), "ambiguous")
+    check("V87 执行未跳", C.executed_vs_taken(True, False), "executed_not_taken")
+    check("V87 执行且跳", C.executed_vs_taken(True, True), "taken")
+    check("V87 未执行", C.executed_vs_taken(False, False), "not_executed")
+    check("V87 段内≠全表",
+          C.scope_verdict(14, 12, 100, 89), "segment_only")
+    check("V87 同口径", C.scope_verdict(100, 89, 100, 89), "same_scope")
+    check("V87 延迟槽紧邻入口",
+          C.boundary_verdict(C.SLOT_E4, C.ENTRY_170, True),
+          "delay_slot_adjacent_entry")
+    check("V87 普通边界",
+          C.boundary_verdict(0x041C98, C.ENTRY_170, True), "ordinary")
+
+    # ---- 纯函数：等形 / 覆盖 / 综合
+    _r1 = {"boot": 483841, "hook": 0x041BFC, "post": 600}
+    _r2 = dict(_r1)
+    _r3 = dict(_r1, post=260)
+    check("V87 equal_shape 空", C.equal_shape([]), False)
+    check("V87 equal_shape 全同", C.equal_shape([_r1, _r2]), True)
+    check("V87 equal_shape 有异", C.equal_shape([_r1, _r3]), False)
+    check("V87 cov 分层", C.cov_verdict(C.COV),
+          "shared_tail_seen_cmd_chain_unreached")
+    check("V87 cov 不足", C.cov_verdict(dict(C.COV, TAIL_86=False)), "open")
+    check("V87 综合全真",
+          C.source_verdict(True, True, True, True, False), C.VERDICT)
+    check("V87 综合有假",
+          C.source_verdict(False, True, True, True, False), "open")
+    check("V87 综合事件已定位",
+          C.source_verdict(True, True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 设施源码边界
+    src = io.open(_SRC, encoding="utf-8").read()
+    for _key in ("KI#339", "规矩 86", "规矩 87", "反事实补全", "链未闭合",
+                 "共享尾", "服务号别名", "分发表", "静态入边", "sx8",
+                 "0x041BB6", "0x041B86", "0x041BE4", "0x041BEA",
+                 "0xFFFFFFFF", "cmp2", "不能报", "任务 9", "coverage"):
+        check("V87 源码含 %s" % _key, _key in src, True)
+
+    # ---- 结果文件
+    if os.path.exists(_RES):
+        res = io.open(_RES, encoding="utf-8").read()
+        lines = res.splitlines()
+        check("V87 结果行数", len(lines), 140)
+        check("V87 结果零 Traceback", "Traceback" in res, False)
+        check("V87 结果零 Error", "Error" in res, False)
+        check("V87 结果含标题", "不是服务复用，是按 r13 符号三分汇入共享尾" in res, True)
+        for seg in "ABCDEFGH":
+            check("V87 结果含 [%s] 段" % seg, "[%s]" % seg in res, True)
+        for _key in ("9 台独立机器", "DONE V87", "反事实补全", "链未闭合",
+                     "规矩 86", "规矩 87", C.VERDICT,
+                     "F2 等形三项（boot / hook / post）全同 = True",
+                     "G2b TAIL_88 静态入边 7 条", "executed_not_taken",
+                     "B2 六个目标全不是入口 = True", "shared_tail",
+                     "segment_only", "delay_slot_adjacent_entry",
+                     "shared_tail_seen_cmd_chain_unreached",
+                     "0x000000AB", "0x041BB6", "0x041B86", "0x041BE4",
+                     "0x041BEA", "0x0407DC", "0x1352EA", "不能报",
+                     "H1 前置四项：目标非入口=True / 静态入边=True / 三分=True / "
+                     "收敛态覆盖=True"):
+            check("V87 结果含 %s" % _key[:24], _key in res, True)
+        check("V87 结果含七组标签",
+              all(g[0] in res for g in C.GROUPS), True)
+        check("V87 结果含六组 reti",
+              all(("reti=%d" % g[5]) in res for g in C.GROUPS), True)
+    else:
+        check("V87 结果文件存在", False, True)
+
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -9497,6 +9800,7 @@ def main():
     test_v84()
     test_v85()
     test_v86()
+    test_v87()
     test_lists()
     test_bctrl()
     test_dual40()
