@@ -1376,3 +1376,30 @@ A 值域扩到 7 个：`A≤−2` 跳 `0x041B88` 走 `ret:d` + 延迟槽 `ldi:8 
 所有往 `0x000083E4` 写值都是**反事实补全**（只写内存单元），不是固件行为、
 不是真机器件事件；服务返回与任务换手是既有代码自然执行。
 规矩 88 / 89 / 90、KI#344–347，链未闭合。
+
+
+## V89（0.89.0）· `exp_svc_v89.py`
+
+A–H 八段、119 行、**18 台独立机器**（5 台 TCB+0x28 反事实 +
+12 台别名等形 + 1 台标准收敛态）、`results/frbox/svc89.txt`、
+`test_v89()` 244 条、全量自检 5373/5373。
+A 段两道 cmp2 字源：`0x041C06 ld @0x68000000` 把 r14 换成
+`CUR_TCB=0x68000244` ⇒ `0x041C08 ld disp10=10` 读 `0x6800026C`
+（TCB+0x28，实测 `0x68000A28`）；`0x041BFE ld disp10=13` 用陷阱栈帧
+`0x000083B0` 读 `0x000083E4`（调用者 r13）⇒ 判据
+`stack_frame_vs_tcb_field`。B 段返回码图谱 7 出口 / 4 条负码
+（−69 / −33 / −17 / −85）+ 8 条静态入边逐条对账，`0x041B88` 有 3 条入边
+⇒ `multiple_in_edges_not_one_condition`。C 段 `stm1` 七槽映射、
+全 ROM 3543659 条解码 / `ld disp10=12` 688 条 / `st disp10=12` 459 条 /
+`ldi:20 #0x83E0` 3 条 / 8 组别名入口 disp10=12 普查唯一 `0x041DE0`
+且窗口内 0 命中 / 陷阱口 0 条。D 段 5 台 600 步等形机：只有 M1
+（`0xFFFFFFFF`）首次下一条 PC = `0x041CA2`、返回码 `0xEF`（−17）；
+ORIG 写回原值与 OBS 逐项相同 ⇒ `value_not_write_action`；
+M1 提前返回截断后续 `stm1` 覆盖。E 段 6 组别名 × 2 台 1200 步等形机：
+槽内服务号两两不同但 PC 逐条全序列、末 PC / CUR / READY 全同
+⇒ `slot_differs_sequence_identical_no_dispatch_in_window`；另 2 组只静态，
+部分组末 PC 跑飞只用于同组对照。F 段标准收敛态机末 PC `0x0407DC`
+（V65–V88 逐字相同策略）。G 段归因分离与四处自我证伪。H 段综合判据
+`tcb_plus28_minus1_gate_ret_m17_four_negative_codes_svc_slot_saved_no_dispatch`、
+规矩 91/92、全部写内存/改寄存器是反事实补全、链未闭合。
+新设施 `frbox/svc89.py`，KI#348–351。
