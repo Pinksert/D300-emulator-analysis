@@ -1423,3 +1423,18 @@ H 段综合判据
 call_target_hex_fix_r7_param_cleared_not_read_convergence_unreachable、
 规矩 93、全部强制 PC/写 r7 是反事实补全、链未闭合。
 新设施 `frbox/svc90.py`，KI#352–355。
+
+
+## V91（0.91.0）· `exp_svc_v91.py`
+
+A–G 七段、62 行、**本版实跑 5 台独立机器**（4 台新等形 + 1 台标准收敛态）、
+`results/frbox/svc91.txt`、`test_v91()` 81 条、全量自检 5537/5537。
+A 段分发表全表重建 + 同 half 静态绑定普查：8/8 组各号落不同 slot 却存同一
+half（0x784 / 0x1784 等），判据 static_same_half_binding_dispatch_folds_to_one_entry。
+B 段余下 2 组入口结构：G7 0x040DE4 入口读 r12 / disp10=12 0 条；
+G8 0x041DE4 入口不读 r12 / 0x041DE0 ld disp10=12 1 条。
+C 段本版新跑 4 台等形机：G7 号(-236,64) 槽 0x7FFFFF14/0x00000040、末 PC 0x0004DC；
+G8 号(-247,22) 槽 0x7FFFFF09/0x00000016、末 PC 0x9F5963B8，1200 步逐条全序列相同。
+D 段引用 V89 6 组（不重跑那 12 台），8 组合计 all_eight_groups_equal_shape_in_window。
+F 段标准收敛态机末 PC 0x0407DC。G 段综合判据、规矩 94、链未闭合。
+新设施 `frbox/svc91.py`，KI#356–359。
