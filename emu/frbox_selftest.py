@@ -10024,6 +10024,244 @@ def test_v88():
 
 
 
+def test_v89():
+    from frbox import svc89 as C
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc89.txt")
+
+    # ---- 收敛锚点（与 V65–V88 逐字相同）
+    for _k, _v, _w in (
+            ("boot step", C.BOOT_STEP, 483841),
+            ("trap", C.TRAP, 0x040668),
+            ("hook2", C.HOOK2, 0x041BFC),
+            ("hook steps", C.HOOK_STEPS, 43),
+            ("after long", C.AFTER_LONG, 600),
+            ("pair window", C.PAIR_WINDOW, 1200),
+            ("converge boot", C.CONVERGE_BOOT, 191520),
+            ("converge irq", C.CONVERGE_IRQ, 0x2B),
+            ("converge run", C.CONVERGE_RUN, 500000),
+            ("converge tail", C.CONVERGE_TAIL, 0x0407DC)):
+        check("V89 %s" % _k, _v, _w)
+
+    # ---- r10 门 / 两道 cmp2 字源
+    for _k, _v, _w in (
+            ("ld r13", C.LD_R13, 0x041BFE),
+            ("ld r13 disp10", C.LD_R13_DISP10, 13),
+            ("ld r13 base", C.LD_R13_BASE, 0x000083B0),
+            ("ld r13 addr", C.LD_R13_ADDR, 0x000083E4),
+            ("ld cur", C.LD_CUR, 0x041C06),
+            ("ld cur i32", C.LD_CUR_I32, 1744830464),
+            ("cur tcb", C.CUR_TCB, 0x68000244),
+            ("ld r10", C.LD_R10, 0x041C08),
+            ("ld r10 disp10", C.LD_R10_DISP10, 10),
+            ("tcb r10", C.TCB_R10, 0x6800026C),
+            ("tcb r10 off", C.TCB_R10_OFF, 0x28),
+            ("tcb r10 orig", C.TCB_R10_ORIG, 0x68000A28),
+            ("cmp2 r10", C.CMP2_R10, 0x041C0A),
+            ("beq r10", C.BEQ_R10, 0x041C0C),
+            ("beq r10 rel9", C.BEQ_R10_REL9, 74),
+            ("beq r10 sx8", C.BEQ_R10_SX8, 74),
+            ("cmp2 r13", C.CMP2_R13, 0x041C0E),
+            ("blt early", C.BLT_EARLY, 0x041C10),
+            ("main chain", C.MAIN_CHAIN, 0x041C12),
+            ("tail a2", C.TAIL_A2, 0x041CA2),
+            ("retd a2", C.RETD_A2, 0x041CA4),
+            ("slot a6", C.SLOT_A6, 0x041CA6),
+            ("i8 239", C.I8_239, 239),
+            ("ret m17 u", C.RET_M17_U, 0xEF),
+            ("ret m17 signed", C.RET_M17_SIGNED, -17)):
+        check("V89 %s" % _k, _v, _w)
+
+    # ---- stm1 槽位
+    for _k, _v, _w in (
+            ("stm1", C.STM1, 0x040692),
+            ("stm0", C.STM0, 0x040694),
+            ("stm1 reglist", C.STM1_REGLIST, 254),
+            ("stm0 reglist", C.STM0_REGLIST, 255),
+            ("slot svc", C.SLOT_SVC, 0x000083E0),
+            ("slot r13", C.SLOT_R13, 0x000083E4),
+            ("trap r15", C.TRAP_R15, 0x000083F8),
+            ("hook r14", C.HOOK_R14, 0x000083B0),
+            ("hook r15", C.HOOK_R15, 0x000083AC),
+            ("stm1 slot 数", len(C.STM1_SLOTS), 7)):
+        check("V89 %s" % _k, _v, _w)
+    for _reg, _addr in C.STM1_SLOTS:
+        check("V89 槽 r%d" % _reg, _addr, {
+            14: 0x000083E8, 13: 0x000083E4, 12: 0x000083E0,
+            11: 0x000083DC, 10: 0x000083D8, 9: 0x000083D4,
+            8: 0x000083D0}[_reg])
+
+    # ---- 返回码图谱
+    check("V89 出口数", len(C.EXIT_ROWS), C.EXIT_COUNT)
+    check("V89 负码数", C.NEG_CODE_COUNT, 4)
+    check("V89 负码元组", C.NEG_CODES, (-69, -33, -17, -85))
+    check("V89 返回 0 出口数", C.RET0_COUNT, 2)
+    check("V89 无延迟槽出口数",
+          sum(1 for r in C.EXIT_ROWS if not r[6]), 1)
+    check("V89 exit 85", C.EXIT_85, 0x041C9A)
+    check("V89 exit 0", C.EXIT_0, 0x041C92)
+    for _epc, _rpd, _spc, _i8, _rc, _name, _has in C.EXIT_ROWS:
+        check("V89 出口 %s 返回码" % _name, C.ret_code(_i8), _rc)
+
+    # ---- 静态入边
+    check("V89 入边行数", len(C.INEDGE_ROWS), C.INEDGE_COUNT)
+    check("V89 −33 入边数", C.INEDGE_M33_COUNT, 3)
+    check("V89 in_edge_count", C.in_edge_count(C.TAIL_88), 3)
+    check("V89 多入边判据", C.in_edge_verdict(C.TAIL_88),
+          "multiple_in_edges_not_one_condition")
+    check("V89 单入边判据", C.in_edge_verdict(C.TAIL_A2), "single_in_edge")
+    check("V89 无入边判据", C.in_edge_verdict(0x040660), "no_static_in_edge")
+    for _pc, _mn, _r9, _sx8, _tgt, _name in C.INEDGE_ROWS:
+        check("V89 入边 0x%06X 落点" % _pc,
+              C.rel9_target(_pc, _r9), _tgt)
+        check("V89 入边 0x%06X sx8" % _pc, C.sx8(_r9), _sx8)
+
+    # ---- 全 ROM 普查 / 别名 / 机器数
+    for _k, _v, _w in (
+            ("ROM decoded", C.ROM_DECODED, 3543659),
+            ("i20 83e0", C.I20_83E0, 33760),
+            ("立即数条数", C.IMM_83E0_COUNT, 3),
+            ("子例程地址", C.SUB_ADDR, 0x15FA6C),
+            ("ld disp10=12", C.LD_DISP10_12, 688),
+            ("st disp10=12", C.ST_DISP10_12, 459),
+            ("别名入口 d12 命中", C.ALIAS_D12_HITS, 1),
+            ("别名入口 d12 PC", C.ALIAS_D12_PC, 0x041DE0),
+            ("陷阱口 d12 命中", C.TRAP_D12_HITS, 0),
+            ("tbl zero", C.TBL_ZERO, 0x040660),
+            ("表内服务号", C.TABLE_SVC_COUNT, 100),
+            ("表内入口", C.TABLE_ENTRY_COUNT, 89),
+            ("别名组数", C.TABLE_ALIAS_PAIRS, 8),
+            ("别名服务号数", C.ALIAS_SVC_COUNT, 19),
+            ("等形组数", C.PAIR_COUNT, 6),
+            ("等形机器数", C.PAIR_MACHINE_COUNT, 12),
+            ("TCB 值域数", C.TCB_VAL_COUNT, 5),
+            ("TCB 跳的组数", C.TCB_VAL_TAKEN_COUNT, 1),
+            ("机器总数", C.MACHINE_TOTAL, 18),
+            ("tail 88", C.TAIL_88, 0x041B88),
+            ("tail 86", C.TAIL_86, 0x041B86),
+            ("tail b6", C.TAIL_B6, 0x041BB6),
+            ("tail 30", C.TAIL_30, 0x041B30),
+            ("entry 170", C.ENTRY_170, 0x041BEA),
+            ("call r12", C.CALL_R12, 0x0406B2),
+            ("svc ret", C.SVC_RET, 0x0406B4)):
+        check("V89 %s" % _k, _v, _w)
+    check("V89 立即数三处", C.IMM_83E0_PCS,
+          (0x246E46, 0x25F1CC, 0x25F346))
+    check("V89 仅静态两组", C.PAIR_STATIC_ONLY, (0x040DE4, 0x041DE4))
+    check("V89 别名行数", len(C.ALIAS_ROWS), 8)
+    check("V89 等形组行数", len(C.PAIR_ROWS), 6)
+    check("V89 TCB 值域行数", len(C.TCB_VALS), 5)
+    for _tag, _val, _taken, _next, _ret in C.TCB_VALS:
+        check("V89 TCB %s 是否跳" % _tag, _taken, _tag == "M1")
+        check("V89 TCB %s 首次落点" % _tag, _next,
+              0x041CA2 if _tag == "M1" else 0x041C0E)
+    for _tag, _entry, _svcs in C.PAIR_ROWS:
+        check("V89 %s 两号" % _tag, len(_svcs), 2)
+        check("V89 %s 入口" % _tag, _entry, {
+            "G1": 0x040AA0, "G2": 0x041D6E, "G3": 0x040672,
+            "G4": 0x046E60, "G5": 0x040D6E, "G6": 0x046B80}[_tag])
+
+    # ---- 纯函数
+    check("V89 disp10 r13", C.disp10_addr(C.LD_R13_BASE, 13), 0x000083E4)
+    check("V89 disp10 r10", C.disp10_addr(C.CUR_TCB, 10), 0x6800026C)
+    check("V89 disp10 d12 陷阱栈帧",
+          C.disp10_addr(C.HOOK_R14, 12), C.SLOT_SVC)
+    check("V89 负 disp10", C.disp10_addr(0x000083B0, 200),
+          (0x000083B0 - 56 * 4) & C.M32)
+    check("V89 字源判据",
+          C.word_source_verdict(C.LD_R13_ADDR, C.TCB_R10),
+          "stack_frame_vs_tcb_field")
+    check("V89 字源判据反例",
+          C.word_source_verdict(C.TCB_R10, C.TCB_R10), "unresolved")
+    check("V89 d12 陷阱栈帧判据",
+          C.disp10_alias_verdict(12, C.HOOK_R14), "reads_svc_slot")
+    check("V89 d12 其他基址判据",
+          C.disp10_alias_verdict(12, C.CUR_TCB), "other_frame_offset")
+    check("V89 beq 落点", C.rel9_target(C.BEQ_R10, C.BEQ_R10_REL9),
+          C.TAIL_A2)
+    check("V89 extsb 239", C.extsb8(239), -17)
+    check("V89 extsb 187", C.extsb8(187), -69)
+    check("V89 extsb 223", C.extsb8(223), -33)
+    check("V89 extsb 171", C.extsb8(171), -85)
+    check("V89 ret_code None", C.ret_code(None), None)
+    for _a, _z in ((0xFFFFFFFF, 1), (0xFFFFFFFE, 0),
+                   (0x68000A28, 0), (0x00000000, 0)):
+        check("V89 cmp2 Z 0x%08X" % _a, C.cmp2_flags(_a)[4], _z)
+        check("V89 beq 0x%08X" % _a, C.beq_after_cmp2(_a), bool(_z))
+    check("V89 slot_of −170", C.slot_of(-170), 0x04050C)
+    check("V89 target_of 0x158A", C.target_of(0x158A), 0x041BEA)
+    check("V89 equal_shape 空", C.equal_shape([]), False)
+    check("V89 equal_shape 同",
+          C.equal_shape([{"boot": 1, "trap": 2, "post": 3},
+                         {"boot": 1, "trap": 2, "post": 3}]), True)
+    check("V89 equal_shape 异",
+          C.equal_shape([{"boot": 1, "trap": 2, "post": 3},
+                         {"boot": 1, "trap": 2, "post": 4}]), False)
+    check("V89 first_taken 跳", C.first_taken(True, True), "taken")
+    check("V89 first_taken 执行未跳",
+          C.first_taken(True, False), "executed_not_taken")
+    check("V89 first_taken 未执行", C.first_taken(False, False),
+          "not_executed")
+    check("V89 写动作归因", C.patch_causality("same", "same", "diff"),
+          "value_not_write_action")
+    check("V89 写动作归因反例",
+          C.patch_causality("a", "b", "diff"), "unresolved")
+    check("V89 保存≠分流",
+          C.svc_saved_vs_dispatch(28, 56, True, 1200),
+          "slot_differs_sequence_identical_no_dispatch_in_window")
+    check("V89 号未变", C.svc_saved_vs_dispatch(28, 28, True, 1200),
+          "service_number_not_changed")
+    check("V89 轨迹不同待查",
+          C.svc_saved_vs_dispatch(28, 56, False, 1200), "unresolved")
+    check("V89 alias_pairs 三对",
+          C.alias_pairs({1: 0x100, 2: 0x100, 3: 0x200}),
+          [(0x100, (1, 2))])
+    check("V89 综合判据",
+          C.source_verdict(True, True, True, True), C.VERDICT)
+    check("V89 综合判据前置失败",
+          C.source_verdict(True, False, True, True), C.VERDICT_OPEN)
+    check("V89 综合判据器件定位",
+          C.source_verdict(True, True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 结果文件
+    if os.path.exists(_RES):
+        with io.open(_RES, encoding="utf-8") as f:
+            res = f.read()
+        lines = res.splitlines()
+        check("V89 结果行数", len(lines) >= 100, True)
+        check("V89 结果零 Traceback", "Traceback" in res, False)
+        check("V89 结果零 Error", "Error" in res, False)
+        check("V89 结果含标题", "TCB+0x28 的 −1 门" in res, True)
+        for seg in "ABCDEFGH":
+            check("V89 结果含 [%s] 段" % seg, "[%s]" % seg in res, True)
+        for _key in ("18 台独立机器", "DONE V89", "反事实补全", "链未闭合",
+                     "规矩 91", "规矩 92", C.VERDICT,
+                     "stack_frame_vs_tcb_field",
+                     "multiple_in_edges_not_one_condition",
+                     "slot_differs_sequence_identical_no_dispatch_in_window",
+                     "value_not_write_action", "reads_svc_slot",
+                     "other_frame_offset", "RET_M17", "RET_M69",
+                     "RET_M33", "RET_M85", "RET_PLAIN", "RET_0_MAIN",
+                     "0xEF", "0x041CA2", "0x6800026C", "0x000083E0",
+                     "0x000083E4", "0x68000A28", "0x041DE0",
+                     "3543659", "688", "459", "0x0407DC",
+                     "H1 前置五项", "不能报", "不据此宣布",
+                     "只写内存单元", "只改寄存器"):
+            check("V89 结果含 %s" % _key[:24], _key in res, True)
+        for _tag in ("OBS", "M1", "ORIG", "NEG2", "ZERO"):
+            check("V89 结果含 %s" % _tag, "%-5s" % _tag in res or
+                  (" %s " % _tag) in res, True)
+        for _tag in ("G1", "G2", "G3", "G4", "G5", "G6"):
+            check("V89 结果含 %s" % _tag, _tag in res, True)
+        for _pc in (0x041B88, 0x041BE4, 0x041C9C, 0x041CA2,
+                    0x0406B2, 0x040692):
+            check("V89 结果含 0x%06X" % _pc,
+                  "0x%06X" % _pc in res, True)
+    else:
+        check("V89 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10113,6 +10351,7 @@ def main():
     test_v86()
     test_v87()
     test_v88()
+    test_v89()
     test_lists()
     test_bctrl()
     test_dual40()
