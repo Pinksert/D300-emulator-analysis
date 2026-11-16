@@ -10262,6 +10262,116 @@ def test_v89():
         check("V89 结果文件存在", False, True)
 
 
+def test_v90():
+    from frbox import svc90 as C
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc90.txt")
+
+    # ---- 收敛锚点（V65–V89 逐字相同）
+    for _k, _v, _w in (
+            ("boot step", C.BOOT_STEP, 483841),
+            ("trap", C.TRAP, 0x040668),
+            ("converge boot", C.CONVERGE_BOOT, 191520),
+            ("converge irq", C.CONVERGE_IRQ, 0x2B),
+            ("converge run", C.CONVERGE_RUN, 500000),
+            ("converge tail", C.CONVERGE_TAIL, 0x0407DC)):
+        check("V90 %s" % _k, _v, _w)
+
+    # ---- 地址错配纠正
+    for _k, _v, _w in (
+            ("i32 真目标", C.I32_TRUE_TARGET, 1440812),
+            ("真目标 hex", C.TARGET_HEX, 0x15FC2C),
+            ("V89 错地址", C.V89_SUB_ADDR, 0x15FA6C),
+            ("V89 错地址十进制", C.V89_SUB_DEC, 1440364),
+            ("地址差", C.ADDR_DELTA, 448),
+            ("调用点设置数", C.CALL_SITE_COUNT, 545),
+            ("错目标引用数", C.WRONG_TARGET_REF_COUNT, 0),
+            ("序言长度", C.PROLOGUE_LEN, 4)):
+        check("V90 %s" % _k, _v, _w)
+    check("V90 真目标=十进制换算", C.TARGET_HEX, C.I32_TRUE_TARGET)
+    check("V90 差=0x1C0", C.addr_delta(C.I32_TRUE_TARGET, C.V89_SUB_DEC), 448)
+    check("V90 错配判据", C.call_target_verdict(C.I32_TRUE_TARGET, C.V89_SUB_DEC),
+          "recorded_target_dec_hex_mismatch")
+    check("V90 一致判据", C.call_target_verdict(0x15FC2C, 0x15FC2C),
+          "recorded_target_ok")
+    check("V90 序言行", len(C.PROLOGUE), 4)
+    for _pc, _mn in C.PROLOGUE:
+        check("V90 序言 0x%06X" % _pc, _pc, {
+            0x15FC2C: 0x15FC2C, 0x15FC2E: 0x15FC2E,
+            0x15FC30: 0x15FC30, 0x15FC32: 0x15FC32}[_pc])
+
+    # ---- 函数体 r7 读点普查
+    for _k, _v, _w in (
+            ("函数入口", C.SUB_ENTRY, 0x15FC2C),
+            ("首 ret", C.SUB_FIRST_RET, 0x15FCB4),
+            ("函数字节", C.SUB_BYTES, 0x88),
+            ("r7 清零 PC", C.R7_CLEAR_PC, 0x15FC72),
+            ("r7 清零 imm", C.R7_CLEAR_I8, 0),
+            ("r7 引用数", C.R7_REF_COUNT, 1),
+            ("r7 读数", C.R7_READ_COUNT, 0),
+            ("内存指令数", C.MEM_READ_COUNT, 18),
+            ("r7 在基址", C.R7_IN_MEM_BASE, False)):
+        check("V90 %s" % _k, _v, _w)
+    check("V90 基址寄存器集合", tuple(C.MEM_BASE_REGS), (0, 1, 9, 10, 11, 12))
+    check("V90 r7 未读判据", C.r7_usage_verdict(1, 0, False),
+          "parameter_cleared_not_read_as_address")
+    check("V90 r7 被读不可约", C.r7_usage_verdict(1, 1, False), "unresolved")
+
+    # ---- 立即数 / 调用点
+    for _k, _v, _w in (
+            ("i20 83e0", C.I20_83E0, 33760),
+            ("i20 条数", C.I20_83E0_COUNT, 3),
+            ("i20 ri", C.I20_RI, 7),
+            ("收敛命中数", C.CONVERGE_HIT_COUNT, 0)):
+        check("V90 %s" % _k, _v, _w)
+    check("V90 立即数三处", C.I20_83E0_PCS,
+          (0x246E46, 0x25F1CC, 0x25F346))
+    check("V90 调用链", C.CALL_SEQ,
+          ("ldi:20 #0x83E0 r7", "ldi:32 #1440812 r12", "call:d @r12"))
+    check("V90 收敛不可达", C.converge_visibility([False, False, False]),
+          "call_sites_not_reachable_in_canonical_convergence")
+    check("V90 收敛全可见", C.converge_visibility([True, True, True]),
+          "call_sites_all_visible")
+
+    # ---- 动态反事实常量 / 纯函数
+    for _k, _v, _w in (
+            ("cf r7 init", C.CF_R7_INIT, 0x000083E0),
+            ("cf r7 after", C.CF_R7_AFTER, 0x00000000),
+            ("cf 步数", C.CF_TRACE_STEPS, 37),
+            ("cf 末 PC", C.CF_LAST_PC, 0x15FC82),
+            ("cf 机器数", C.CF_MACHINE_COUNT, 3),
+            ("收敛机器数", C.CONVERGE_MACHINE_COUNT, 1),
+            ("机器总数", C.MACHINE_TOTAL, 4)):
+        check("V90 %s" % _k, _v, _w)
+    check("V90 常量传播", C.constant_propagation(C.CF_R7_INIT, C.R7_CLEAR_I8,
+                                             C.CF_R7_AFTER),
+          "r7_overwritten_by_clear_not_dereferenced")
+    check("V90 综合判据", C.source_verdict(True, True, True, True), C.VERDICT)
+    check("V90 开放判据", C.source_verdict(True, False, True, True), "open")
+    check("V90 事件定位", C.source_verdict(True, True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 结果文件实读
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("recorded_target_dec_hex_mismatch",
+                     "parameter_cleared_not_read_as_address",
+                     "call_sites_not_reachable_in_canonical_convergence",
+                     "r7_overwritten_by_clear_not_dereferenced",
+                     "H1 前置五项", "不外推真机语义", "模型动作",
+                     "1440812", "1440364", "545", "0x15FC2C",
+                     "0x15FA6C", "0x83E0", "0x15FC72", "0x15FCB4",
+                     "CF_83E0", "CF_ZERO", "OBS", "0x0407DC",
+                     "三调用点 coverage 全 False"):
+            check("V90 结果含 %s" % _key[:24], _key in res, True)
+        for _pc in (0x15FC2C, 0x15FC2E, 0x15FC30, 0x15FC32,
+                    0x15FC72, 0x15FCB4, 0x246E46, 0x25F1CC, 0x25F346):
+            check("V90 结果含 0x%06X" % _pc,
+                  "0x%06X" % _pc in res, True)
+    else:
+        check("V90 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10352,6 +10462,7 @@ def main():
     test_v87()
     test_v88()
     test_v89()
+    test_v90()
     test_lists()
     test_bctrl()
     test_dual40()
