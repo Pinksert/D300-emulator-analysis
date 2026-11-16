@@ -240,6 +240,16 @@
                    （规矩 92）。全 ROM ld disp10=12 共 688 条只是各自
                    栈帧偏移，0x041DE0 在窗口内 0 命中 ⇒ 按 disp10 相同
                    认定读服务号槽是假阳性。18 台独立机器，链未闭合）
+    frbox.svc90    0x83E0 参数归属的地址错配纠正 / r7 读点普查 / 收敛态可见性
+                   （V90，纯函数；结 KI#351 第一条：三调用点 ldi:32 立即数
+                   1440812 精确换算是 0x15FC2C，非 V89 记的 0x15FA6C=1440364，
+                   差 0x1C0。真入口有 stm0/stm1/st rs2=1/enter 函数序言；
+                   全 ROM ldi:32 #1440812 有 545 条、#1440364 有 0 条。
+                   函数体 0x15FC2C..0x15FCB4 内 r7 只有 0x15FC72 ldi:8 #0
+                   一条（清零非读），内存指令基址寄存器集合不含 r7 ⇒
+                   参数被清零、不当地址用（规矩 93）。ldi:20 #0x83E0 全 ROM
+                   恰好 3 条，标准收敛态机 coverage 全 False，只报结构结论。
+                   4 台独立机器，链未闭合）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -253,4 +263,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.89.0"
+__version__ = "0.90.0"
