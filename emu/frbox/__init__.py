@@ -250,6 +250,13 @@
                    参数被清零、不当地址用（规矩 93）。ldi:20 #0x83E0 全 ROM
                    恰好 3 条，标准收敛态机 coverage 全 False，只报结构结论。
                    4 台独立机器，链未闭合）
+    frbox.svc91    8 组服务号别名的同 half 静态绑定 / 余下 2 组动态等形补全
+                   （V91，纯函数；结 KI#355 可证部分：8 组每组各号在分发表
+                   里落不同 slot 却存同一 half，target_of 折叠同一入口。
+                   V89 只跑 6/8 组，本版补 G7=0x040DE4(-236,64) /
+                   G8=0x041DE4(-247,22) 两台各 2 台等形机，1200 步逐条全序列
+                   相同、服务号槽值不同；8 组合计全部有等长窗口对照（规矩 94）。
+                   结论有界：不说全程不分流/语义已解出。5 台机器，链未闭合）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -263,4 +270,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.90.0"
+__version__ = "0.91.0"
