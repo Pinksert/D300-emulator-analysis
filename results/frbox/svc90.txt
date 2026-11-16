@@ -1,0 +1,57 @@
+[A] 地址错配纠正（只读 ROM，全 ROM 流式解码一次）
+A1 全 ROM 解码 3543659 条；ldi:32 #1440812(0x15FC2C) 共 545 条；ldi:32 #1440364(0x15FA6C) 共 0 条
+A2 差 = 448 (0x1C0)；判据 = recorded_target_dec_hex_mismatch
+A3 真入口 0x15FC2C 函数序言：0x15FC2C stm0 / 0x15FC2E stm1 / 0x15FC30 st rs2=1 / 0x15FC32 enter
+   0x15FC2C stm0      
+   0x15FC2E stm1      
+   0x15FC30 st        rs2=1
+   0x15FC32 enter     
+   0x15FC34 mov       ri=r10 rj=r6
+   0x15FC36 lduh      ri=r9
+   0x15FC38 ldi:20    i20=65535 ri=r0
+
+[B] 函数体 r7 读点普查（0x15FC2C..0x15FCB4，只读）
+B1 r7 引用 0x15FC72 ldi:8     i8=0 ri=r7
+B2 r7 引用 1 条 / 内存指令 18 条 / 基址寄存器集合 (0, 1, 9, 10, 11, 12) / r7 在基址中=False
+B3 判据 = parameter_cleared_not_read_as_address
+
+[C] ldi:20 #0x83E0 三调用点（只读）
+C1 全 ROM 共 3 条，ri 分布 {7: 3}，PC=['0x246e46', '0x25f1cc', '0x25f346']
+C2 0x246E46 调用序列 ldi:20(i20=33760,i32=-) -> ldi:32(i20=-,i32=1440812) -> call:d(i20=-,i32=-)
+C2 0x25F1CC 调用序列 ldi:20(i20=33760,i32=-) -> ldi:32(i20=-,i32=1440812) -> call:d(i20=-,i32=-)
+C2 0x25F346 调用序列 ldi:20(i20=33760,i32=-) -> ldi:32(i20=-,i32=1440812) -> call:d(i20=-,i32=-)
+C3 调用链模板 = ldi:20 #0x83E0 r7 / ldi:32 #1440812 r12 / call:d @r12
+
+[D] 动态反事实（模型动作：强制 PC 到 0x15FC2C + 写 r7，非固件行为）
+D1 CF_83E0 入口 r14=0x9F805ADC r15=0x000083F8 r7_init=0x000083E0 步数=37 末PC=0x15FC82 清零点=0x15fc72 r7_end=0x00000000
+D1 CF_ZERO 入口 r14=0x9F805ADC r15=0x000083F8 r7_init=0x00000000 步数=37 末PC=0x15FC82 清零点=无 r7_end=0x00000000
+D1 OBS 只观测 PC=0x040668 r7=0x00000002 r14=0x9F805ADC r15=0x000083F8
+D2 r7 常量传播判据 = r7_overwritten_by_clear_not_dereferenced
+
+[E] 三机对照表（r7 初值 / 清零点 / 末态；模型动作）
+E1 机        r7_init      清零点          r7_end     结论
+E1 CF_83E0  0x000083E0 0x15fc72     0x00000000 未读即清零
+E1 CF_ZERO  0x00000000 无            0x00000000 初值 0
+E1 OBS      0x00000002 —            —          只观测，不改初态
+E2 CF_83E0 与 CF_ZERO 的末态 r7 全同（0x00000000）⇒ 差异只来自被清零前的值，不来自写动作本身
+
+[F] 标准收敛态可见性（1 台标准机，V65–V89 策略逐字相同）
+F1 0x246E46 cov.visited=False
+F1 0x25F1CC cov.visited=False
+F1 0x25F346 cov.visited=False
+F2 标准收敛末 PC=0x0407DC（期望 0x0407DC）
+F3 可见性判据 = call_sites_not_reachable_in_canonical_convergence
+
+[G] 四处自我证伪（把看似结论证伪为不成立或不可证）
+G1 「目标是 0x15FA6C」 → 1440812=0x15FC2C，全 ROM #1440812 545 条 / #1440364 0 条
+G2 「r7=0x83E0 被当地址用」 → r7 读点 0 条，18 条内存指令基址集合 (0, 1, 9, 10, 11, 12) 不含 r7
+G3 「3 个调用点可动态取证」 → 收敛态 coverage [False, False, False]，全 False
+G4 「服务号槽被该子例程读取」 → 只证到 r7 参数被清零；别的任务是否读仍开放
+G5 链未闭合：本版只结地址口径、指令流结构与可见性，不是器件事件语义
+
+[H] 综合判据与开放项
+H1 前置五项 = True / True / True / True / True
+H2 综合判据 = call_target_hex_fix_r7_param_cleared_not_read_convergence_unreachable
+H3 机器数 = 4（3 反事实/只观测 + 1 标准收敛态）
+H4 边界：强制 PC / 写 r7 是模型动作，r14/r15 用陷阱口值非真实调用点栈帧；三调用点 coverage 全 False，只报结构结论，不外推真机语义。
+H5 仍开放：0x83E0 在真机是否被别的任务读取 / 三个调用点真机触发条件 / 8 对别名语义分工 / 真机 vec 0x18 器件事件 / −85 器件事件语义 / bit3 置位源 / vec 0x2D / 317 提交调用点 / 任务 9 下载后是否回任务 7 / 0xFFFFFFFF r13 哨兵真机设置者
