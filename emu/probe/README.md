@@ -1403,3 +1403,23 @@ M1 提前返回截断后续 `stm1` 覆盖。E 段 6 组别名 × 2 台 1200 步�
 `tcb_plus28_minus1_gate_ret_m17_four_negative_codes_svc_slot_saved_no_dispatch`、
 规矩 91/92、全部写内存/改寄存器是反事实补全、链未闭合。
 新设施 `frbox/svc89.py`，KI#348–351。
+
+
+## V90（0.90.0）· `exp_svc_v90.py`
+
+A–H 八段、57 行、**4 台独立机器**（3 台反事实/只观测 +
+1 台标准收敛态）、`results/frbox/svc90.txt`、`test_v90()` 83 条、
+全量自检 5456/5456。
+A 段地址错配纠正：1440812=0x15FC2C 非 0x15FA6C（差 0x1C0），
+全 ROM ldi:32 #1440812 545 条 / #1440364 0 条，真入口有
+stm0/stm1/st rs2=1/enter 序言。B 段函数体 0x15FC2C..0x15FCB4 r7
+读点普查：引用 1 条（0x15FC72 清零）、读 0 条、18 条内存指令基址
+集合 {r0,r1,r9,r10,r11,r12} 不含 r7 ⇒ parameter_cleared_not_read_as_address。
+C 段 ldi:20 #0x83E0 全 ROM 3 条调用点，调用链 ldi:20/ldi:32/call:d。
+D 段 3 台反事实机强制 PC 到入口、写 r7=0x83E0，37 步轨迹 r7 全程未读
+即清零（模型动作）；CF_ZERO / OBS 对照。F 段标准收敛态机末 PC 0x0407DC，
+三调用点 coverage 全 False ⇒ call_sites_not_reachable_in_canonical_convergence。
+H 段综合判据
+call_target_hex_fix_r7_param_cleared_not_read_convergence_unreachable、
+规矩 93、全部强制 PC/写 r7 是反事实补全、链未闭合。
+新设施 `frbox/svc90.py`，KI#352–355。
