@@ -10372,6 +10372,110 @@ def test_v90():
         check("V90 结果文件存在", False, True)
 
 
+def test_v91():
+    from frbox import svc91 as C
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc91.txt")
+
+    # ---- 收敛锚点（V65–V90 逐字相同）
+    for _k, _v, _w in (
+            ("boot step", C.BOOT_STEP, 483841),
+            ("trap", C.TRAP, 0x040668),
+            ("converge boot", C.CONVERGE_BOOT, 191520),
+            ("converge irq", C.CONVERGE_IRQ, 0x2B),
+            ("converge run", C.CONVERGE_RUN, 500000),
+            ("converge tail", C.CONVERGE_TAIL, 0x0407DC),
+            ("call r12", C.CALL_R12, 0x0406B2),
+            ("slot svc", C.SLOT_SVC, 0x000083E0),
+            ("alias d12 pc", C.ALIAS_D12_PC, 0x041DE0)):
+        check("V91 %s" % _k, _v, _w)
+
+    # ---- 分发表全表口径
+    for _k, _v, _w in (
+            ("rom decoded", C.ROM_DECODED, 3543659),
+            ("tbl zero", C.TBL_ZERO, 0x040660),
+            ("svc count", C.TABLE_SVC_COUNT, 100),
+            ("entry count", C.TABLE_ENTRY_COUNT, 89),
+            ("alias pairs", C.TABLE_ALIAS_PAIRS, 8),
+            ("alias svc count", C.ALIAS_SVC_COUNT, 19),
+            ("group count", C.GROUP_COUNT, 8),
+            ("same half count", C.SAME_HALF_COUNT, 8),
+            ("v89 groups", C.V89_GROUP_COUNT, 6),
+            ("v89 machines", C.V89_GROUP_MACHINES, 12),
+            ("new groups", C.NEW_GROUP_COUNT, 2),
+            ("new machines", C.NEW_GROUP_MACHINES, 4),
+            ("total dynamic groups", C.TOTAL_DYNAMIC_GROUPS, 8),
+            ("converge machines", C.CONVERGE_MACHINE_COUNT, 1),
+            ("machine total", C.MACHINE_TOTAL, 5)):
+        check("V91 %s" % _k, _v, _w)
+
+    # ---- 8 组别名入口 / half（只读实测常量）
+    check("V91 ALIAS_ROWS 8 组", len(C.ALIAS_ROWS), 8)
+    for entry, svcs, half in C.ALIAS_ROWS:
+        check("V91 组 0x%06X 同half" % entry, C.same_half((half,)), True)
+    check("V91 half binding verdict", C.half_binding_verdict(),
+          C.HALF_BIND_VERDICT)
+    check("V91 slot 0x040DE4(-236)", C.slot_of(-236), 0x040488)
+    check("V91 slot 0x040DE4(64)", C.slot_of(64), 0x0406E0)
+    check("V91 target 0x0784", C.target_of(0x0784), 0x040DE4)
+    check("V91 slot -247", C.slot_of(-247), 0x040472)
+    check("V91 slot 22", C.slot_of(22), 0x04068C)
+    check("V91 target 0x1784", C.target_of(0x1784), 0x041DE4)
+
+    # ---- 服务号槽保存 ≠ 分流
+    check("V91 slot 不同序列同",
+          C.svc_saved_vs_dispatch(0x7FFFFF14, 0x00000040, True, 1200),
+          "slot_differs_sequence_identical_no_dispatch_in_window")
+    check("V91 slot 相同不可约",
+          C.svc_saved_vs_dispatch(0x1C, 0x1C, True, 1200),
+          "service_number_not_changed")
+    check("V91 序列不同不可约",
+          C.svc_saved_vs_dispatch(0x1C, 0x38, False, 1200), "unresolved")
+
+    # ---- 8 组全等形判据
+    check("V91 8组全同", C.full_dynamic_verdict([True] * 8),
+          "all_eight_groups_equal_shape_in_window")
+    check("V91 6组不全", C.full_dynamic_verdict([True] * 6),
+          "incomplete_group_coverage")
+    check("V91 有差异", C.full_dynamic_verdict([True] * 7 + [False]),
+          "some_groups_differ")
+    check("V91 无窗口", C.full_dynamic_verdict([True] * 8, 0),
+          "no_window_declared")
+
+    # ---- 2 组新跑实测常量
+    check("V91 NEW_DYNAMIC 2 组", len(C.NEW_DYNAMIC), 2)
+    check("V91 V89_DYNAMIC 6 组", len(C.V89_DYNAMIC), 6)
+    for row in C.NEW_DYNAMIC:
+        tag, entry, svcs, slots, call_ref, endpc_ref = row[:6]
+        check("V91 %s seq_same" % tag, row[9], True)
+        check("V91 %s 末PC非代码区" % tag, endpc_ref in C.NEW_NONCODE_ENDPCS, True)
+    check("V91 非代码区末PC 2 个", len(C.NEW_NONCODE_ENDPCS), 2)
+    check("V91 G7 入口读r12", C.ENTRY_R12_READ[0x040DE4], True)
+    check("V91 G8 入口不读r12", C.ENTRY_R12_READ[0x041DE4], False)
+
+    # ---- 综合判据（链未闭合）
+    check("V91 综合判据", C.source_verdict(True, True, True), C.VERDICT)
+    check("V91 开放判据", C.source_verdict(True, False, True), "open")
+    check("V91 事件定位", C.source_verdict(True, True, True, True),
+          "event_semantics_located")
+
+    # ---- 结果文件实读
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("static_same_half_binding_dispatch_folds_to_one_entry",
+                     "slot_differs_sequence_identical_no_dispatch_in_window",
+                     "all_eight_groups_equal_shape_in_window",
+                     "8 组同 half 绑定", "8 组全程不分流",
+                     "1200 步", "反事实", "链未闭合", "规矩 94",
+                     "0x040DE4", "0x041DE4", "0x041DE0", "0x784", "0x1784",
+                     "0x0407DC", "同 half", "G7", "G8"):
+            check("V91 结果含 %s" % _key[:24], _key in res, True)
+        for _pc in (0x040DE4, 0x041DE4, 0x041DE0, 0x0407DC):
+            check("V91 结果含 0x%06X" % _pc, "0x%06X" % _pc in res, True)
+    else:
+        check("V91 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10463,6 +10567,7 @@ def main():
     test_v88()
     test_v89()
     test_v90()
+    test_v91()
     test_lists()
     test_bctrl()
     test_dual40()
