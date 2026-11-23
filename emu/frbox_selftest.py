@@ -10627,6 +10627,97 @@ def test_v92():
         check("V92 结果文件存在", False, True)
 
 
+def test_v93():
+    from frbox import task93 as C, blive, brealos
+
+    # ---- A 常量（报告/探针/自检同源）
+    check("V93 休眠任务 11 个", len(C.DORMANT), 11)
+    check("V93 休眠任务逐项", list(C.DORMANT),
+          [8, 12, 13, 14, 15, 18, 19, 22, 23, 24, 25])
+    check("V93 创建点共 11 个", len(C.bootstrap_pcs()), 11)
+    check("V93 静态点数 9", sum(len(v) for v in C.STATIC_BOOTSTRAP.values()), 9)
+    check("V93 表驱动点数 2", len(C.DYNAMIC_BOOTSTRAP), 2)
+    check("V93 分组表 5 张", len(C.TID_TABLES), 5)
+    check("V93 任务 23 有 3 点", len(C.STATIC_BOOTSTRAP[23]), 3)
+    check("V93 表驱动链区间", C.GROUND_ZERO, (0x131200, 0x131600))
+    check("V93 批量函数", hex(C.BATCH_FN), "0x130b2c")
+    check("V93 批量函数两个调用者", [hex(x) for x in C.BATCH_CALLERS],
+          ["0x1313a6", "0x131506"])
+    check("V93 任务 7 体内三点", list(C.T7_BOOTSTRAP), [0x175482, 0x17548E, 0x175630])
+    check("V93 表长度合计 12 格", sum(C.TABLE_LEN.values()), 12)
+
+    # ---- B 表内容与实测一致（不建机也能核对常量本身）
+    want = dict((a, tuple(v)) for a, v, _n in C.TID_TABLES)
+    check("V93 表 1BD040 常量", want[0x1BD040], (6, 7, 9, 10))
+    check("V93 表 1BD058 常量", want[0x1BD058], (4, 8))
+    check("V93 表 1BD060 常量", want[0x1BD060], (1, 2))
+    check("V93 表 1BD068 常量", want[0x1BD068], (14, 15))
+    check("V93 表 1BD070 常量", want[0x1BD070], (12, 13))
+
+    # ---- C 映射表（纯函数）
+    bmap = C.bootstrap_map()
+    check("V93 映射表覆盖 11 个任务", len(bmap), 11)
+    check("V93 映射表键集合", sorted(bmap), list(C.DORMANT))
+    check("V93 任务 12 与 13 同点", bmap[12][0][0], bmap[13][0][0])
+    check("V93 任务 14 与 15 同点", bmap[14][0][0], bmap[15][0][0])
+    check("V93 任务 12 的类型是 table", bmap[12][0][1], "table")
+    check("V93 任务 8 的类型是 static", bmap[8][0][1], "static")
+    check("V93 任务 8 点地址", hex(bmap[8][0][0]), "0x170866")
+
+    # ---- D 默认机器（无时基）
+    m = blive.boot()
+    blive.run(m, steps=600000)
+    check("V93 末 PC 空闲", hex(m.cpu.pc), "0x407dc")
+    ok, addr, real, _w = C.tables_match(m)
+    check("V93 表实测逐格一致", ok, True)
+    check("V93 表实测 1BD070", C.read_tables(m)[0x1BD070], [12, 13])
+    dorm = C.dormant(m)
+    check("V93 实测休眠任务", dorm, list(C.DORMANT))
+    check("V93 休眠措辞", C.verdict_dormant(dorm) == C.verdict_dormant(list(C.DORMANT)), True)
+    det = C.dormant_detail(m)
+    check("V93 休眠明细 11 条", len(det), 11)
+    check("V93 休眠任务保存 SP 全 0", all(d["saved_sp"] == 0 for d in det), True)
+    check("V93 休眠任务 TCB 标志低字节", sorted(set(d["flags"] & 0xFF for d in det)), [0x10])
+    unr = C.unreached(m)
+    check("V93 未命中 11 个", len(unr), 11)
+    check("V93 未命中里静态 9 个", sum(1 for _p, k, _t in unr if k == "static"), 9)
+    check("V93 未命中里表驱动 2 个", sum(1 for _p, k, _t in unr if k == "table"), 2)
+    check("V93 命中映射全 False", sorted(k for k, v in C.hit_map(m).items() if v), [])
+    check("V93 休眠任务入口前缀全 0", sorted(set(C.entry_prefix(m, d["entry"])[0] for d in det)), [0])
+    check("V93 表驱动链整片 0 命中", C.ground_zero_hit(m), 0)
+    check("V93 整片措辞", "整片 0 命中" in C.verdict_ground_zero(0), True)
+    check("V93 对照任务 2 前缀 > 0", C.entry_prefix(m, 0x1200AC)[0] > 0, True)
+    for pc in C.T7_BOOTSTRAP:
+        check("V93 任务 7 体内点 0x%06X 未命中" % pc, C._hit(m, pc), False)
+
+    # ---- E 带时基（tick=256）：11 个不变
+    m2 = blive.boot(tick=256)
+    blive.run(m2, steps=600000)
+    check("V93 带时基末 PC", hex(m2.cpu.pc), "0x1a4bee")
+    check("V93 带时基休眠任务不变", C.dormant(m2), list(C.DORMANT))
+    check("V93 带时基创建点仍 0 命中",
+          sum(1 for v in C.hit_map(m2).values() if v), 0)
+    check("V93 时基措辞", C.verdict_tick(C.dormant(m), C.dormant(m2)),
+          "补时基前后休眠任务都是 11 个、逐项相同 ⇒ 时基收益不覆盖这批任务")
+    rec7 = brealos.records(m2)[6]
+    wh = m2.bus.rd(rec7["tcb"] + 0x20, 4)
+    from frbox import waitstat67 as W93
+    check("V93 任务 7 带时基等 -170", W93.sx16(wh >> 16), -170)
+
+    # ---- F 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "task93.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("休眠", "表驱动", "0x130B5E", "0x130B8E", "0x1BD070", "0x1BD068",
+                     "0x130B2C", "0x131200", "0x1A4BEE", "0x175482", "0x175630",
+                     "整片 0 命中", "不能报"):
+            check("V93 结果含 %s" % _key, _key in res, True)
+        check("V93 结果 150+ 行", len(res.splitlines()) >= 150, True)
+    else:
+        check("V93 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10720,6 +10811,7 @@ def main():
     test_v90()
     test_v91()
     test_v92()
+    test_v93()
     test_lists()
     test_bctrl()
     test_dual40()
