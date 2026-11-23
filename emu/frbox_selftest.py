@@ -10476,6 +10476,157 @@ def test_v91():
         check("V91 结果文件存在", False, True)
 
 
+def test_v92():
+    from frbox import tick92 as C, blive, brealos, bstatic
+
+    # ---- 常量（报告与自检同源）
+    for _k, _v, _w in (
+            ("tick counter hi", C.TICK_COUNTER_HI, 0x68000110),
+            ("tick counter lo", C.TICK_COUNTER_LO, 0x68000114),
+            ("tick isr", C.TICK_ISR, 0x04046E),
+            ("tick body", C.TICK_BODY, 0x040A44),
+            ("delay sentinel", C.DELAY_SENTINEL, 0x68000118),
+            ("converge period", C.CONVERGE_PERIOD, 256),
+            ("period scan len", len(C.PERIODS_V92), 16),
+            ("stuck count", len(C.STUCK_V92), 3),
+            ("task16 wait pc", C.TASK16_WAIT_PC, 0x1A4BEE),
+            ("task16 svc", C.TASK16_WAIT_SVC, -170),
+            ("task16 flgid", C.TASK16_FLGID, 17),
+            ("task16 want", C.TASK16_WANT, 0x00000002),
+            ("f17 func", C.F17_FUNC, 0x1A4B8A),
+            ("f17 func end", C.F17_FUNC_END, 0x1A4FBA),
+            ("f17 set count", len(C.F17_SET_PCS), 5)):
+        check("V92 %s" % _k, _v, _w)
+
+    # ---- 宽服务号修正（纯函数）
+    check("V92 fix_wide(86)", C.fix_wide(86), -170)
+    check("V92 fix_wide(85)", C.fix_wide(85), -171)
+    check("V92 fix_wide(-48) 不动", C.fix_wide(-48), -48)
+    check("V92 fix_wide(0) 不动", C.fix_wide(0), 0)
+    check("V92 误读表 2 项", len(C.WIDE_MISREAD), 2)
+
+    # ---- converge_bound / first_diff（假数据，不建机器）
+    fake = [
+        {"period": None, "seq": [1, 2, 3]},
+        {"period": 512, "seq": [1, 2, 9]},
+        {"period": 256, "seq": [7, 7, 7]},
+        {"period": 128, "seq": [7, 7, 7]},
+    ]
+    bound, ref, same, diff = C.converge_bound(fake)
+    check("V92 假数据 bound", bound, 256)
+    check("V92 假数据 ref period", ref["period"], 128)
+    check("V92 假数据 same 含 256", 256 in same, True)
+    check("V92 假数据 same 不含 None", None in same, False)
+    check("V92 假数据 diff 含 None/512", set(str(x) for x in diff) == {"None", "512"}, True)
+    check("V92 first_diff 命中", C.first_diff([7, 7], [1, 2]), (0, 7, 1))
+    check("V92 first_diff 长度", C.first_diff([7], [7, 7]), ("长度", 1, 2))
+    check("V92 first_diff 无差异", C.first_diff([7, 7], [7, 7]), None)
+
+    # ---- 缺省时基的现场（1 台）
+    m0 = blive.boot()
+    r0 = blive.run(m0, steps=600000)
+    seq0 = [s[0] for s in r0["switches"]] if isinstance(r0["switches"], list) else []
+    check("V92 缺省末PC", m0.cpu.pc, 0x0407DC)
+    check("V92 缺省当前", r0["current_name"], "空闲")
+    check("V92 缺省换手", len(seq0), 34)
+    check("V92 缺省 tick 计数", C.kernel_tick(m0), 0)
+    check("V92 缺省 ISR 未命中", m0.cov.visited(C.TICK_ISR), False)
+    d0 = C.delay_rows(m0)
+    check("V92 缺省延时队列 3 个", len(d0), 3)
+    check("V92 缺省仍是那三个", C.stuck(d0), [17, 7, 21])
+    check("V92 缺省任务 7 服务号", dict(d0)[7], -37)
+    check("V92 缺省任务 21 服务号", dict(d0)[21], -85)
+
+    # ---- 补上节拍后的同一口径（1 台）
+    m1 = blive.boot(tick=C.CONVERGE_PERIOD)
+    r1 = blive.run(m1, steps=600000)
+    seq1 = [s[0] for s in r1["switches"]] if isinstance(r1["switches"], list) else []
+    check("V92 tick 末PC", m1.cpu.pc, C.TASK16_WAIT_PC)
+    check("V92 tick 当前", r1["current_name"], "任务16")
+    check("V92 tick 换手", len(seq1), 224)
+    check("V92 tick 计数", C.kernel_tick(m1), 2344)
+    check("V92 tick ISR 命中", m1.cov.visited(C.TICK_ISR), True)
+    check("V92 tick ISR 体命中", m1.cov.visited(C.TICK_BODY), True)
+    check("V92 tick 延时队列空", C.delay_rows(m1), [])
+    check("V92 换手变多", len(seq1) > len(seq0), True)
+
+    # ---- 收敛态任务集合与任务 16 现场
+    ran1 = [t["id"] for t in brealos.states(m1) if t["ran"]]
+    check("V92 跑过任务数", len(ran1), 17)
+    check("V92 任务 16 跑过", 16 in ran1, True)
+    check("V92 休眠任务数", len([t for t in brealos.states(m1) if not t["ran"]]), 11)
+    tcb16 = [r["tcb"] for r in brealos.records(m1) if r["id"] == 16][0]
+    check("V92 任务16 服务号", m1.bus.rd(tcb16 + 0x20, 4) >> 16, 0xFF56)
+    check("V92 任务16 等待位", m1.bus.rd(tcb16 + 0x14, 4), C.TASK16_WANT)
+
+    # ---- 自锁判据（假 sweep：置位点全在等待之后）
+    class _C(object):
+        def __init__(self, addr, svc, r4=None, r5=None):
+            self.addr, self.svc, self.r4, self.r5 = addr, svc, r4, r5
+            self.r6, self.r7 = None, None
+
+        @property
+        def flgid(self):
+            return self.r4 if self.svc == bstatic.SET_FLG else self.r5
+
+        @property
+        def bits(self):
+            return self.r5 if self.svc == bstatic.SET_FLG else self.r6
+
+    class _S(object):
+        def __init__(self, calls, funcs):
+            self.calls, self.funcs = calls, funcs
+
+    base = C.F17_FUNC
+    # 函数体长 0x430，偏移必须落在里面
+    # 等待在 0x100、置位在 0x200/0x300 ⇒ 全在等待之后 ⇒ 自锁
+    sw = _S([_C(base + 0x100, -53, 34),
+             _C(base + 0x200, bstatic.SET_FLG, 17, 0x2),
+             _C(base + 0x300, bstatic.SET_FLG, 17, 0x2)], [base])
+    lk = C.self_lock(sw)
+    check("V92 假 sweep 置位点 2 个", len(lk["points"]), 2)
+    check("V92 假 sweep 全在函数内", len(lk["in_func"]), 2)
+    check("V92 假 sweep 自锁", lk["locked"], True)
+    check("V92 假 sweep guard", lk["guard"].addr, base + 0x100)
+
+    # 置位在等待之前 ⇒ 不自锁
+    sw2 = _S([_C(base + 0x010, bstatic.SET_FLG, 17, 0x2),
+              _C(base + 0x100, -53, 34)], [base])
+    check("V92 假 sweep 前置位不自锁", C.self_lock(sw2)["locked"], False)
+
+    # 有函数外的置位点 ⇒ 不自锁
+    sw3 = _S([_C(base + 0x100, -53, 34),
+              _C(base + 0x200, bstatic.SET_FLG, 17, 0x2),
+              _C(base + 0x2000, bstatic.SET_FLG, 17, 0x2)], [base])
+    lk3 = C.self_lock(sw3)
+    check("V92 假 sweep 函数外 1 个", len(lk3["outside"]), 1)
+    check("V92 假 sweep 有外部点不自锁", lk3["locked"], False)
+
+    # 宽服务号形态（svc=86）也要被当成等待
+    sw4 = _S([_C(base + 0x100, 86, 17, 0x2),
+              _C(base + 0x200, bstatic.SET_FLG, 17, 0x2)], [base])
+    lk4 = C.self_lock(sw4)
+    check("V92 假 sweep 宽服务号算等待", len(lk4["waits"]), 1)
+    check("V92 假 sweep 宽服务号自锁", lk4["locked"], True)
+    check("V92 假 sweep guard 修成 -170", C.fix_wide(lk4["guard"].svc), -170)
+
+    # ---- 结论措辞
+    check("V92 收敛措辞", C.verdict_bound(256), "period<=256 时逐条换手序列相同")
+
+    # ---- 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "tick92.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("缺省时基", "延时队列", "period<=256", "等待-置位自锁",
+                     "0x1A4BEE", "0x1A4BE6", "0x1A4B8A", "0x0407DC",
+                     "0x68000110", "fix_wide", "86", "2344", "224", "34",
+                     "禁语", "反事实"):
+            check("V92 结果含 %s" % _key[:20], _key in res, True)
+    else:
+        check("V92 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10568,6 +10719,7 @@ def main():
     test_v89()
     test_v90()
     test_v91()
+    test_v92()
     test_lists()
     test_bctrl()
     test_dual40()
