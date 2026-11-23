@@ -64,11 +64,16 @@ DISPLAY_MARK = 0x9F58D500
 SLOT_BASE = 0x9F58D508
 
 
-def boot(steps=BOOT_STEPS):
+def boot(steps=BOOT_STEPS, tick=None):
     """新建一台 `dispatch=True` 的 d300-b 并 boot 到空闲任务。
 
     与 `brealos.boot()` 的唯一差别是打开了 0x44 的请求锁存器 —— 这一句就是
     「从人工补中断到固件自己派发」的全部分歧。
+
+    `tick=None`（默认）**不挂任何节拍源**，与 V40 以来所有结论的口径一致。
+    V92 实测这个缺省会让延时队列的三个任务（17/7/21）永久积压：
+    它们等的是时间，没有 tick 时间就不动。要看带上时基的整机，传
+    `tick=256`（阈值见 `tick92.CONVERGE_PERIOD`）。
     """
     from .machine import create
     m = create("d300-b", dispatch=True)
@@ -76,6 +81,8 @@ def boot(steps=BOOT_STEPS):
     m.reset()
     m.enable_cov()
     m.attach_flow()
+    if tick is not None:
+        m.enable_auto_tick18(period=tick)
     n = 0
     while not m.cpu.halted and n < steps:
         m.step(1)
