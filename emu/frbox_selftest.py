@@ -10908,6 +10908,70 @@ def test_v95():
         check("V95 结果文件存在", False, True)
 
 
+def test_v96():
+    """V96：flag 6 是**任务工作邮箱** —— 位→任务 一对一，注入能验证。
+
+    两段：纯函数 + 现场（2 台机器：1 台读全景、1 台投死位做负对照）。
+    不做 18 格全注入 —— 那是探针的活（约 9 分钟），自检只要「机制在、负对照成立」。
+    """
+    print("\n[58 任务工作邮箱（V96）]")
+    from frbox import inject96 as I
+
+    # ---- A 位运算纯函数
+    check("V96 bits_of(0) 空", I.bits_of(0), [])
+    check("V96 bits_of(0x1E0)", I.bits_of(0x1E0), [0x20, 0x40, 0x80, 0x100])
+    check("V96 bits_of(0x3FFF0) 14 位", len(I.bits_of(0x3FFF0)), 14)
+    check("V96 bits_of 最高位", I.bits_of(0x80000000), [0x80000000])
+    check("V96 bits_of 截 32 位", I.bits_of(0x100000010), [0x10])
+    check("V96 dead_bits 差额", I.dead_bits({"bits": [0x10, 0x20]}, {0x20: [9]}), [0x10])
+
+    # ---- B 收敛态现场（1 台机器）
+    m = I.converged()
+    snap = I.snapshot(m)
+    check("V96 末 PC 回空闲", (snap["end_pc"], snap["idle"]), (I.IDLE_PC, True))
+    check("V96 覆盖 5404", snap["cov"], 5404)
+    check("V96 等待者 17", snap["waiters"], 17)
+    check("V96 flag6 七个活位", sorted(snap["mailbox"]),
+          [0x20, 0x40, 0x80, 0x100, 0x200, 0x2000, 0x4000])
+    check("V96 位→任务 一对一", snap["mailbox"],
+          {0x20: [9], 0x40: [10], 0x80: [11], 0x100: [27], 0x200: [28],
+           0x2000: [6], 0x4000: [4]})
+    check("V96 收敛态 flag6 位模式 0", snap["pattern"], 0)
+    check("V96 flag6 等待队列", snap["queues"].get(6), [4, 6, 9, 10, 11, 27, 28])
+    check("V96 flag3 等待队列", snap["queues"].get(3), [2, 5, 26])
+
+    rows = I.wait_rows(m)
+    check("V96 延时队列三人", sorted(r["tid"] for r in rows if r["delay"]), [7, 17, 21])
+    check("V96 延时原因两类", {r["svc"] for r in rows if r["delay"]},
+          {"tslp_tsk", "dly_tsk"})
+    check("V96 延时 −85 两人", {r["tid"] for r in rows if r["svc"] == "dly_tsk"},
+          {17, 21})
+    check("V96 宽服务号 -170 两人", {r["tid"] for r in rows if r["svc"] == "twai_flg"},
+          {16, 20})
+    check("V96 休眠 11 个", sorted(r["tid"] for r in rows if r["state"] == 0x10),
+          [8, 12, 13, 14, 15, 18, 19, 22, 23, 24, 25])
+
+    # ---- C 负对照：死位投进去没人醒、位残留（另 1 台机器）
+    r = I.trial(0x10)
+    check("V96 死位 0x10 不唤醒", (r["pred"], r["got"], r["ok"]), ([], [], True))
+    check("V96 死位 0x10 残留 0x10", r["pattern"], 0x10)
+    check("V96 死位 0x10 无新覆盖", r["new_cov"], 0)
+    check("V96 注入后回空闲", (r["end_pc"], r["idle"]), (I.IDLE_PC, True))
+    check("V96 注入回执 err=0", r["inject"].split()[0], "err=0")
+
+    # ---- D 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "inj96.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("A2", "A4 flag 6 的现场等待者", "B6", "C3 合计",
+                     "D  set_flg(6, 0x1E0)", "E6", "F3", "G1", "不能报"):
+            check("V96 结果含 %s" % _key, _key in res, True)
+        check("V96 结果 60 行以上", len(res.splitlines()) >= 60, True)
+    else:
+        check("V96 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -11004,6 +11068,7 @@ def main():
     test_v93()
     test_v94()
     test_v95()
+    test_v96()
     test_lists()
     test_bctrl()
     test_dual40()
