@@ -209,18 +209,24 @@ def sx8(v):
 
 
 class CallSite(object):
-    """一个 `int #0x40` 调用点。未知实参为 `None`。
+    """一个 `int #0x40` 命中。未知实参为 `None`。
 
     `r12` / `w12` 是 V94 加的审计字段：装载值（未取补码）与装载宽度（8/20/32/None）。
     服务号本身在扫描时就按宽度算好，`svc` 与 `r12` 一起构成「可复核」的一对。
+
+    `r12_pc` 是 V95 加的第三个审计字段：**最后一次写 r12 的那条指令的地址**
+    （整块扫描里没有写过就是 `None`）。它不是「调用点该有的东西」，而是
+    「这条 int 到底有没有人在准备参数」的证据 —— 2282 个真调用点全部在 22 字节内，
+    14 个假命中最近的一个也隔了 34 字节。
     """
 
-    __slots__ = ('addr', 'svc', 'r4', 'r5', 'r6', 'r7', 'r12', 'w12')
+    __slots__ = ('addr', 'svc', 'r4', 'r5', 'r6', 'r7', 'r12', 'w12', 'r12_pc')
 
-    def __init__(self, addr, svc, r4, r5, r6, r7, r12=None, w12=None):
+    def __init__(self, addr, svc, r4, r5, r6, r7, r12=None, w12=None, r12_pc=None):
         self.addr, self.svc = addr, svc
         self.r4, self.r5, self.r6, self.r7 = r4, r5, r6, r7
         self.r12, self.w12 = r12, w12
+        self.r12_pc = r12_pc
 
     # ---- 按服务各自的口径取实参
     @property
@@ -285,6 +291,8 @@ class Sweep(object):
         regs = [None] * 16
         #: V94：与 `regs` 并行的「装载宽度」（8/20/32；其它来源为 None）
         regw = [None] * 16
+        #: V95：与 `regs` 并行的「最后一次写这个寄存器的指令地址」
+        regpc = [None] * 16
         off, n = 0, len(rom)
         while off < n - 1:
             if rom[off:off + 2] in SKIP2:
@@ -301,7 +309,8 @@ class Sweep(object):
                 svc = (None if regs[12] is None
                        else svcnum.of_reg(regs[12], regw[12]))
                 self.calls.append(CallSite(addr, svc, regs[4], regs[5],
-                                           regs[6], regs[7], regs[12], regw[12]))
+                                           regs[6], regs[7], regs[12], regw[12],
+                                           regpc[12]))
             elif mn == 'call:d' and v.get('ri') is not None:
                 tgt = regs[v['ri']]
                 if tgt is not None:
@@ -333,23 +342,61 @@ class Sweep(object):
                     if ri is not None:
                         regs[ri] = imm
                         regw[ri] = width
+                        regpc[ri] = addr
                 elif mn == 'mov':
                     if ri is not None:
                         regs[ri] = None
                         regw[ri] = None
+                        regpc[ri] = addr
                     rj = v.get('rj')
                     if rj is not None:
                         regs[rj] = None
                         regw[rj] = None
+                        regpc[rj] = addr
                 elif ri is not None:
                     regs[ri] = None
                     regw[ri] = None
+                    regpc[ri] = addr
             off += size
 
     # ------------------------------------------------------------ 查询
     def of(self, svc):
         """某服务号的全部调用点。"""
         return [c for c in self.calls if c.svc == svc]
+
+    def artifacts(self, span=32):
+        """**不是调用点**的 `int #0x40` 命中（V95）。
+
+        判据只有一条，而且是机械的：**前面 `span` 字节里没有任何一条指令写过 r12**。
+        真调用点 2282/2282 都有（2189 个 `ldi:8` 在 16 字节内、93 个 `ldi:32`），
+        所以「没人准备服务号就进内核」这件事在 FR 代码里不存在。
+
+        为什么会有这种命中：**表值 8000 = `0x1F40`**，而 `int #0x40` 的字节编码
+        正好是 `1F 40`（操作码 0x1F + 向量 0x40）。固件里成片的「时长常量表」
+        （4000/4500/5000/5600/6400/7200/**8000**/9000/10000…、7000/7500/**8000**/8500…）
+        每含一个 8000，线性扫描就多一个假调用点。14 个假命中全部落在这类表里。
+
+        ⚠️ 这个判据**只覆盖 14 个**。第 15 个 `0x32ED60` 的 r12 是 `ld` 从内存取的
+        （`ld r3, r12`），本判据看不到；它靠区段证据否定（见 `probe/exp_svc95.py`）。
+        所以 `len(calls) == len(svc_calls()) + len(artifacts()) + len(unresolved())`。
+        """
+        out = []
+        for c in self.calls:
+            if c.r12_pc is None or c.addr - c.r12_pc > span:
+                out.append(c)
+        return out
+
+    def svc_calls(self):
+        """服务号已定（`svc is not None`）的调用点。V95：2282 个。"""
+        return [c for c in self.calls if c.svc is not None]
+
+    def unresolved(self, span=32):
+        """`svc is None` 且不满足 `artifacts()` 判据的 —— 剩下的真要跟调用者。
+
+        V95：只有 1 个（`0x32ED60`，r12 来自内存）。
+        """
+        bad = set(id(c) for c in self.artifacts(span))
+        return [c for c in self.calls if c.svc is None and id(c) not in bad]
 
     def flag_sets(self, flgid=None):
         """`set_flg` 调用点，可按 flgid 过滤。"""

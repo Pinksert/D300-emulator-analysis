@@ -26,6 +26,7 @@ from frbox.monitor import Monitor                           # noqa: E402
 
 OK = 0
 TOTAL = 0
+SKIP = 0
 
 
 def check(name, got, want):
@@ -34,6 +35,19 @@ def check(name, got, want):
     good = got == want
     OK += good
     print(f"  {'OK ' if good else 'BAD'}  {name:<40} 实测={got!r}  期望={want!r}")
+
+
+def skip(name, why=""):
+    """记一条「没执行」，不计入 TOTAL。
+
+    V95 加：`test_bdisp` 末尾要用 Pillow 出一张 PNG。V48–V94 这段没做保护，
+    所以**没装 Pillow 的机器上整条自检会在这里抛异常中止**（V94 的 5719/5720
+    就是这么来的：报告写「1 条未执行」，实际是后面还有测试没跑到）。
+    可选依赖不该把自检打断 —— 记一条 SKIP，其余照跑。
+    """
+    global SKIP
+    SKIP += 1
+    print(f"  SKIP  {name:<40} {why}")
 
 
 def under_sdram_1mb(fn):
@@ -2496,8 +2510,12 @@ def test_bdisp():
     check("split_items 会把 OnOff 切成两条", bdisp.split_items(b"OnOff"), ["On", "Off"])
 
     png = _os.path.join(tempfile.gettempdir(), "frbox_bdisp_selftest.png")
-    bdisp.render(png, m, facts={"expeed_w": 238, "expeed_r": 253, "sdram_run": 2126})
-    check("重建图 PNG 生成且大于 10KB", _os.path.getsize(png) > 10000, True)
+    try:
+        bdisp.render(png, m, facts={"expeed_w": 238, "expeed_r": 253, "sdram_run": 2126})
+    except ImportError as e:      # 缺 Pillow：跳过，不打断整条自检（V95）
+        skip("重建图 PNG 生成且大于 10KB", "缺 Pillow：%s" % e)
+    else:
+        check("重建图 PNG 生成且大于 10KB", _os.path.getsize(png) > 10000, True)
 
 
 def test_bexpeed():
@@ -10809,6 +10827,87 @@ def test_v94():
         check("V94 结果文件存在", False, True)
 
 
+def test_v95():
+    """V95：15 个「r12 未定」不是调用点 —— 真调用点 2282，不是 2297。
+
+    这条也要一次全 ROM 扫描（约 60 秒）。断言的是**「命中」与「调用点」的区分**，
+    不是 ROM 内容：口径数字全对、却把 15 个表值当成 15 个待解调用点，
+    正是 V48–V94 的状态。
+    """
+    print("\n[57 命中与调用点（V95）]")
+    from frbox import bstatic
+
+    sw, _m = bstatic.sweep_of_type("d300-b")
+
+    # ---- A 分账
+    art = sw.artifacts()
+    unr = sw.unresolved()
+    svc = sw.svc_calls()
+    check("V95 总命中仍 2297", len(sw.calls), 2297)
+    check("V95 服务号已定 2282", len(svc), 2282)
+    check("V95 判死的假命中 14", len(art), 14)
+    check("V95 剩下的 1 个", len(unr), 1)
+    check("V95 剩下的那个是 0x32ED60", [c.addr for c in unr], [0x32ED60])
+    check("V95 分账自洽",
+          len(sw.calls) == len(svc) + len(art) + len(unr), True)
+
+    # ---- B 判据方向：真点都有 r12 准备，假命中都没有
+    check("V95 真点 r12_pc 全非空",
+          all(c.r12_pc is not None for c in svc), True)
+    check("V95 真点最远 22 字节就准备好 r12",
+          max(c.addr - c.r12_pc for c in svc), 22)
+    check("V95 真点全在 32 字节内",
+          all(c.addr - c.r12_pc <= 32 for c in svc), True)
+    check("V95 假命中最近也隔 34 字节",
+          min(c.addr - c.r12_pc for c in art if c.r12_pc), 34)
+    check("V95 假命中地址集合",
+          sorted(c.addr for c in art),
+          [0x1BC012, 0x1BCAD2, 0x1BCAD6, 0x1BDCA8, 0x1C1520, 0x1C3822,
+           0x1C3B06, 0x1C3B0A, 0x1C3B0E, 0x1C3D32, 0x1C3E30, 0x1C9DCE,
+           0x1CB9C2, 0x1CB9C6])
+    check("V95 2282 个真点的 svc 无 None", all(c.svc is not None for c in svc), True)
+
+    # ---- C 撞码：14 个点的邻域 BE16 里有 8000
+    _miss = []
+    for c in art:
+        off = c.addr - sw.base
+        seg = sw.rom[off - 12:off + 12]
+        be = [(seg[i] << 8) | seg[i + 1] for i in range(0, len(seg) - 1, 2)]
+        if 8000 not in be:
+            _miss.append(c.addr)
+    check("V95 14 个点邻域 BE16 都含 8000", _miss, [])
+    check("V95 `int #0x40` 的字节就是 1F 40",
+          sw.rom[0x1A4BE6 - sw.base:0x1A4BE6 - sw.base + 2], b"\x1f\x40")
+
+    # ---- D 例外点：0x2C0000 以上只有它
+    check("V95 0x2C0000 以上只有 0x32ED60",
+          [c.addr for c in sw.calls if c.addr >= 0x2C0000], [0x32ED60])
+    check("V95 真点最大地址 0x281824",
+          max(c.addr for c in svc), 0x281824)
+
+    # ---- E 无回归
+    check("V95 -48 / -47 / -46 / -170 / -171 不变",
+          (len(sw.of(-48)), len(sw.of(-47)), len(sw.of(-46)),
+           len(sw.of(-170)), len(sw.of(-171))), (866, 481, 158, 91, 2))
+    check("V95 装载宽度分布不变",
+          (sum(1 for c in sw.calls if c.w12 == 8),
+           sum(1 for c in sw.calls if c.w12 == 32)), (2189, 93))
+    check("V95 0x1A4BE6 的 r12_pc = 0x1A4BE0",
+          [c.r12_pc for c in sw.calls if c.addr == 0x1A4BE6], [0x1A4BE0])
+
+    # ---- F 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc95.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("A6 分账自洽", "A7", "B4", "C2", "D1", "E6",
+                     "F1 总命中 2297", "G1", "不能报"):
+            check("V95 结果含 %s" % _key, _key in res, True)
+        check("V95 结果 100 行以上", len(res.splitlines()) >= 100, True)
+    else:
+        check("V95 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10904,13 +11003,15 @@ def main():
     test_v92()
     test_v93()
     test_v94()
+    test_v95()
     test_lists()
     test_bctrl()
     test_dual40()
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
-    print(f"\n合计 {OK}/{TOTAL} 通过")
+    tail = ("，跳过 %d 条（可选依赖缺失）" % SKIP) if SKIP else ""
+    print(f"\n合计 {OK}/{TOTAL} 通过{tail}")
     return 0 if OK == TOTAL else 1
 
 

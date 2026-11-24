@@ -286,6 +286,13 @@
                    ◀修的是工具：bstatic 的 93 点 +86/+85 归位成 -170/-171，
                    静态 flag 等待普查 158→249（flag 7 5→18 / 14 1→13 / 12 12→31），
                    wait_guards 直出 flag17 的 guard 0x1A4BE6（规矩 98 / 99）。
+    ◀V95 更正：命中 ≠ 调用点。`int #0x40` 的字节编码 `1F 40` 与表值
+                   8000（0x1F40）撞码，时长常量表每含一个 8000 就多一个假
+                   调用点 ⇒ **真调用点 2282**（不是 2297，假命中 0.65%）。
+                   判据：真点 2282/2282 都在 22 字节内写 r12，假命中最近隔 34
+                   字节（空档 12 字节，判据取 32；规矩 100）。`Sweep.calls`
+                   仍是 2297（历史锚点），分账看 `svc_calls()` / `artifacts()`
+                   / `unresolved()`；`CallSite.r12_pc` 做审计。
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -299,4 +306,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.94.0"
+__version__ = "0.95.0"
