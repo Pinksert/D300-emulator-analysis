@@ -190,6 +190,7 @@ hr("A  静态总账：服务点、等待位表、字段语义")
 sets = SW.of(S.SVC_SET_FLG)
 clrs = SW.of(S.SVC_CLR_FLG)
 waits = SW.of(S.SVC_WAI_FLG)
+# V94：`bstatic` 已按装载宽度解码，这两桶现在是 0；改口径后的对照见 `probe/exp_svc94.py`。
 wide = SW.of(86) + SW.of(85)
 print("A1 全 ROM `set_flg`(−48) %d 点 / `clr_flg`(−47) %d 点 / "
       "`wai_flg`(−46) %d 点 / 宽服务号(实为 −170/−171) %d 点"

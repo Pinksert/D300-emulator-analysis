@@ -78,6 +78,8 @@ KEYS = {
     "CLEAR_FN": C.CLEAR_FN, "MAIN_BACK": 0x17541A,
 }
 
+# V94：本版把 86 号读法修成 −170（按装载宽度解码），下文「86 号」是 V81 的旧标签，
+#      再跑时 `SW.of(86)` 为 0，正确的桶是 `SW.of(-170)` —— 见 `probe/exp_svc94.py`。
 hr("A. 静态链：主循环等待 / 返回码判据 / 86 号服务普查（只读 ROM）")
 print("A0 主循环 0x17525A..0x17528A 反汇编：")
 for pc, mn, v, _s in dec(0x17525A, 0x17528A):

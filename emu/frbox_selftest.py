@@ -10718,6 +10718,97 @@ def test_v93():
         check("V93 结果文件存在", False, True)
 
 
+def test_v94():
+    """V94：服务号按装载宽度解码 —— 93 个宽调用点归位，等待普查不再少算 91 点。
+
+    ⚠️ 这条也要一次全 ROM 扫描（约 60 秒）。它断言的是**工具口径**，
+    `test_static` 断言的是 ROM 内容；两者不合并，是因为口径错的时候
+    「ROM 内容」那些数字会全部正确而下游统计全错 —— 正是 V48–V93 的状态。
+    """
+    print("\n[56 服务号口径（V94）]")
+    from frbox import bstatic, svcgraph, svcnum, tick92
+
+    # ---- A 纯函数：宽度决定补码（不建机）
+    check("V94 sx8(0xD2) = -46", svcnum.sx8(0xD2), -46)
+    check("V94 sx16(0xFF56) = -170", svcnum.sx16(0xFF56), -170)
+    check("V94 of_reg(0xD2, 8) = -46", svcnum.of_reg(0xD2, 8), -46)
+    check("V94 of_reg(0xFFFFFF56, 32) = -170",
+          svcnum.of_reg(0xFFFFFF56, 32), -170)
+    check("V94 of_reg(0x56, 32) = +86（真装成 32 位就是 +86，不是误读）",
+          svcnum.of_reg(0x56, 32), 86)
+    check("V94 of_why(0xFF56) = -170", svcnum.of_why(0xFF56), -170)
+    check("V94 of_why(0xFFAB) = -85", svcnum.of_why(0xFFAB), -85)
+    check("V94 旧口径 sx8(0x56) = +86（这就是要修的那一步）",
+          svcnum.sx8(0x56), 86)
+    check("V94 误读表仍是 86→-170", svcnum.LEGACY_MISREAD, {86: -170, 85: -171})
+
+    # ---- B 全 ROM：93 点归位
+    sw, _m = bstatic.sweep_of_type("d300-b")
+    check("V94 调用点仍 2297", len(sw.calls), 2297)
+    check("V94 认不出的仍 15", sum(1 for c in sw.calls if c.svc is None), 15)
+    check("V94 +86 桶清空", len(sw.of(86)), 0)
+    check("V94 +85 桶清空", len(sw.of(85)), 0)
+    check("V94 -170 桶 = 91", len(sw.of(-170)), 91)
+    check("V94 -171 桶 = 2", len(sw.of(-171)), 2)
+    check("V94 宽服务号合计 93", len(sw.of(-170)) + len(sw.of(-171)), 93)
+    check("V94 装载宽度分布",
+          (sum(1 for c in sw.calls if c.w12 == 8),
+           sum(1 for c in sw.calls if c.w12 == 32)),
+          (2189, 93))
+    check("V94 8 位装法全部 bit7=1",
+          all(c.r12 & 0x80 for c in sw.calls if c.w12 == 8), True)
+
+    # ---- C 实参口径：-170 与 wai_flg 同序（V92 动态现场双向印证）
+    c = [x for x in sw.calls if x.addr == 0x1A4BE6][0]
+    check("V94 0x1A4BE6 = -170", c.svc, -170)
+    check("V94 0x1A4BE6 等 flag 17 的 0x2 mode2",
+          (c.flgid, c.bits, c.mode), (17, 2, 2))
+    check("V94 0x1A4BE6 审计字段", (c.r12, c.w12), (0xFFFFFF56, 32))
+    cc = [x for x in sw.calls if x.addr == 0x1A4BC8][0]
+    check("V94 0x1A4BC8 = clr_flg(17, 253)", (cc.svc, cc.flgid, cc.bits),
+          (-47, 17, 0xFD))
+    reg = [x for x in sw.calls if x.addr == 0x12215C][0]
+    check("V94 回归：0x12215C 仍是 wai_flg(6,0x20,2)",
+          (reg.svc, reg.flgid, reg.bits, reg.mode), (-46, 6, 0x20, 2))
+
+    # ---- D 等待普查：默认口径不变，显式 twai 才是新口径
+    check("V94 flag_waits(6) 默认仍 55（历史口径）", len(sw.flag_waits(6)), 55)
+    check("V94 flag_waits(6, twai=True) = 58", len(sw.flag_waits(6, twai=True)), 58)
+    check("V94 flag_waits(17, twai=True) = 11", len(sw.flag_waits(17, twai=True)), 11)
+    check("V94 flag_waits(17) 只数 wai = 2", len(sw.flag_waits(17)), 2)
+    old = sw.waits_by_flag(twai=False)
+    new = sw.waits_by_flag(twai=True)
+    check("V94 旧口径等待点 158", sum(len(v) for v in old.values()), 158)
+    check("V94 新口径等待点 249", sum(len(v) for v in new.values()), 249)
+    check("V94 只有 wai 能看见的 flag", sorted(k for k in new
+                                          if not any(x.svc == -170 for x in new[k])),
+          [8, 9, 11])
+
+    # ---- E flag 17：不借 fix_wide 也能报出前驱
+    sets17 = [x for x in sw.of(-48) if x.flgid == 17 and x.bits is not None
+              and (x.bits & 2)]
+    check("V94 flag17 置 0x2 的 set_flg 5 点", len(sets17), 5)
+    guards = svcgraph.wait_guards(sw, tick92.F17_FUNC, sets17)
+    check("V94 5 个置位点前驱全是 0x1A4BE6",
+          [w.addr if w else None for _p, w in guards], [0x1A4BE6] * 5)
+    check("V94 fix_wide 现在幂等", (tick92.fix_wide(86), tick92.fix_wide(-170)),
+          (-170, -170))
+    check("V94 svcgraph 把 -170 当等待",
+          bstatic.TWAI_FLG_WIDE in svcgraph.WAIT_SVCS, True)
+
+    # ---- F 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "svc94.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("A1", "2189", "0xFFFFFF56", "B5 -170", "C2",
+                     "0x1A4BE6", "E1 总调用点 2297", "F1", "不能报"):
+            check("V94 结果含 %s" % _key, _key in res, True)
+        check("V94 结果 100+ 行", len(res.splitlines()) >= 100, True)
+    else:
+        check("V94 结果文件存在", False, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -10812,6 +10903,7 @@ def main():
     test_v91()
     test_v92()
     test_v93()
+    test_v94()
     test_lists()
     test_bctrl()
     test_dual40()

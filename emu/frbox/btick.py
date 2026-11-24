@@ -66,7 +66,7 @@ REALOS 的 `sys_dly_tsk(n)` 要求「n 个 tick 之后把任务放回就绪队�
 收到了 tick；`wake_objects=True` 尤其是凭空把 flag 等待队列上的任务拽醒。
 """
 
-from . import bready
+from . import bready, svcnum
 
 SENTINEL = 0x68000118          # 延时队列哨兵（双向链表，节点就是 TCB 自己）
 TCB_NEXT = 0x00                # TCB +0：next
@@ -100,6 +100,16 @@ def sx8(v):
     服务号在 R12 的低 8 位（`ldi:8` + `extsb` + `int #0x40`）。内核把它存进
     TCB+0x20 时做了**符号扩展**：`0xAB` 存成 `0xFFAB`。所以这个字段要
     先取低 8 位再补码 —— 按 16 位补码算会把 `0x00E9`（`sta_tsk`）读成 233。
+
+    ⚠️ V94：这个函数对 **`ldi:32` 装的宽服务号是错的** —— `0xFF56`（−170
+    `twai_flg`）会被读成 +86。`delay_queue()` 已改用 `svcnum.of_why()`
+    （16 位补码）；本函数只为历史 import 保留。
+
+    V94 普查（收敛态 600k 步、29 条 TCB）：有等待原因的 **17 条全部**是
+    `0xFFxx`（符号扩展成 16 位），**没有一条**落在 `0x0001..0x00FF`；
+    口径不一致的只有任务 16 / 20（`0xFF56`，−170）。所以这个字段应当按
+    16 位补码读，上面「按 16 位会把 `0x00E9` 读成 233」的担心在这份固件里
+    **没有实例**。
     """
     v &= 0xFF
     return v - 0x100 if v & 0x80 else v
@@ -123,7 +133,7 @@ def delay_queue(m):
         out.append((cur,
                     rev.get(cur),
                     (m.bus.rd(cur + TCB_PRIO, 4) >> 16) & 0xFF,
-                    sx8(m.bus.rd(cur + TCB_WHY, 4) >> 16)))
+                    svcnum.of_why(m.bus.rd(cur + TCB_WHY, 4) >> 16)))
         cur = m.bus.rd(cur + TCB_NEXT, 4)
     return out
 

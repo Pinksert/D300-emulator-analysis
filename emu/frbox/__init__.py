@@ -279,6 +279,13 @@
                    -46 wai_flg 转 -170 twai_flg ⇒ V92 时基收益不覆盖这批。
                    0x131200..0x131600 整片 0 命中 ⇒ 表驱动链从最上层没进来。
                    2 台机器，链未闭合）
+    frbox.svcnum   服务号口径：按装载宽度解码（V94，纯函数；
+                  `ldi:8 #0xD1` + `extsb r12` → -47、`ldi:32 #0xFFFFFF56` → -170。
+                   全 ROM 2297 个 int#0x40：ldi:8 2189 / ldi:32 93 / 未定 15，
+                   无歧义；8 位装法 2189/2189 都有 extsb ⇒ 真实口径是 32 位补码。
+                   ◀修的是工具：bstatic 的 93 点 +86/+85 归位成 -170/-171，
+                   静态 flag 等待普查 158→249（flag 7 5→18 / 14 1→13 / 12 12→31），
+                   wait_guards 直出 flag17 的 guard 0x1A4BE6（规矩 98 / 99）。
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -292,4 +299,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.93.0"
+__version__ = "0.94.0"

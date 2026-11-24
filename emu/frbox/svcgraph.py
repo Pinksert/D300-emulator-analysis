@@ -67,7 +67,8 @@ CODE_KINDS = ("ldi20", "ldi32", "rel12")
 
 #: 等待类服务（只列本项目实证过的；未实证的服务号不硬套）
 WAIT_SVCS = frozenset((bstatic.WAI_FLG, bstatic.TWAI_FLG,
-                       bstatic.SEM_WAI, -61))   # -61 = rcv_msg（V17）
+                       bstatic.TWAI_FLG_WIDE,      # V94：ldi:32 装的 twai_flg(−170)
+                       bstatic.SEM_WAI, -61))     # -61 = rcv_msg（V17）
 
 Ref = collections.namedtuple("Ref", "pc kind imm next_mnem")
 

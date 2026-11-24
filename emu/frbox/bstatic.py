@@ -67,9 +67,25 @@ V48 的 `writers_of(GATE)` 同样需要按本节重算。
 | 其它 | `@-R15` 等 | 不算（栈） |
 
 `dmov` 系列同样写内存，本模块仍**不扫**（目标多是直接页 `0..0x3FF`，见 `bdmov` 未做）。
+
+## ⚠️ V94 更正：服务号按**装载宽度**解码（不修这一段，所有按服务号筛的判据都少算 37%）
+
+V48–V93 解服务号只有一句 `sx8(regs[12] & 0xFF)`。8 位装法（`ldi:8 #0xD2`）是对的，
+32 位装法（`ldi:32 #0xFFFFFF56`）被读成 **+86**。全 ROM 2297 个调用点里有 **93** 个
+属于这一类（91 个 −170 `twai_flg` + 2 个 −171），V92 的 `tick92.fix_wide()` 只在
+**判据侧**兜了这两类，`CallSite.svc` 一直是错的。
+
+V94 改成：扫描时同时记「上一条写 r12 的 `ldi` 是几位」，交给 `svcnum.of_reg()`。
+实测无歧义（8 位装法 bit7 全 1、32 位装法全 ≥`0xFFFFFF00`），所以这不是猜。
+**93 这个数字与 V68 报告里的「宽服务号 93」对得上**，可以当作跨版本校验点。
+
+配套：`CallSite.flgid/bits/mode` 现在也认 −170（`twai_flg` 的实参序与 `wai_flg` 同：
+r5=flgid / r6=ptn / r7=mode，由 `0x1A4BE6 twai_flg(17, 0x2, 2)` 与 V92 动态现场
+`TCB+0x20=0xFF56` 双向印证）。−171 的语义**未定**，不当 flag 服务处理。
 """
 
 from . import machine as _machine
+from . import svcnum
 
 #: 解码时跳过的填充字节对（不是合法指令）
 SKIP2 = (b"\x00\x00", b"\xff\xff")
@@ -90,20 +106,30 @@ SET_FLG = -48
 CLR_FLG = -47
 WAI_FLG = -46
 TWAI_FLG = -22
+#: V94：一次 `ldi:32` 装的 `twai_flg`。V48–V93 把它误读成 +86（见模块 docstring）。
+TWAI_FLG_WIDE = -170
+#: V94：与 `TWAI_FLG_WIDE` 成对出现的另一个宽服务号，语义未定（只 2 个点）
+SVC_WIDE_171 = -171
 SEM_WAI = -53
 SEM_SIG = -55
 
 #: 实参口径（**由 V47 动态证据定死，不是照抄印刷文本**）
 #:   set_flg / clr_flg : r4 = flgid, r5 = bits
 #:   wai_flg / twai_flg: r5 = flgid, r6 = pattern, r7 = mode
+#:   `TWAI_FLG_WIDE` 与 `wai_flg` 同序 —— V94 由 `0x1A4BE6 twai_flg(17,0x2,2)` 与
+#:   V92 动态现场 `TCB+0x20=0xFF56` 双向印证；**−171 不在这张表里**（未定）。
 ARG_ORDER = {
     SET_FLG: ('flg', 'bits'), CLR_FLG: ('flg', 'bits'),
     WAI_FLG: ('', 'flg', 'ptn', 'mode'), TWAI_FLG: ('', 'flg', 'ptn', 'mode'),
+    TWAI_FLG_WIDE: ('', 'flg', 'ptn', 'mode'),
     SEM_WAI: ('sem',), SEM_SIG: ('sem',),
     -24: ('',),           # get_tid
     -27: ('tsk', 'pri'),  # chg_pri
     -85: ('ticks',),      # dly_tsk
 }
+
+#: 会阻塞在 eventflag 上的服务号（V94 补 `TWAI_FLG_WIDE`；`flag_waits()` 用它）
+FLG_WAIT_SVCS = (WAI_FLG, TWAI_FLG, TWAI_FLG_WIDE)
 
 #: 主循环门字节（V25 定，见 `bgate.py`）：非 0 = 干活分支
 GATE = 0x9F58D08F
@@ -173,18 +199,28 @@ def _st_addr(mnem, base, v, regs):
 
 
 def sx8(v):
-    """低 8 位补码 → 服务号。V47 的 `wai_flg(6, 0x20)` 就是这么读出来的。"""
+    """低 8 位补码 → 服务号。V47 的 `wai_flg(6, 0x20)` 就是这么读出来的。
+
+    ⚠️ V94：**只对 `ldi:8` 装法成立**。`ldi:32 #0xFFFFFF56` 这样装的要按 32 位补码读，
+    否则 −170 会变成 +86。全 ROM 静态扫描已改用 `svcnum.of_reg(v, width)`；
+    这个函数留着是因为历史模块按名字 import 它。
+    """
     return v - 0x100 if v & 0x80 else v
 
 
 class CallSite(object):
-    """一个 `int #0x40` 调用点。未知实参为 `None`。"""
+    """一个 `int #0x40` 调用点。未知实参为 `None`。
 
-    __slots__ = ('addr', 'svc', 'r4', 'r5', 'r6', 'r7')
+    `r12` / `w12` 是 V94 加的审计字段：装载值（未取补码）与装载宽度（8/20/32/None）。
+    服务号本身在扫描时就按宽度算好，`svc` 与 `r12` 一起构成「可复核」的一对。
+    """
 
-    def __init__(self, addr, svc, r4, r5, r6, r7):
+    __slots__ = ('addr', 'svc', 'r4', 'r5', 'r6', 'r7', 'r12', 'w12')
+
+    def __init__(self, addr, svc, r4, r5, r6, r7, r12=None, w12=None):
         self.addr, self.svc = addr, svc
         self.r4, self.r5, self.r6, self.r7 = r4, r5, r6, r7
+        self.r12, self.w12 = r12, w12
 
     # ---- 按服务各自的口径取实参
     @property
@@ -192,7 +228,7 @@ class CallSite(object):
         """事件标志号：set/clr 看 r4，wai/twai 看 r5。"""
         if self.svc in (SET_FLG, CLR_FLG):
             return self.r4
-        if self.svc in (WAI_FLG, TWAI_FLG):
+        if self.svc in FLG_WAIT_SVCS:
             return self.r5
         return None
 
@@ -200,13 +236,13 @@ class CallSite(object):
     def bits(self):
         if self.svc in (SET_FLG, CLR_FLG):
             return self.r5
-        if self.svc in (WAI_FLG, TWAI_FLG):
+        if self.svc in FLG_WAIT_SVCS:
             return self.r6
         return None
 
     @property
     def mode(self):
-        if self.svc in (WAI_FLG, TWAI_FLG):
+        if self.svc in FLG_WAIT_SVCS:
             return self.r7
         return None
 
@@ -247,6 +283,8 @@ class Sweep(object):
         import fr_emu
         rom, base = self.rom, self.base
         regs = [None] * 16
+        #: V94：与 `regs` 并行的「装载宽度」（8/20/32；其它来源为 None）
+        regw = [None] * 16
         off, n = 0, len(rom)
         while off < n - 1:
             if rom[off:off + 2] in SKIP2:
@@ -260,9 +298,10 @@ class Sweep(object):
             addr = base + off
 
             if mn == 'int' and v.get('u8') == SVC_VEC:
-                svc = None if regs[12] is None else sx8(regs[12] & 0xFF)
+                svc = (None if regs[12] is None
+                       else svcnum.of_reg(regs[12], regw[12]))
                 self.calls.append(CallSite(addr, svc, regs[4], regs[5],
-                                           regs[6], regs[7]))
+                                           regs[6], regs[7], regs[12], regw[12]))
             elif mn == 'call:d' and v.get('ri') is not None:
                 tgt = regs[v['ri']]
                 if tgt is not None:
@@ -284,20 +323,27 @@ class Sweep(object):
                 ri = v.get('ri')
                 if mn.startswith('ldi'):
                     imm = v.get('i8')
+                    width = 8
                     if imm is None:
                         imm = v.get('i20')
+                        width = 20
                     if imm is None:
                         imm = v.get('i32')
+                        width = 32
                     if ri is not None:
                         regs[ri] = imm
+                        regw[ri] = width
                 elif mn == 'mov':
                     if ri is not None:
                         regs[ri] = None
+                        regw[ri] = None
                     rj = v.get('rj')
                     if rj is not None:
                         regs[rj] = None
+                        regw[rj] = None
                 elif ri is not None:
                     regs[ri] = None
+                    regw[ri] = None
             off += size
 
     # ------------------------------------------------------------ 查询
@@ -309,8 +355,28 @@ class Sweep(object):
         """`set_flg` 调用点，可按 flgid 过滤。"""
         return [c for c in self.of(SET_FLG) if flgid is None or c.flgid == flgid]
 
-    def flag_waits(self, flgid=None):
-        return [c for c in self.of(WAI_FLG) if flgid is None or c.flgid == flgid]
+    def flag_waits(self, flgid=None, twai=False):
+        """`wai_flg` 调用点，可按 flgid 过滤。
+
+        V94：`twai=True` 把 `twai_flg`（−170，`ldi:32` 装法）也算进来。
+        **默认仍是 False** —— 历史结论全部按「只数 `wai_flg`」的口径得出，
+        改默认值等于把 V68/V262 的表悄悄重算一遍，应该显式传参。
+        """
+        svcs = FLG_WAIT_SVCS if twai else (WAI_FLG,)
+        return [c for c in self.calls
+                if c.svc in svcs and (flgid is None or c.flgid == flgid)]
+
+    def waits_by_flag(self, twai=True):
+        """`{flgid: [CallSite]}` —— 一次给出每个 flag 的静态等待点（V94）。
+
+        `twai=False` 复现 V48–V93 的口径，用来量「修口径前少了多少」。
+        """
+        svcs = FLG_WAIT_SVCS if twai else (WAI_FLG,)
+        out = {}
+        for c in self.calls:
+            if c.svc in svcs:
+                out.setdefault(c.flgid, []).append(c)
+        return out
 
     def enclosing(self, addr):
         """最近的（不大于 addr 的）`enter` —— 粗粒度函数归属。"""
