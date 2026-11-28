@@ -283,18 +283,35 @@ def test_monitor():
 # ---------------------------------------------------------------- 7 CLI
 def test_cli():
     section("7 CLI")
-    env = dict(os.environ, PYTHONPATH=os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.abspath(__file__))
+    env = dict(os.environ, PYTHONPATH=here)
+    # V97：本地 frbox/__main__.py 是 143 字节全 NUL 的 delete-pending 残留，
+    # `python -m frbox` 会崩（KI#384）。CLI 测试仍走子进程、仍测真实参数解析，
+    # 只是把入口从包 __main__ 换成直接调 cli.main()；不掩盖包入口的损坏。
+    main_py = os.path.join(here, "frbox", "__main__.py")
+    try:
+        raw = open(main_py, "rb").read()
+        nul_residue = bool(raw) and raw.strip(b"\x00") == b""
+    except Exception:
+        nul_residue = False
+    if nul_residue:
+        entry = [sys.executable, "-c",
+                 "from frbox.cli import main; import sys; sys.exit(main())"]
+        print("  [V97] 本地 __main__.py 是 NUL 残留，CLI 走 cli.main 直调；"
+              "python -m frbox 仍会崩（KI#384）")
+    else:
+        entry = [sys.executable, "-m", "frbox"]
     r = subprocess.run(
-        [sys.executable, "-m", "frbox", "-M", "d300-b", "-c", "info rom; dev"],
+        entry + ["-M", "d300-b", "-c", "info rom; dev"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=os.path.dirname(os.path.abspath(__file__)), env=env, timeout=180)
+        cwd=here, env=env, timeout=180)
     check("CLI 退出码", r.returncode, 0)
     check("CLI 输出含机器名", "d300-b" in r.stdout, True)
     check("CLI 输出含 CRC 校验", "CRC16 OK" in r.stdout, True)
     r2 = subprocess.run(
-        [sys.executable, "-m", "frbox", "-M", "help"],
+        entry + ["-M", "help"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=os.path.dirname(os.path.abspath(__file__)), env=env, timeout=120)
+        cwd=here, env=env, timeout=120)
     check("列出机器", "d300-a" in r2.stdout and "d300-b" in r2.stdout, True)
 
 
@@ -909,8 +926,10 @@ def test_kernel():
     base3 = m3.step_count
     m3.run(max_steps=200000)
     n3 = m3.step_count - base3
-    check("自动送事件的任务入口后 25,857 步（累计 35,573）",
-          (n3, base3 + n3), (25857, 35573))
+    # V97：P1 六类 CPU 语义按 CGEN 对齐后，半主机路径多 2 步
+    # （0.96.0 实测 25857/35573；归因见 fix97.SEMANTIC_IMPACTS / KI#388）。
+    check("V97 自动送事件步数（CGEN 对齐后 25,859 / 35,575）",
+          (n3, base3 + n3), (25859, 35575))
     check("一共送了 13 个事件", len(m3.kernel.events), 13)
     check("第一个事件是 flag 3 / 0x2000",
           (m3.kernel.events[0]["flag"], m3.kernel.events[0]["pattern"]),
@@ -924,7 +943,8 @@ def test_kernel():
     check("退出点 PC=0x0813F6", m3.exited["pc"], 0x000813F6)
     check("info 里写「已退出」", "已退出" in m3.info(), True)
     check("退出后不再判故障", m3.fault, None)
-    check("信息里写明累计 35,573 步", "35,573" in m3.info(), True)
+    # V97：不再锁死旧步数，改为检查 info() 动态输出的实际累计步数。
+    check("V97 info 写明实际累计步数", f"{base3 + n3:,}" in m3.info(), True)
 
     # sta_tsk 记录
     ops = [o for o in m3.kernel.task_ops if o["svc"] == "sys_sta_tsk"]
@@ -943,8 +963,8 @@ def test_kernel():
     base4 = m4.step_count
     m4.run(max_steps=200000)
     n4 = m4.step_count - base4
-    check("不挂内核时任务入口后 32,726 步返回（累计 42,442）",
-          (n4, base4 + n4), (32726, 42442))
+    check("V97 不挂内核步数（CGEN 对齐后 32,728 / 42,444）",
+          (n4, base4 + n4), (32728, 42444))
     check("返回落在停机占位 0x081338", m4.cpu.pc, 0x00081338)
 
 
@@ -10559,9 +10579,12 @@ def test_v92():
     m1 = blive.boot(tick=C.CONVERGE_PERIOD)
     r1 = blive.run(m1, steps=600000)
     seq1 = [s[0] for s in r1["switches"]] if isinstance(r1["switches"], list) else []
-    check("V92 tick 末PC", m1.cpu.pc, C.TASK16_WAIT_PC)
-    check("V92 tick 当前", r1["current_name"], "任务16")
-    check("V92 tick 换手", len(seq1), 224)
+    # V97：CGEN 对齐后带时基路径收敛点变了 —— 0.96.0 是 0x1A4BEE /
+    # 任务16 / 224 次换手，V97 是 0x15CF68 / 任务21 / 227 次。这不是宣布
+    # V92 结论作废，而是「旧 CPU 语义下的实测」需在新语义下重新取证（KI#388）。
+    check("V97 tick 末PC（与 V92 原 0x1A4BEE 不同）", m1.cpu.pc, 0x15CF68)
+    check("V97 tick 当前（与 V92 原任务16 不同）", r1["current_name"], "任务21")
+    check("V97 tick 换手（与 V92 原 224 不同）", len(seq1), 227)
     check("V92 tick 计数", C.kernel_tick(m1), 2344)
     check("V92 tick ISR 命中", m1.cov.visited(C.TICK_ISR), True)
     check("V92 tick ISR 体命中", m1.cov.visited(C.TICK_BODY), True)
@@ -10711,7 +10734,7 @@ def test_v93():
     # ---- E 带时基（tick=256）：11 个不变
     m2 = blive.boot(tick=256)
     blive.run(m2, steps=600000)
-    check("V93 带时基末 PC", hex(m2.cpu.pc), "0x1a4bee")
+    check("V97 带时基末 PC（与 V93 原 0x1a4bee 不同）", hex(m2.cpu.pc), "0x15cf68")
     check("V93 带时基休眠任务不变", C.dormant(m2), list(C.DORMANT))
     check("V93 带时基创建点仍 0 命中",
           sum(1 for v in C.hit_map(m2).values() if v), 0)
@@ -10972,6 +10995,109 @@ def test_v96():
         check("V96 结果文件存在", False, True)
 
 
+def test_v97():
+    """V97：11-27 只读审查的 14 项确凿缺陷已落地，逐项自证。
+
+    不预写任何总数：8 条 CGEN 实跑回归 + 判据可证伪三条 + 修复清单对账 +
+    收敛锚点 + 结果文件实读。总数由 main() 汇总行给出。
+    """
+    print("\n[59 修复版（V97）]")
+    from frbox import fix97 as F
+    from frbox import svc91 as V91
+    from frbox import task93 as T93
+    import frbox
+
+    # ---- A 14 项清单对账（2/6/3/3）
+    check("V97 版本", frbox.__version__, F.VERSION)
+    check("V97 修复项 14 项", len(F.FIX_ITEMS), 14)
+    check("V97 分级 2/6/3/3", F.count_by_level(),
+          {"P0": 2, "P1": 6, "P2": 3, "P3": 3})
+    check("V97 清单齐备", F.fix_table_verdict(), "complete")
+    check("V97 修前基线 5783", F.BASELINE_SELFTEST, 5783)
+    check("V97 审查日", F.AUDIT_DATE, "2026-11-27")
+
+    # ---- B 8 条 CGEN 实跑回归（真跑 fr_emu，不是常量自证）
+    rows = F.run_cgen_cases()
+    check("V97 CGEN 用例 8 条", len(rows), len(F.CGEN_CASES))
+    for tag, got, exp in rows:
+        check("V97 CGEN %s" % tag, got, exp)
+    check("V97 CGEN 全对", F.cgen_regression_verdict(rows), "all_match")
+
+    # ---- C P0-2 判据可证伪（V91 结论不变，判据从恒真改为可证伪）
+    check("V97 真多元组 -> 绑定", V91.half_binding_verdict(), F.FALSIFY_TRUE)
+    check("V97 ALIAS_HALF_TUPLES 8 组", len(V91.ALIAS_HALF_TUPLES), 8)
+    check("V97 每组多元组 >=2",
+          all(len(t) >= 2 for t in V91.ALIAS_HALF_TUPLES), True)
+    _bad = list(V91.ALIAS_HALF_TUPLES[:7]) + [(0x0012, 0x0034)]
+    check("V97 故意不同 half -> unresolved",
+          V91.half_binding_verdict(_bad), F.FALSIFY_DIFFERENT_HALF)
+    check("V97 单元组 -> unresolved",
+          V91.half_binding_verdict([(0x12,)] * 8), F.FALSIFY_SINGLETON)
+    check("V97 少一组 -> unresolved",
+          V91.half_binding_verdict(V91.ALIAS_HALF_TUPLES[:7]), "unresolved")
+    # V91 既有结论不受影响
+    check("V91 8 组 ALIAS_ROWS 不变", len(V91.ALIAS_ROWS), 8)
+    check("V91 half 与多元组对账",
+          tuple(r[2] for r in V91.ALIAS_ROWS),
+          tuple(t[0] for t in V91.ALIAS_HALF_TUPLES))
+
+    # ---- D P2 三项：真实行为对账
+    from frbox.bus import AddressSpace
+    b = AddressSpace("v97")
+    b.map_rom(0x40000, b"\xAA" * 16)
+    b.watch.add(0x40000)
+    b.all_writes.clear()
+    b.writes_to_rom.clear()
+    b.access_log.clear()
+    b.wr(0x40000, 1, 0x55, pc=0x1234)
+    check("V97 ROM 写进 watch 审计链",
+          any(a == 0x40000 and k == "W" for k, a, *_ in b.access_log), True)
+    check("V97 ROM 写仍记 writes_to_rom", len(b.writes_to_rom), 1)
+    # mtree 去重口径：2 个地址 / 3 次写
+    b2 = AddressSpace("v97m")
+    b2.unmapped_writes = [(0x1000, 1, 0, 0)] * 2 + [(0x2000, 1, 0, 0)]
+    _tree = b2.mtree()
+    check("V97 mtree 2 个地址 / 3 次", "2 个地址 / 3 次" in _tree, True)
+    # irq_level vec<0x10 显式拒绝
+    from frbox.machine import create
+    m = create("d300-b")
+    check("V97 irq_level(vec=0x00) 不回绕", m.irq_level(0x00), 0)
+    check("V97 irq_level(vec=0x10) 合法", isinstance(m.irq_level(0x10), int), True)
+
+    # ---- E P3 task93 死参数已删
+    import inspect
+    check("V97 verdict_bootstrap 无死参数",
+          list(inspect.signature(T93.verdict_bootstrap).parameters), ["unr"])
+
+    # ---- F 收敛锚点（等形对照在探针侧实跑，此处只固化基线常量）
+    check("V97 收敛末 PC 基线", F.BASELINE_TAIL_PC, 0x0407DC)
+    check("V97 收敛覆盖基线", F.BASELINE_COVERAGE, 5439)
+    check("V97 收敛步数基线", F.BASELINE_STEPS, 691520)
+    check("V97 分组对照 7 组", len(F.PATCH_GROUPS), 7)
+    check("V97 综合判据", F.VERDICT,
+          "v97_audit_fixes_applied_cgen_aligned_converge_invariant")
+
+    # ---- G 结果文件实读
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    _RES = os.path.join(_HERE, "..", "results", "frbox", "fix97.txt")
+    if os.path.isfile(_RES):
+        res = open(_RES, encoding="utf-8").read()
+        for _key in ("V97", "CGEN", "收敛", "不能报"):
+            check("V97 结果含 %s" % _key, _key in res, True)
+        check("V97 结果 40 行以上", len(res.splitlines()) >= 40, True)
+    else:
+        check("V97 结果文件存在", False, True)
+
+    # ---- H 语义修正的行为影响（11 条 BAD 的归因，影子对照实测）
+    check("V97 语义影响 11 条", len(F.SEMANTIC_IMPACTS), 11)
+    check("V97 CPU 语义归因 7 条",
+          sum(1 for r in F.SEMANTIC_IMPACTS if r[4].startswith("P1")), 7)
+    check("V97 本地环境残留 4 条",
+          sum(1 for r in F.SEMANTIC_IMPACTS if r[4].startswith("P3")), 4)
+    check("V97 影子对照 0 BAD", F.SHADOW_SUBSET_BAD, 0)
+    check("V97 影子证据路径", F.SHADOW_EVIDENCE.endswith("emu96_subset.txt"), True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -11069,6 +11195,7 @@ def main():
     test_v94()
     test_v95()
     test_v96()
+    test_v97()
     test_lists()
     test_bctrl()
     test_dual40()
