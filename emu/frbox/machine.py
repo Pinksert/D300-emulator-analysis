@@ -456,7 +456,11 @@ class Machine:
         同时 stilm 到 0x10。按「数值大 = 优先级高」的模型，这批全部可受理；
         若按相反约定则一条都不该响 —— 固件自己的取值就是这条模型的旁证。
         """
-        return self.bus.rd(self.icr_base + ((vec - 0x10) & 0x3F), 1) & 0x1F
+        # V97：ICR 只有 48 个（vec 0x10-0x3F），与 irq_table() 的 (v-0x10) 同口径。
+        # 原实现 (vec-0x10)&0x3F 对 vec<0x10 负索引回绕到 0x30-0x3F，读到别的向量 ICR。
+        if not (0x10 <= vec <= 0x3F):
+            return 0
+        return self.bus.rd(self.icr_base + (vec - 0x10), 1) & 0x1F
 
     def raise_irq(self, vec, level=None):
         """按 ICR 里的级别请求一条中断；返回实际使用的级别。"""
