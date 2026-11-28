@@ -307,6 +307,21 @@
                    规矩 102（判醒没醒看派发落点不看 state/want：跑完再等回去的任务
                    状态读数与没动过一样）/ 103（死位要静态 + 动态两条读数）。
                    19 台 fresh 机器，链未闭合）
+    frbox.fix97    11-27 只读审查的 14 项缺陷修复版设施（V97，纯函数 + 实跑回归；
+                   不是新的固件侦查：P0 两项（推送脚本树错配 /
+                   half_binding_verdict 判据恒真）、P1 六类（fr_emu.py CPU 语义
+                   按 fr30.cpu CGEN 对齐）、P2 三项（bus.mtree 去重口径 /
+                   ROM 写补 watch / irq_level 负索引）、P3 三项（README 概览数字 /
+                   __main__.py main guard / task93.verdict_bootstrap 死参数）。
+                   8 条 CGEN 最小复现真跑 fr_emu 全对；判据加 ALIAS_HALF_TUPLES
+                   真多元组与三条负对照（不同 half / 单元组 / 少一组全 unresolved）；
+                   主树真文件收敛等形对照末 PC 0x0407DC / 覆盖 5439 / 步数 691520
+                   三项与 0.96.0 基线逐字相同（仅当前路径，规矩 5，不外推全局）。
+                   ◀残留：__main__.py 本地是 143 字节全 NUL 的 delete-pending
+                   残留（宿主文件锁，所有写入/删除/替换通道被拒），P3-1 本地
+                   未落地；push/verify 脚本按 git HEAD 原版 + main guard 在
+                   内存重建并显式警告，远端拿修复版、不推损坏文件。
+                   修后全量自检 11 条 BAD 全归因（7 条 CPU 语义修正 / 4 条本地 NUL 残留，KI#388 需重新取证带时基结论）；KI#384-388，链未闭合）
     frbox.cli      QEMU 式启动参数（-M / -kernel / -S / -d / -D / -monitor）
 
 CPU 核心仍然复用 fr_emu.Fr —— 它只依赖「有 rd/wr 的对象」，因此换成
@@ -320,4 +335,4 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-__version__ = "0.96.0"
+__version__ = "0.97.0"
