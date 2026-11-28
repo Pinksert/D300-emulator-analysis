@@ -194,6 +194,7 @@ class AddressSpace:
         if r is not None and a + n <= r.end:
             if r.kind == "rom":
                 self.writes_to_rom.append((a, n, v, pc))
+                self._maybe_watch("W", a, n, v, pc)   # V97：ROM 写也进 watch 审计链
                 return
             if r.kind == "ram":
                 o = a - r.base
@@ -228,11 +229,13 @@ class AddressSpace:
             out.append(f"  未映射读：{n} 个地址 / {tot} 次；最频繁 "
                        + "，".join(f"0x{a:08X}×{c}" for a, c in top))
         if self.unmapped_writes:
-            n = len(self.unmapped_writes)
-            tot = sum(1 for _ in self.unmapped_writes)
             addrs = {}
             for a, s, v, pc in self.unmapped_writes:
                 addrs[a] = addrs.get(a, 0) + 1
+            # V97：n 用去重地址数（与 stats() 的 unmapped_write_addr 同口径），
+            # tot 用写次数。原实现两者都是次数，却印成「N 个地址 / N 次」。
+            n = len(addrs)
+            tot = len(self.unmapped_writes)
             top = sorted(addrs.items(), key=lambda x: -x[1])[:5]
             out.append(f"  未映射写：{n} 个地址 / {tot} 次；最频繁 "
                        + "，".join(f"0x{a:08X}×{c}" for a, c in top))
