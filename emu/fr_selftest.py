@@ -107,8 +107,12 @@ def test_flags():
     c = Machine([encode("and", rj=1, ri=0)])
     c.cpu.r[0], c.cpu.r[1] = 0xF0F0F0F0, 0x0F0F0F0F
     c.cpu.v = 1
+    c.cpu.c = 1
     c.run(1)
-    check("AND 清 V", c.cpu.v, 0)
+    # V97 / CGEN fr30.cpu:636 binary-logical-op 只 set-z-and-n，V/C 一律不动。
+    # 旧断言「AND 清 V」锁死了被审查判为偏差的旧行为，现按 CGEN 改为「不动 V/C」。
+    check("AND 不动 V（CGEN）", c.cpu.v, 1)
+    check("AND 不动 C（CGEN）", c.cpu.c, 1)
     check("AND 置 Z", c.cpu.z, 1)
 
 
