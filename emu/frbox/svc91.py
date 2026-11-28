@@ -69,6 +69,20 @@ ALIAS_ROWS = (
     (0x046B80, (114, 125), 0x6520),
     (0x046E60, (-230, 74, 93, 104), 0x6800),
 )
+
+# V97：每组各号 slot **实测 half 的多元组**（svc91.txt A2 段只读 ROM 真值）。
+# ALIAS_ROWS 第三列是「全组共同 half」这一个标量，承载不了组内比较；
+# V91 的判据对单元素 (half,) 做 same_half 恒为真，无法证伪。本常量补上真多元组。
+ALIAS_HALF_TUPLES = (
+    (0x0012, 0x0012),
+    (0x0440, 0x0440),
+    (0x070E, 0x070E, 0x070E),
+    (0x0784, 0x0784),
+    (0x170E, 0x170E),
+    (0x1784, 0x1784),
+    (0x6520, 0x6520),
+    (0x6800, 0x6800, 0x6800, 0x6800),
+)
 GROUP_COUNT = 8
 SAME_HALF_COUNT = 8
 HALF_BIND_VERDICT = "static_same_half_binding_dispatch_folds_to_one_entry"
@@ -150,11 +164,24 @@ def same_half(half_tuple):
     return len(set(half_tuple)) == 1
 
 
-def half_binding_verdict(rows=ALIAS_ROWS):
-    """全 8 组是否都同 half 绑定；是则分发表层折叠到同一入口。"""
-    if len(rows) == GROUP_COUNT and all(same_half(r[2:]) for r in rows):
-        return HALF_BIND_VERDICT
-    return "unresolved"
+def half_binding_verdict(rows=ALIAS_HALF_TUPLES):
+    """全 8 组是否都同 half 绑定；**V97 改为可证伪判据**。
+
+    V91 原实现 ``all(same_half(r[2:]) for r in rows)`` 里 ``r[2:]`` 是单元素
+    元组 ``(half,)``，``len(set(...))==1`` 恒为真：构造 8 行 half 全不同仍返回
+    HALF_BIND_VERDICT。这不等于 V91 结论错（结论另有静态分发表与逐组等形动态证据），
+    但这条判据本身不构成证据。
+
+    现要求：行数 == GROUP_COUNT，且每行都是**长度 >= 2 的组内各号实测 half
+    多元组**且组内去重只剩一个值；任一组不满足即 ``unresolved``。单元素元组
+    因此被显式排除，负对照见 test_v97。V91 结论（8/8 同 half）不变。
+    """
+    if len(rows) != GROUP_COUNT:
+        return "unresolved"
+    for halves in rows:
+        if len(halves) < 2 or not same_half(halves):
+            return "unresolved"
+    return HALF_BIND_VERDICT
 
 
 def svc_saved_vs_dispatch(slot_a, slot_b, seq_same, window):
