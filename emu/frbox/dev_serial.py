@@ -40,16 +40,22 @@ class SerialIf(Device):
     RDRF = 0x40
     TDRE = 0x20
 
-    def __init__(self, machine=None, irq_line=None, tx_sink=None, rx_capacity=4096):
+    def __init__(self, machine=None, irq_line=None, tx_sink=None, rx_capacity=4096,
+                 default_byte_cycles=10, tx_irq_on_done=False):
         self.irq_line = irq_line
         self.tx_sink = tx_sink
         self.rx_capacity = rx_capacity
+        self.default_byte_cycles = max(1, int(default_byte_cycles))
+        self.tx_irq_on_done = bool(tx_irq_on_done)
         self.tx = bytearray()
         self.rx = deque()
+        self.rx_staged = deque()
         self.ssr = self.TDRE
         self.scr = 0x00
         self.smr = 0x00
         self.brg = 0x0000
+        self.tx_rem = 0
+        self.rx_rem = 0
         self.overruns = 0
         self.tx_count = 0
         self.rx_count = 0
@@ -59,14 +65,60 @@ class SerialIf(Device):
     def reset(self):
         self.tx = bytearray()
         self.rx.clear()
+        self.rx_staged.clear()
         self.ssr = self.TDRE
         self.scr = 0
         self.smr = 0
         self.brg = 0
+        self.tx_rem = 0
+        self.rx_rem = 0
         self.overruns = 0
         self.tx_count = 0
         self.rx_count = 0
         self.open_bus_reads = 0
+
+    def byte_cycles(self):
+        """按 BRGL/BRGH 计算一帧（默认 10 bit）所需周期数。"""
+        if self.brg > 0:
+            return (self.brg + 1) * 10
+        return self.default_byte_cycles
+
+    def schedule_rx(self, data):
+        """按波特率节拍分批送入接收队列（每 byte_cycles() 周期送达 1 字节）。"""
+        if isinstance(data, int):
+            data = bytes([data & 0xFF])
+        for b in data:
+            self.rx_staged.append(b & 0xFF)
+        if self.rx_staged and self.rx_rem <= 0:
+            self.rx_rem = self.byte_cycles()
+
+    def tick(self, cycles=1):
+        """推进波特率移位定时：发送完成恢复 TDRE，定时接收到达置 RDRF 并拉中断。"""
+        if cycles <= 0:
+            return
+        if self.tx_rem > 0:
+            self.tx_rem -= cycles
+            if self.tx_rem <= 0:
+                self.tx_rem = 0
+                self.ssr |= self.TDRE
+                if self.tx_irq_on_done and (self.scr & 0x02):
+                    self.raise_irq(self.irq_line)
+        if self.rx_staged:
+            self.rx_rem -= cycles
+            while self.rx_staged and self.rx_rem <= 0:
+                b = self.rx_staged.popleft()
+                if len(self.rx) >= self.rx_capacity:
+                    self.overruns += 1
+                    self.ssr |= self.ORE
+                else:
+                    self.rx.append(b)
+                    self.rx_count += 1
+                    self.ssr |= self.RDRF
+                    self.raise_irq(self.irq_line)
+                if self.rx_staged:
+                    self.rx_rem += self.byte_cycles()
+                else:
+                    self.rx_rem = 0
 
     # ---- 外部接口（给测试/监视器注入数据）----
     def push_rx(self, data):
@@ -121,6 +173,8 @@ class SerialIf(Device):
         if off == self.TDR:
             self.tx.append(val)
             self.tx_count += 1
+            self.ssr &= ~self.TDRE
+            self.tx_rem = self.byte_cycles()
             if self.tx_sink is not None:
                 self.tx_sink(bytes([val]))
             self.dbg(f"发送 0x{val:02X} ({chr(val)!r})" if 32 <= val < 127 else f"发送 0x{val:02X}")

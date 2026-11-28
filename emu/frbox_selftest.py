@@ -11098,6 +11098,64 @@ def test_v97():
     check("V97 影子证据路径", F.SHADOW_EVIDENCE.endswith("emu96_subset.txt"), True)
 
 
+def test_disp_infra():
+    """串口波特率 tick + EXPEED 写寄存器回写 + 结构化显示预览入口。"""
+    section("98 显示基础设施（串口 tick / EXPEED 回写 / 预览入口）")
+    from frbox.dev_expeed import ExpeedLink
+    from frbox import disp_preview
+
+    # 1) 串口波特率级 tick
+    ser = SerialIf(tx_irq_on_done=True)
+    irqs = []
+    ser.irq = lambda line=None: irqs.append(line)
+    ser.irq_line = 0x1B
+    ser.write(SerialIf.BRGL, 1, 1)               # brg=1 → (1+1)*10 = 20 cycles
+    ser.write(SerialIf.SCR, 1, 0x02)             # TXE=1
+    check("波特率帧周期计算", ser.byte_cycles(), 20)
+    ser.write(SerialIf.TDR, 1, 0x55)
+    check("发送期间 TDRE 清零", ser.ssr & SerialIf.TDRE, 0)
+    ser.tick(10)
+    check("半帧未到 TDRE 仍 0", ser.ssr & SerialIf.TDRE, 0)
+    ser.tick(10)
+    check("整帧完成恢复 TDRE", ser.ssr & SerialIf.TDRE, SerialIf.TDRE)
+    check("发送完成触发 TX 中断", irqs, [0x1B])
+
+    irqs.clear()
+    ser.schedule_rx(b"AB")
+    ser.tick(19)
+    check("定时接收未满一帧不出字节", len(ser.rx), 0)
+    ser.tick(1)
+    check("定时接收第 1 字节到达", list(ser.rx), [ord("A")])
+    check("定时接收触发 RX 中断", irqs, [0x1B])
+    ser.tick(20)
+    check("定时接收第 2 字节到达", list(ser.rx), [ord("A"), ord("B")])
+
+    # 2) EXPEED 写寄存器回写与回调
+    seen = []
+    ex = ExpeedLink(on_cmd=lambda c: seen.append((c["kind"], c["reg"])))
+
+    def send_byte(val):
+        for bit in range(8):
+            ex.write(ExpeedLink.BUS_OFF, 1, ExpeedLink.DATA_BIT if (val >> bit) & 1 else 0)
+            ex.write(ExpeedLink.BUS_OFF, 1, ExpeedLink.CLK_BIT)
+            ex.write(ExpeedLink.BUS_OFF, 1, 0)
+
+    ex.write(ExpeedLink.CS_OFF, 1, ExpeedLink.CS_BIT)
+    send_byte(0x76)                              # 写寄存器 0x76
+    send_byte(0xA5)                              # 载荷 0xA5
+    ex.write(ExpeedLink.CS_OFF, 1, 0)
+    check("EXPEED 写寄存器回写生效", ex.reg_int(0x76), 0xA5)
+    check("EXPEED 命令回调触发", seen, [("write", 0x76)])
+
+    # 3) 预览入口无头渲染
+    with tempfile.TemporaryDirectory() as td:
+        out_png = os.path.join(td, "preview.png")
+        info = disp_preview.run_preview_session(steps=20000, tick_period=256,
+                                                out_png=out_png, gui=False)
+        check("预览 PNG 生成成功", os.path.isfile(out_png) and os.path.getsize(out_png) > 0, True)
+        check("预览返回步数>0", info["steps"] > 0, True)
+
+
 def main():
     print("frbox 自检")
     test_bus()
@@ -11202,6 +11260,7 @@ def main():
     test_bdisp()
     test_bexpeed()
     test_bexpeed_dev()
+    test_disp_infra()
     tail = ("，跳过 %d 条（可选依赖缺失）" % SKIP) if SKIP else ""
     print(f"\n合计 {OK}/{TOTAL} 通过{tail}")
     return 0 if OK == TOTAL else 1

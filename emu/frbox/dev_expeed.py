@@ -42,15 +42,17 @@ class ExpeedLink(Device):
     DATA_BIT = 0x04        # bit2
     READ_FLAG = 0x80
 
-    def __init__(self, machine=None, base=0x70000000, regs=None, read_len=5):
+    def __init__(self, machine=None, base=0x70000000, regs=None, read_len=5, on_cmd=None):
         # Device.__init__ 会调 reset()，所以字段必须先就位（V23 的坑）
         self.base = base
         self.read_len = read_len
         self.regs = dict(regs) if regs else {}
+        self.on_cmd = on_cmd
         super().__init__(machine)
 
     # ---------------------------------------------------------------- 生命周期
     def reset(self):
+        # 注意：regs 由外部在 reset() 前通过 set_reg() 预置，reset() 不清空 regs
         self._cs = 0
         self._clk = 0
         self._dout = 0
@@ -59,11 +61,18 @@ class ExpeedLink(Device):
         self._nbits = 0
         self._collect = False
         self._tx = []
-        self._payload = None       # 写命令之后的载荷字节（只记账）
+        self._payload = None       # 写命令之后的载荷字节
         self.cmds = []             # [{'kind','reg','raw'}]
         self.bits_out = 0
         self.bits_in = 0
         self.payload_bytes = []
+
+    def reg_int(self, reg):
+        """以小端整数形式读取寄存器值（无记录返回 0）。"""
+        v = self.regs.get(reg, b"")
+        if isinstance(v, int):
+            return v & 0xFF
+        return int.from_bytes(v, "little") if v else 0
 
     # ---------------------------------------------------------------- 寄存器
     def set_reg(self, reg, data):
@@ -156,18 +165,25 @@ class ExpeedLink(Device):
             self._payload.append(b)
             self.payload_bytes.append(b)
             if self.cmds:
-                self.cmds[-1].setdefault("payload", []).append(b)
+                cmd = self.cmds[-1]
+                cmd.setdefault("payload", []).append(b)
+                self.set_reg(cmd["reg"], bytes(cmd["payload"]))
+                if self.on_cmd is not None:
+                    self.on_cmd(cmd)
             self._payload = None                   # 载荷收完
             self._collect = False                  # 本窗口后面若还有时钟一律丢弃
             return
         if b & self.READ_FLAG:
             reg = b & 0x7F
-            self.cmds.append({"kind": "read", "reg": reg, "raw": b})
+            cmd = {"kind": "read", "reg": reg, "raw": b}
+            self.cmds.append(cmd)
             self._collect = False
             # 立即入队。实测采样点在 0x19EF5E（整条时钟串里采 16 次），
             # 采到的第 1 个字节 == 寄存器 6 的第 0 字节（V29：7 组值全对）。
             # read_len 只决定器件驱动多少位，不影响主机读到什么（5/6 同结果）。
             self._tx = self._response_bits(reg)
+            if self.on_cmd is not None:
+                self.on_cmd(cmd)
         else:
             self.cmds.append({"kind": "write", "reg": b, "raw": b, "payload": []})
             self._payload = []          # 接着收载荷字节（写命令后 _collect 保持 True）
