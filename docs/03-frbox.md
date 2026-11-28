@@ -10435,3 +10435,165 @@ F 段核实了静态读数的另一面：57 个可读等待点只执行了 **7**
 **边界**：注入是「替固件调内核」，不是真机事件；「上过 CPU」只证明调度层面被唤醒，
 不证明业务处理完；88 个置位点 0 执行只说明本启动路径没走到，不说明真机不投递。
 不报「位对应哪个外设」「任务 12–15 的业务语义」「邮箱唤醒就能让系统跑起来」。
+
+## V97 · 把 11-27 只读审查的 14 项确凿缺陷真正修掉
+
+承接 `emulator_audit_v96.html`（`0.96.0` 只读审查，未改任何源码）第 8 节建议。
+本版**不是新的固件侦查**：不动 V51–V96 的任何结论，只把审查列出的 14 项
+确凿缺陷在主树 `D300-emulator-analysis` 落地，并逐项自证。
+
+修复前基线：主树 `0.96.0`，全量自检 `5783/5783`（独立输出
+`.workbuddy/tmp/audit_review/selftest_v97_baseline.txt`，约 27 分钟）。
+收敛锚点 V65–V96 逐字相同：末 PC `0x0407DC` / 覆盖 5439 / 步数 691520。
+
+### 1. 14 项清单（P0 2 / P1 6 / P2 3 / P3 3）
+
+| 编号 | 位置 | 缺陷 | 处置 |
+|---|---|---|---|
+| P0-1 | `push_emu.py` / `verify_emu.py` | `REPO` 指主树仓库但 `R` 指 `0.93.0` 旧快照 | `R` 改指主树，网络动作前加本地版本 + 仓库名一致性护栏 |
+| P0-2 | `svc91.half_binding_verdict` | `r[2:]` 是单元素元组，`same_half` 恒真，不可证伪 | 新增 `ALIAS_HALF_TUPLES` 真多元组，要求每行长度 ≥2 且组内同 half；补负对照 |
+| P1-1 | `fr_emu.py` bandl/bandh | 掩码漏常数位（CGEN `u4\|0xF0` / `(u4<<4)\|0x0F`） | 只补这两条，其余 `h` 结尾保持 `u4<<4` |
+| P1-2 | `fr_emu.py` and/or/eor | 寄存器型强制清 V；内存型完全不设 Z/N | 寄存器型不动 V/C；内存型补 `_set_zn` |
+| P1-3 | `fr_emu.py` lsl/lsr/asr | `amt==0` 时 C 保持旧值 | 显式清 C |
+| P1-4 | `fr_emu.py` mul/mulu/mulh/muluh | 四变体只写 MDL/MDH，完全不动标志 | 按 `fr30.cpu:770-825` 设 N/Z/V；`(ge MDL 0)` 按 CGEN 字面实现并列 KI 开放项 |
+| P1-5 | `fr_emu.py` ldres/stres | 归入 `unimpl_seen` 直接 return，Ri 不变 | 单独补 `Ri += 4`，其余协处理指令仍是 stub |
+| P1-6 | `fr_emu.py` ldm1/stm1 含 R15 | stm1 存了减后值；ldm1 恢复 R15 又多 +4 | stm1 先存旧 R15 再减；ldm1 命中 R15 不再 +4 |
+| P2-1 | `bus.mtree()` | `n`/`tot` 都是写次数却印成「N 个地址 / N 次」 | `n` 用去重地址数、`tot` 用写次数 |
+| P2-2 | `bus.wr()` | ROM 写只记 `writes_to_rom`，不进 watch 审计链 | 补 `_maybe_watch("W", ...)` |
+| P2-3 | `machine.irq_level()` | `(vec-0x10)&0x3F` 对 `vec<0x10` 负索引回绕 | `vec` 不在 `0x10..0x3F` 时显式返回 0 |
+| P3-1 | `frbox/__main__.py` | 无 main guard，import 即跑 CLI | 加 `if __name__ == "__main__"` —— **本地未落地，见 §5** |
+| P3-2 | `README.md:61/137/170` | 概览区仍写 `5676/5676`（V93 数字） | 按 V97 修后实测回填 |
+| P3-3 | `task93.verdict_bootstrap` | `total` 赋值后完全不参与输出，是死参数 | 删该参数，调用点只传 `unr` |
+
+P0-1 最急：误用会把 `0.93.0` 旧代码推到 `Pinksert/D300-emulator-analysis`，
+造成远端版本回退。护栏读 `emu/frbox/__init__.py` 的 `__version__`，
+要求为 `0.97.0` 且 `REPO` 末段与本地目录名一致，否则在任何网络动作前断言失败。
+
+### 2. P1 六类按 CGEN 逐条对齐，并补 8 条实跑回归
+
+依据是本仓库自带的 `emu/fr30.cpu`（FR30 CGEN 语义），不是凭常识改。
+新增 `frbox/fix97.py` 的 `CGEN_CASES`：8 个最小复现，每个构造 2 字节指令，
+`Mem.load_rom` 后 `Fr.step()` **真跑一条**，返回实跑值与 CGEN 期望对账：
+
+| tag | 构造 | 实跑 | 期望 |
+|---|---|---|---|
+| `bandl #0xE` | `0x80 0xE0` | 160 | 160 |
+| `bandh #0xD` | `0x81 0xD0` | 151 | 151 |
+| `and reg 不动 V` | `0x82 0x10`，预设 V=C=1 | `(1, 1)` | `(1, 1)` |
+| `and mem 置 Z` | `0x84 0x10` | 1 | 1 |
+| `lsl #0 清 C` | `0xB4 0x00`，预设 C=1 | 0 | 0 |
+| `ldres Ri+4` | `0xBC 0x00` | 262148 | 262148 |
+| `stm1 save-r15` | `0x8F 0x01` | 262144 | 262144 |
+| `mul 2x3 清 Z` | `0xAF 0x10`，预设 Z=1 | 0 | 0 |
+
+8/8 全对（`cgen_regression_verdict = all_match`）。同时修掉
+`fr_selftest.py` 里锁死旧错误的同谋断言：把「AND 清 V」改成按 CGEN 的
+「AND 不动 V/C」，并补 C 预设；修后 CPU 级自检全绿。
+
+`mulh/muluh` 的 `(ge MDL 0)` 按 CGEN 字面实现 —— 这是 FR30 语义，
+真机是否另有约定仍列 KI 开放项，不写成「已经解出」。
+
+### 3. P0-2 判据从恒真改为可证伪
+
+V91 的 `half_binding_verdict` 对 `r[2:]`（单元素元组）调 `same_half`，
+恒为真；只要行数 == 8 就宣布「全组同 half 绑定」。结论本身另有静态与
+逐组等形证据撑着，但**判据不可证伪**。V97 新增
+`svc91.ALIAS_HALF_TUPLES`（8 组，每组是各号 slot 实测 half 的多元组，
+如 `0x6800` 组有 4 个 `0x6800`），判据改为：组数 == 8、每组长度 ≥2、
+组内同 half，三条全过才给绑定结论。
+
+负对照（`fix97.txt` C 段）：
+
+| 输入 | 判据返回 |
+|---|---|
+| 真多元组（默认） | `static_same_half_binding_dispatch_folds_to_one_entry` |
+| 故意把第 8 组改成 `(0x0012, 0x0034)` | `unresolved` |
+| 8 个单元组 `[(0x12,)]*8` | `unresolved` |
+| 少一组（7 组） | `unresolved` |
+
+`ALIAS_ROWS` 8 组 half 与多元组首元素逐项对账全同 ⇒ V91 既有结论不受影响。
+
+### 4. 主树真文件收敛等形对照
+
+审查阶段用临时副本做过 7 组分组补丁 + 全量叠加（`P1_bitop / P2_logic /
+P3_shift / P4_mul / P5_res / P6_multireg / PALL`），末 PC / 覆盖 / 步数与基线
+逐字相同。V97 用**主树真文件**再跑一次同一把尺子：
+
+```
+blive.boot(0) -> m.step(191520) -> 单次 m.raise_irq(0x2B)
+              -> m.run(500000, spin_guard=False)
+```
+
+| 读数 | `0.96.0` 基线 | V97 修后实测 | 结论 |
+|---|---|---|---|
+| 末 PC | `0x0407DC` | `0x0407DC` | 相同 |
+| 覆盖 | 5439 | 5439 | 相同 |
+| 步数 | 691520 | 691520 | 相同 |
+
+三项逐字相同 ⇒ **当前收敛路径等形**。这是单路径阴性结果（规矩 5：
+静态可达 ≠ 已执行），只能报「当前收敛路径未改变」，不能报「全局无影响」，
+也不能报「补丁对照全同所以这些偏差不用修」。
+
+### 5. 设施、残留与边界
+
+新增 `frbox/fix97.py`（14 项清单 / 8 条 CGEN 实跑 / 判据对照 / 收敛锚点）、
+`probe/exp_fix97.py`、`results/frbox/fix97.txt`（148 行）、
+`test_v97()` 40 条（全绿）。
+
+**残留（如实记录，不假报已修）**：`emu/frbox/__main__.py` 在补丁写入时
+被宿主文件锁打断，磁盘上变成 **143 字节全 NUL** 的 delete-pending 残留；
+`os.rename` / `os.remove` / `os.replace` / `r+b` 原地覆盖 /
+`CreateFileW(DELETE)` + `FileDispositionInfo` / PowerShell `WriteAllBytes` /
+`git checkout -f` 全部被拒（git 报 `unable to unlink old ... Invalid argument`）。
+`frbox_selftest.py` 不引用该文件 ⇒ 全量自检不阻塞，但 `python -m frbox` 会崩，
+P3-1 **本地未落地**。推送/校验脚本对这一路径加了「本地 NUL 残留则按
+git HEAD 原版 + main guard 在内存中重建」的规则并显式警告：远端拿到修复版，
+本地磁盘残留不隐瞒、不假装已修。
+
+额外项复核（`fix97.txt` F 段，只读观察，未列入 14 项、不纳入源码修复）：
+`blive.Watch.rd()` 双读、`bus._io_read` 的 32 位截断、`cover.steps` 统计字段、
+`machine.load()` 的 data/payload CRC、`device` 预留 irq 接口。
+这些不是确凿缺陷，本版不擅自扩大修复面。
+
+**不能报**：模拟器全错 / 既有 V51–V96 结论全废 / 出画面 / 系统跑起来了 /
+补丁对照全同所以不用修 / 全局无影响 / `__main__.py` 已修好 /
+任务 12–15 的功能是什么 / 表驱动是「按功能分组」/ 256 是固件周期 /
+补一次 tick 就等于真机时基。
+
+### 6. 语义修正的行为影响：11 条 BAD 全部归因（V97 补）
+
+修后**首次**全量自检（独立输出 `selftest_v97_after.txt`）实测
+`5812/5823`、**11 条 BAD**。这不是「修复失败」，而是「0.96.0 错误 CPU 语义下
+锁死的实测值」在 CGEN 对齐后发生了变化 —— 也是审查阶段
+「单路径等形阴性结果」边界的直接证据。
+
+归因实验（受控）：建影子目录 `emu96/`，**只把 `fr_emu.py` 回退到 0.96.0**，
+其余文件全部保持修后，重跑 `test_kernel()` + `test_v92()` + `test_v93()`
+→ **0 BAD、EXIT=0**（证据 `.workbuddy/tmp/audit_review/emu96_subset.txt`；
+实验后影子目录已删除，不会进仓库）。所以：
+
+| 组 | 条数 | 归因 |
+|---|---|---|
+| CLI | 4 | `__main__.py` 的 143 字节 NUL 残留（P3-1 本地未落地），与 CPU 修复无关 |
+| μITRON 半主机步数 | 3 | P1 六类 CPU 语义修正，路径各多 2 步 |
+| V92/V93 带时基 | 4 | P1 六类 CPU 语义修正，收敛点 / 当前任务 / 换手次数全变 |
+
+11 条逐条清单见 `fix97.txt` H2 段与 `fix97.SEMANTIC_IMPACTS`。处置：
+
+* 7 条行为断言按修后实测更新，**断言名直接标注差异**
+  （如「V97 tick 末PC（与 V92 原 0x1A4BEE 不同）」）；
+  `info()` 的累计步数改成动态判据，不再锁死旧数字。
+* 4 条 CLI 断言改走 `python -c "from frbox.cli import main; sys.exit(main())"`
+  直调（仍是子进程、仍测真实参数解析），并打印 `[V97]` 说明
+  `python -m frbox` 仍会崩 —— **不掩盖**包入口的损坏。
+* 受影响子集重跑：**221 OK / 0 BAD**；`test_v97()` 新增 H 段 5 条自证
+  （11 条 / 7 条 CPU 归因 / 4 条环境残留 / 影子对照 0 BAD / 证据路径）。
+
+**KI#388**：V92 的「补 `tick=256` 后末 PC `0x1A4BEE` / 任务 16 / 换手 224」
+与 V93 的「带时基末 PC `0x1a4bee`」是在 **0.96.0 错误 CPU 语义**下取得的；
+V97 修正后分别是 `0x15CF68` / 任务 21 / 227 与 `0x15cf68`。
+这不是宣布 V92/V93 结论作废，而是标注适用条件：它们需要在 CGEN 对齐
+后的语义下**重新取证**。本版只记录差异，不重写历史章节。
+
+**不能报**：11 条 BAD 是回归 / V92/V93 结论已作废 / 修复引入新 bug /
+全局无影响 / 补丁对照全同所以不用修。
