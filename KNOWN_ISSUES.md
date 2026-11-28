@@ -6254,3 +6254,69 @@ V96 把它量清楚了。静态侧（`bstatic.sweep_of_type('d300-b')`）：
 
 不能报：这些位在真机由谁置位 / 位对应哪个外设 / 注入等于真机事件 / 任务 12–15 的业务语义 /
 邮箱唤醒就能让系统跑起来 / 死位永远不会被置。
+
+### 384. `[OPEN]` V97：`__main__.py` 本地 delete-pending 残留，P3-1 本地未落地
+
+`emu/frbox/__main__.py` 在 V97 补丁写入时被宿主文件锁打断，磁盘上留下
+**143 字节全 NUL**，此后所有写入/删除/替换通道均被拒：`io.open(wb)`、
+`os.rename`（含腾出名字）、`os.remove`、`os.replace`、`r+b` 原地等长覆盖、
+`CreateFileW(DELETE)` + `SetFileInformationByHandle(FileDispositionInfo)`、
+PowerShell `WriteAllBytes` / `FileStream`、`cmd del`、`ReplaceFileW`、
+`git checkout -f`（报 `unable to unlink old ... Invalid argument`）、
+Restart Manager 查询（needed=0 returned=0，查不到持有者）。
+只读 `CreateFileW` 可开，`W_OK=True`，ACL 正常、无只读位 ⇒ 判定为
+宿主变更索引冲突 / delete-pending，不是权限或磁盘问题。
+
+后果：`frbox_selftest.py` 不引用该文件，全量自检不阻塞；但
+`python -m frbox` 会崩，P3-1（main guard）**本地未落地**。
+处置：`push_emu.py` / `verify_emu.py` 对该路径加 `payload_for()`，
+本地确为 NUL 残留时按 `git HEAD` 原版 + main guard 在内存中重建并打印
+`[WARN]`，远端拿修复版、不推损坏文件；本地磁盘状态在 `fix97.txt` G1
+与 V97 报告里如实记录。**开放项**：如何在宿主侧释放该 inode，或换一个
+不依赖单文件 inode 的写入通道；在解决前不能假报 P3-1 已落地。
+
+### 385. `[NOTE]` 单路径等形阴性结果的边界（规矩 5 的 V97 实例）
+
+V97 修后主树真文件重跑收敛：末 PC `0x0407DC` / 覆盖 5439 / 步数 691520，
+三项与 `0.96.0` 基线逐字相同；审查阶段 7 组分组补丁 + 全量叠加的临时副本
+对照也全同。这只能报「**当前收敛路径**未改变」。
+不得外推为「六类 CPU 偏差全局无影响」「补丁对照全同所以不用修」——
+收敛路径没有执行到这些指令变体，静态可达 ≠ 已执行（规矩 5）。
+要证全局影响需要另造覆盖这些变体的执行路径，本版未做。
+
+### 386. `[OPEN]` CGEN FR30 语义 ≠ 真机语义：`mulh/muluh` 的 `(ge MDL 0)`
+
+`fr30.cpu:770-825` 里 `mulh` / `muluh` 的 `zbit = (ge MDL 0)`（有符号 ≥0），
+与「结果等于 0 才置 Z」不同。V97 按 CGEN **字面**实现，没有按常识改成
+`eq 0`。这条是 FR30 的 CGEN 描述，D300 B 段真内核是否另有约定未查；
+KI 保持开放，不写成「标志语义已解出」。其余五类（bandl/bandh 常数位、
+二进制逻辑只 set-z-and-n、shift==0 清 C、ldres/stres 的 Ri+=4、
+ldm1/stm1 的 save-r15）同样以 CGEN 为据，不冒充真机取证。
+
+### 387. `[OPEN]` V97 额外项 5 项未单独立项
+
+审查过程中看到但**未列入 14 项确凿缺陷**的观察项（`fix97.txt` F 段）：
+`blive.Watch.rd()` 的双读（`0x44` 是写后哑读锁存器，读无副作用）、
+`bus._io_read()` 的 `v & M32` 32 位截断（设备返回值本身在范围内）、
+`cover.steps` 统计字段、`machine.load()` 的 data/payload CRC 校验、
+`device` 预留 irq 接口（当前由 `Machine.raise_irq` 统一驱动）。
+本版不擅自扩大修复面，只做只读留痕；是否单独立项、是否需要行为对照，未查。
+
+### 388. `[OPEN]` V92/V93 带时基结论需在 CGEN 对齐语义下重新取证
+
+V97 按 `fr30.cpu` CGEN 修正 `fr_emu.py` 六类 CPU 语义后，带时基路径
+（`blive.boot(tick=256)` / `run(600000)`）的收敛读数全变：
+末 PC `0x1A4BEE` → `0x15CF68`、当前任务 16 → 21、换手 224 → 227；
+V93 的「带时基末 PC `0x1a4bee`」→ `0x15cf68`。
+μITRON 半主机路径也各多 2 步（`(25857,35573)`→`(25859,35575)`、
+`(32726,42442)`→`(32728,42444)`）。
+
+影子对照（只回退 `fr_emu.py` 到 0.96.0、其余全修后，重跑
+`test_kernel` + `test_v92` + `test_v93` → 0 BAD）证明这 7 条变化
+**全由 CPU 语义修正引起**，不是随机波动、也不是 P2/P3 工程改动；
+另 4 条 CLI BAD 由 `__main__.py` 的 NUL 残留引起（KI#384）。
+
+V92/V93 的历史结论是在 0.96.0 的错误语义下取得的，章节原文保留不动；
+新语义下「`0x15CF68` 是什么、任务 21 在等什么、为什么换手多 3 次」
+**未查**。要重跑一套带时基的静态 + 动态取证才能收敛，本版只记录差异、
+不宣布历史结论作废，也不把「主收敛路径等形」外推成「全局无影响」（规矩 5）。
