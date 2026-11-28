@@ -491,11 +491,13 @@ class Fr:
         if mn in ("and", "or", "eor"):
             op = {"and": lambda a, b: a & b, "or": lambda a, b: a | b, "eor": lambda a, b: a ^ b}[mn]
             if base & 0x0F00 in (0x0200, 0x0A00):        # 寄存器型
+                # V97 / CGEN fr30.cpu:636：只 set-z-and-n，V/C 一律不动
                 r[g("ri")] = self._set_zn(op(r[g("ri")], r[g("rj")]) & M32)
-                self.v = 0                               # 逻辑运算一律清 V
-            else:                                        # @Ri 型（目标是内存，地址 = Ri 的内容）
+            else:                                        # @Ri 型（CGEN :659 同样 set-z-and-n）
                 a = r[g("ri")]
-                m.wr(a, 4, op(m.rd(a, 4), r[g("rj")]), pc)
+                _t = op(m.rd(a, 4), r[g("rj")]) & M32
+                m.wr(a, 4, _t, pc)
+                self._set_zn(_t)
             return
         if mn in ("andh", "orh", "eorh"):
             op = {"andh": lambda a, b: a & b, "orh": lambda a, b: a | b, "eorh": lambda a, b: a ^ b}[mn]
@@ -531,7 +533,14 @@ class Fr:
         # ---------- 位操作（立即数是掩码！）----------
         if mn in ("bandl", "borl", "beorl", "bandh", "borh", "beorh", "btstl", "btsth"):
             mask = g("u4")
-            if mn.endswith("h"):
+            # V97 / CGEN fr30.cpu:685 bandl = (or u4 #xF0), :717 bandh = (or (u4<<4) #x0F)。
+            # 只有 AND 两指令要保住另一半字节；borl/beorl/borh/beorh/btstl/btsth 的
+            # 立即数是纯掩码，不带常数位 —— 不能一刀切给所有 h 结尾指令补 0x0F。
+            if mn == "bandh":
+                mask = ((mask << 4) | 0x0F) & 0xFF
+            elif mn == "bandl":
+                mask = mask | 0xF0
+            elif mn.endswith("h"):
                 mask = (mask << 4) & 0xFF
             a = r[g("ri")]                                # @Ri：地址是寄存器内容
             old = m.rd(a, 1, pc)
@@ -557,7 +566,10 @@ class Fr:
                 amt = g("u4")
             x = r[ri]
             if amt == 0:
+                # V97 / CGEN fr30.cpu:927-934 / :952-959：shift==0 时 (set cbit (const 0))，
+                # 但仍要 set nbit/zbit；原实现只 _set_zn 就 return，C 保持旧值。
                 self._set_zn(x)
+                self.c = 0
                 return
             if mn.startswith("lsl"):
                 res = (x << amt) & M32
@@ -572,21 +584,35 @@ class Fr:
             return
 
         # ---------- 乘除 ----------
+        # V97 / CGEN fr30.cpu:770-825：四个 mul 变体各自按结果设标志，原式逐条照抄。
+        # 只补标志，MDL/MDH 的数值计算保持不动（最小改动）。
         if mn == "mul":
-            p = sx(r[g("ri")], 32) * sx(r[g("rj")], 32)
-            p &= 0xFFFFFFFFFFFFFFFF
-            self.mdh, self.mdl = p >> 32, p & M32
+            t = sx(r[g("ri")], 32) * sx(r[g("rj")], 32)   # DI 有符号 64 位乘积
+            u = t & 0xFFFFFFFFFFFFFFFF
+            self.mdh, self.mdl = u >> 32, u & M32
+            self.n = (self.mdl >> 31) & 1                  # (lt MDL 0) signed WI
+            self.z = 1 if t == 0 else 0                     # (eq tmp DI 0)
+            self.v = 1 if (t > 0x7FFFFFFF or t < -0x80000000) else 0
             return
         if mn == "mulu":
-            p = r[g("ri")] * r[g("rj")]
-            self.mdh, self.mdl = (p >> 32) & M32, p & M32
+            t = (r[g("ri")] & M32) * (r[g("rj")] & M32)    # DI 无符号 64 位乘积
+            self.mdh, self.mdl = (t >> 32) & M32, t & M32
+            self.n = (self.mdh >> 31) & 1                  # (lt MDH 0) signed WI
+            self.z = 1 if self.mdl == 0 else 0              # (eq MDL 0)
+            self.v = 1 if self.mdh != 0 else 0              # (ne MDH 0)
             return
         if mn == "mulh":
-            p = sx(r[g("ri")] & 0xFFFF, 16) * sx(r[g("rj")] & 0xFFFF, 16)
-            self.mdl = p & M32
+            t = sx(r[g("ri")] & 0xFFFF, 16) * sx(r[g("rj")] & 0xFFFF, 16)
+            self.mdl = t & M32
+            self.n = (self.mdl >> 31) & 1                  # (lt MDL 0)
+            # CGEN :810 字面是 (ge MDL 0) 而非 (eq MDL 0) —— 按字面实现，
+            # 这个「非直觉的 zbit」列为 KI 开放项待真机手册核对，不凭常识改写成 eq。
+            self.z = 1 if self.mdl < 0x80000000 else 0
             return
         if mn == "muluh":
             self.mdl = ((r[g("ri")] & 0xFFFF) * (r[g("rj")] & 0xFFFF)) & M32
+            self.n = (self.mdl >> 31) & 1                  # (lt MDL 0)
+            self.z = 1 if self.mdl < 0x80000000 else 0     # CGEN :823 (ge MDL 0)
             return
         if mn == "div0s":                              # D0=被除数符号, D1=D0^除数符号, MDH=符号扩展
             self.d0 = (self.mdl >> 31) & 1
@@ -741,15 +767,21 @@ class Fr:
                 if lst >> i & 1:
                     reg = i if mn == "ldm0" else i + 8
                     r[reg] = m.rd(r[15], 4, pc)
-                    r[15] = (r[15] + 4) & M32
+                    # V97 / CGEN fr30.cpu:1738：ldm1 的 bit7（R15）是
+                    # (set R15 (mem R15))，没有后续 +4；其余 7 条仍有 +4。
+                    if reg != 15:
+                        r[15] = (r[15] + 4) & M32
             return
         if mn in ("stm0", "stm1"):
             lst = g("reglist-low-st") if mn == "stm0" else g("reglist-hi-st")
             for i in range(8):
                 if lst >> i & 1:
                     reg = (7 - i) if mn == "stm0" else (15 - i)
+                    # V97 / CGEN fr30.cpu:1793 save-r15：先存旧 R15 再减 4，
+                    # 压入的是减之前的值；原实现先减后取 r[reg]，reg=15 时存错。
+                    _save = r[reg]
                     r[15] = (r[15] - 4) & M32
-                    m.wr(r[15], 4, r[reg], pc)
+                    m.wr(r[15], 4, _save, pc)
             return
 
         # ---------- 栈帧 ----------
@@ -865,7 +897,12 @@ class Fr:
             self.halted = True
             self.halt_reason = f"inte 断点 @0x{pc:08X}"
             return
-        if mn in ("ldres", "stres", "copop", "copld", "copst", "copsv"):
+        # V97 / CGEN fr30.cpu:1563 「Leave these insns as stubs for now,
+        # except for the increment of $Ri」——ldres/stres 只补 Ri+=4，其余协处理指令仍是 stub。
+        if mn in ("ldres", "stres"):
+            r[g("ri")] = (r[g("ri")] + 4) & M32
+            return
+        if mn in ("copop", "copld", "copst", "copsv"):
             self.unimpl_seen[mn] = self.unimpl_seen.get(mn, 0) + 1
             return
 
