@@ -264,8 +264,8 @@ def verdict_dormant(dorm, dormant_const=DORMANT):
             % (len(dorm), list(dorm), list(dormant_const)))
 
 
-def verdict_bootstrap(unr, total=None):
-    total = len(bootstrap_pcs()) if total is None else total
+def verdict_bootstrap(unr):
+    # V97：total 是死参数（赋值后从不参与输出），已删；bootstrap_pcs() 仍保留供其它断言用。
     return ("%d 个创建点未命中（%d 静态 + %d 表驱动）"
             % (len(unr),
                sum(1 for _pc, k, _t in unr if k == "static"),
